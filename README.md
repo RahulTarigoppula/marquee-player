@@ -31,97 +31,60 @@ Shared, binding context: [`_shared/DECISIONS.md`](../_shared/DECISIONS.md) (D1 M
 
 ---
 
-## Quickstart — scaffold from zero
+## Quickstart
 
-Marquee is the one project in the portfolio that is **not** Vite + React + Capacitor. The native tier is Flutter; **`npx cap add android` is never run here** — the Android app *is* the Flutter app. Three deployables live in one repo: the Flutter app at the root, `web/` (Marquee Lite), `worker/` (the mandatory OpenSubtitles proxy).
+Three deployables live in one repo: the Flutter app at the root (Windows + Android — **not**
+Capacitor), `web/` (Marquee Lite) and `worker/` (the mandatory OpenSubtitles proxy). The scaffold
+is done; this is how to work on it.
 
 ### 0. Accounts and keys (once, all free, no card)
 
 ```bash
-# 1. github.com            -> create the public repo "marquee"
+# 1. github.com            -> create the public repo "marquee" and push this folder
 # 2. opensubtitles.com     -> Profile > API Consumers > create a consumer  => OS_API_KEY
-# 3. opensubtitles.com     -> a normal free user account (about 10 downloads/day)
+# 3. opensubtitles.com     -> a normal free user account (sign in from the Ticket Office)
 # 4. dash.cloudflare.com   -> Workers (Free: 100k req/day, hard-fails, never bills)
 # 5. themoviedb.org        -> (optional) API Read Access Token for posters  => TMDB_READ_TOKEN
 ```
 
-### 1. Repo skeleton
+### 1. Flutter app (Flutter 3.47.5, pinned in `.fvmrc`)
 
 ```bash
-mkdir marquee && cd marquee && git init -b main
-mkdir -p .github/workflows docs design scripts assets/fonts assets/shaders
-cp ../_shared/templates/worker.yml       .github/workflows/worker.yml
-cp ../_shared/templates/pages.yml        .github/workflows/pages.yml   # then edit: build runs in web/
-# android-release.yml and app-build.gradle.snippet are Capacitor templates:
-# read them for the SIGNING pattern only (PKCS12 + env vars) and hand-write release.yml (see PLAN 0.6)
+flutter pub get
+dart run build_runner build --delete-conflicting-outputs   # drift; *.g.dart is gitignored
+flutter analyze
+dart test test/engine test/api test/db                      # the golden engine suites
+flutter test                                                # + widget tests
+flutter run -d windows --dart-define=OS_API_KEY=<your consumer key>
 ```
 
-### 2. Flutter app (root) — needs Flutter SDK + VS 2022 Build Tools locally, or CI only
+Without `OS_API_KEY` the app still plays everything and attaches sidecar subtitles; the leader
+simply stalls at "2" with a sentence instead of searching. Windows builds need Developer Mode
+(plugin symlinks) and the VS C++ workload; Android is built by CI only.
+
+### 2. Marquee Lite (`web/`) and the Worker (`worker/`)
 
 ```bash
-flutter create --org com.rahul --project-name marquee \
-               --platforms=windows,android .
-flutter pub add media_kit media_kit_video media_kit_libs_video \
-                drift drift_flutter sqlite3_flutter_libs \
-                flutter_riverpod http flutter_secure_storage file_picker \
-                material_color_utilities clock path_provider \
-                window_manager flutter_acrylic wakelock_plus screen_brightness \
-                flutter_animate flutter_svg flutter_soloud
-flutter pub add --dev build_runner drift_dev flutter_lints integration_test
-
-# drift is code-generated. `*.g.dart` and `*.drift.dart` are GITIGNORED and never
-# committed, so this must run after every `pub get` and before `flutter analyze`,
-# locally and in CI (ci.yml + release.yml both do it):
-dart run build_runner build --delete-conflicting-outputs
-
-# The Windows dev loop is optional; see PLAN 0.3 for the CI-only path.
-flutter run -d windows
+cd web && npm ci && npm run dev          # http://localhost:5173, talks to VITE_API_BASE
+npx vitest run && npx playwright test    # unit + e2e (Worker mocked)
+cd ../worker && npm ci && npm test       # every §7.6 invariant, incl. "the key never leaks"
+npx wrangler secret put OS_API_KEY && npx wrangler deploy
 ```
 
-### 3. Marquee Lite (`web/`) — Vite + TypeScript, no framework
+Set `ALLOWED_ORIGIN` in `worker/wrangler.toml` to your Pages origin and the Worker URL in the
+`VITE_API_BASE` of `.github/workflows/pages.yml` and `ci.yml` (search for `<subdomain>`).
 
-```bash
-npm create vite@latest web -- --template vanilla-ts
-cd web && npm i
-npm i jassub
-npm i -D vite-plugin-pwa vitest happy-dom @testing-library/dom @testing-library/user-event \
-         @playwright/test @axe-core/playwright
-npm i @fontsource-variable/big-shoulders-display @fontsource-variable/geist @fontsource-variable/geist-mono
-npx playwright install --with-deps chromium firefox chrome   # branded chrome: H.264/AAC
-# vite.config.ts:  base: process.env.VITE_BASE_PATH ?? '/'   (pages.yml sets it to /marquee/)
-cd ..
-```
+### 3. Releasing
 
-### 4. Worker (`worker/`) — the mandatory OpenSubtitles proxy
+Push to `main` → `ci` (analyze, tests, coverage gates, parity, licences, secrets), Pages deploys
+Lite, `worker.yml` deploys the proxy. `git tag v0.1.0 && git push --tags` → `release.yml` builds the
+Windows zip and three split-per-ABI APKs and publishes a GitHub Release.
 
-```bash
-mkdir -p worker/src && cd worker && npm init -y
-npm i -D wrangler typescript @cloudflare/vitest-pool-workers vitest
-cp ../../_shared/templates/worker-proxy.ts src/index.ts
-# The template is only a starting point. REPLACE it with the full listing in
-# docs/IMPLEMENTATION-PROMPT.md §7.6 (path allow-list, alphabetical param sorting,
-# /api/subtitle-file with its host allow-list + 2 MB cap, the Authorization gate on
-# /api/download, the per-IP 60/min cap, the optional /api/tmdb/* route, no logging).
-# docs/DEPLOYMENT.md §4.3 carries the same listing byte-for-byte.
-cat > wrangler.toml <<'TOML'
-name = "marquee-proxy"
-main = "src/index.ts"
-compatibility_date = "2026-09-01"
-# No Workers Logs: the Worker logs nothing and stores nothing.
-[observability]
-enabled = false
-[vars]
-ALLOWED_ORIGIN = "https://<owner>.github.io"
-UPSTREAM_BASE  = "https://api.opensubtitles.com/api/v1"
-USER_AGENT     = "Marquee-Web v1.0.0"     # mandatory upstream; omitting it is a 403
-TOML
-npx wrangler secret put OS_API_KEY        # never in git, never in VITE_*
-npx wrangler secret put TMDB_READ_TOKEN   # optional: only if you want Lobby posters in Lite
-npx wrangler deploy
-cd ..
-```
+> **Windows SmartScreen:** the exe is unsigned (certificates cost money), so the first run shows
+> "Windows protected your PC" → *More info* → *Run anyway*. Verify the zip against
+> `SHA256SUMS-windows.txt` on the Release.
 
-### 5. Signing key and secrets (once)
+### 4. Signing key and secrets (once)
 
 ```bash
 bash ../_shared/scripts/make-keystore.sh marquee    # run OUTSIDE the repo; BACK UP the .p12

@@ -425,58 +425,72 @@ class _Controls extends ConsumerWidget {
               onScrub: onScrub,
             ),
             const SizedBox(height: Tokens.space2),
-            Row(
+            // Two groups that wrap onto a second line on a narrow phone instead of overflowing.
+            Wrap(
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                IconMark(icon: 'arrow-left', label: 'Back to the lobby', onTap: onBack),
-                TextMark(
-                  text: '◀10',
-                  label: 'Back 10 seconds',
-                  onTap: () =>
-                      unawaited(player.seek(player.state.position - const Duration(seconds: 10))),
-                ),
-                _PlayMark(playing: pb.playing, onTap: () => unawaited(player.playOrPause())),
-                TextMark(
-                  text: '10▶',
-                  label: 'Forward 10 seconds',
-                  onTap: () =>
-                      unawaited(player.seek(player.state.position + const Duration(seconds: 10))),
-                ),
-                const SizedBox(width: Tokens.space2),
-                Mark(
-                  label: 'Subtitle sync ${spokenDelay(session.delayMs)}',
-                  onTap: onToggleSync,
-                  child: Text(
-                    'SYNC ${formatDelay(session.delayMs)}',
-                    style: Txt.mono(Tokens.textXs, syncOpen ? p.accent : p.ink),
-                  ),
-                ),
-                const Spacer(),
-                IconMark(
-                  icon: 'captions',
-                  label: 'Subtitle booth',
-                  active: pb.hasSubtitle,
-                  onTap: () => ref.read(boothOpenProvider.notifier).toggle(),
-                ),
-                if (wide)
-                  Mark(
-                    label: 'Speed',
-                    onTap: () => unawaited(player.setRate(pb.rate >= 2 ? 1 : pb.rate + 0.25)),
-                    child: Text(
-                      '${pb.rate.toStringAsFixed(2)}×',
-                      style: Txt.mono(Tokens.textXs, p.inkMuted),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconMark(icon: 'arrow-left', label: 'Back to the lobby', onTap: onBack),
+                    TextMark(
+                      text: '◀10',
+                      label: 'Back 10 seconds',
+                      onTap: () => unawaited(
+                        player.seek(player.state.position - const Duration(seconds: 10)),
+                      ),
                     ),
-                  ),
-                IconMark(
-                  icon: ref.watch(fullscreenProvider) ? 'minimize-2' : 'maximize-2',
-                  label: 'Fullscreen',
-                  onTap: () => ref.read(fullscreenProvider.notifier).toggle(),
+                    _PlayMark(playing: pb.playing, onTap: () => unawaited(player.playOrPause())),
+                    TextMark(
+                      text: '10▶',
+                      label: 'Forward 10 seconds',
+                      onTap: () => unawaited(
+                        player.seek(player.state.position + const Duration(seconds: 10)),
+                      ),
+                    ),
+                    const SizedBox(width: Tokens.space2),
+                    Mark(
+                      label: 'Subtitle sync ${spokenDelay(session.delayMs)}',
+                      onTap: onToggleSync,
+                      child: Text(
+                        'SYNC ${formatDelay(session.delayMs)}',
+                        style: Txt.mono(Tokens.textXs, syncOpen ? p.accent : p.ink),
+                      ),
+                    ),
+                  ],
                 ),
-                if (wide)
-                  TextMark(
-                    text: '?',
-                    label: 'Cue sheet',
-                    onTap: () => ref.read(cueSheetProvider.notifier).toggle(),
-                  ),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconMark(
+                      icon: 'captions',
+                      label: 'Subtitle booth',
+                      active: pb.hasSubtitle,
+                      onTap: () => ref.read(boothOpenProvider.notifier).toggle(),
+                    ),
+                    if (wide)
+                      Mark(
+                        label: 'Speed',
+                        onTap: () => unawaited(player.setRate(pb.rate >= 2 ? 1 : pb.rate + 0.25)),
+                        child: Text(
+                          '${pb.rate.toStringAsFixed(2)}×',
+                          style: Txt.mono(Tokens.textXs, p.inkMuted),
+                        ),
+                      ),
+                    IconMark(
+                      icon: ref.watch(fullscreenProvider) ? 'minimize-2' : 'maximize-2',
+                      label: 'Fullscreen',
+                      onTap: () => ref.read(fullscreenProvider.notifier).toggle(),
+                    ),
+                    if (wide)
+                      TextMark(
+                        text: '?',
+                        label: 'Cue sheet',
+                        onTap: () => ref.read(cueSheetProvider.notifier).toggle(),
+                      ),
+                  ],
+                ),
               ],
             ),
           ],

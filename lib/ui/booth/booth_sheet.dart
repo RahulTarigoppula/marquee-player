@@ -251,10 +251,12 @@ class _BoothSheetState extends ConsumerState<BoothSheet> {
                                               .findAnother(_search.text),
                                         ),
                                       ),
-                                      const Spacer(),
-                                      TicketStripView(
-                                        strip: ref.watch(ticketStripProvider),
-                                        count: ref.watch(quotaProvider).remaining,
+                                      const SizedBox(width: Tokens.space3),
+                                      Flexible(
+                                        child: TicketStripView(
+                                          strip: ref.watch(ticketStripProvider),
+                                          count: ref.watch(quotaProvider).remaining,
+                                        ),
                                       ),
                                     ],
                                   ),
