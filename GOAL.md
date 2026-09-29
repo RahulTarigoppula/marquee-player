@@ -2,7 +2,7 @@
 
 **Codename:** Marquee · **Design system:** HOUSE LIGHTS · **Tagline:** *Drop a film. The lights go down. The subtitles are already there.*
 
-Project 08 of 8 · folder `C:/Work/Personal_Projects/08-marquee-media-player` · status **Planned — not started** · written 2026-09-06
+Project 08 of 8 · folder `C:/Work/Personal_Projects/08-marquee-media-player` · status **first build pass done (2026-09-29, see docs/STATUS.md)** · written 2026-09-06
 
 ---
 

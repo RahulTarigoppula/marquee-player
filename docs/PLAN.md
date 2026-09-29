@@ -1,6 +1,6 @@
 # Marquee — PLAN
 
-**Project:** 08 · The No-Hassle Smart Media Player (codename *Marquee*) · **Status:** Planned — not started · **Written:** 2026-09-06
+**Project:** 08 · The No-Hassle Smart Media Player (codename *Marquee*) · **Status:** first build pass done 2026-09-29 — progress, verification and deviations in `docs/STATUS.md` · **Written:** 2026-09-06
 **Reads with:** `GOAL.md` (what "done" means), `docs/ARCHITECTURE.md` (every §N reference below), `docs/DESIGN.md` (the visual contract), `docs/TESTING.md` (the golden tables), `_shared/DECISIONS.md` (D3 CI recipe, D9 working agreement).
 
 ## How to read this
