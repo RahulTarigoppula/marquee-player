@@ -1,0 +1,24 @@
+# Normalise line endings: LF in the repo and on checkout, except Windows batch files.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+android/gradlew text eol=lf
+
+# Binary assets and media fixtures: never diffed, never normalised.
+*.png binary
+*.jpg binary
+*.ico binary
+*.ttf binary
+*.otf binary
+*.woff2 binary
+*.mkv binary
+*.mp4 binary
+*.webm binary
+*.avi binary
+*.p12 binary
+*.jks binary
+
+# Byte-exact fixtures: the CRLF + BOM sample IS the test.
+test/fixtures/** -text
+web/e2e/fixtures/** -text
+worker/test/fixtures/** -text

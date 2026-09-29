@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Launch screen until the first Flutter frame (pre-Android 12), and the window background
+     behind the Android 12+ system splash: the Auditorium black with one lit bulb. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/marquee_bg" />
+    <item
+        android:width="108dp"
+        android:height="108dp"
+        android:gravity="center"
+        android:drawable="@drawable/splash_bulb" />
+</layer-list>

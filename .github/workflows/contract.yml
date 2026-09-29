@@ -1,0 +1,67 @@
+name: contract
+
+on:
+  schedule:
+    - cron: '0 3 * * *'          # nightly
+  workflow_dispatch:
+    inputs:
+      download_probe:
+        description: 'Also spend one /download (at most once a month)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write                  # a shape change opens an issue, it does not fail a branch
+
+concurrency:
+  group: contract
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    defaults: { run: { working-directory: worker } }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: worker/package-lock.json }
+      - run: npm ci
+      - name: Live contract test (search-only unless the probe is requested)
+        id: contract
+        continue-on-error: true
+        run: npm run test:contract 2>&1 | tee contract.log; exit "${PIPESTATUS[0]}"
+        shell: bash
+        env:
+          OS_API_KEY: ${{ secrets.OS_API_KEY }}
+          RUN_DOWNLOAD_PROBE: ${{ inputs.download_probe && '1' || '' }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: observed-limits
+          path: worker/test/observed-limits.json
+          retention-days: 30
+          if-no-files-found: ignore
+      - name: Open an issue on a contract change
+        if: steps.contract.outcome == 'failure'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="OpenSubtitles contract changed ($(date -u +%F))"
+          if gh issue list --state open --label contract --search "in:title OpenSubtitles contract changed" --json number --jq '.[0].number' | grep -q .; then
+            echo "An open contract issue already exists; not opening another."
+            exit 0
+          fi
+          gh label create contract --color B60205 --description 'Live API contract drift' 2>/dev/null || true
+          {
+            echo "The nightly live contract test failed: a field the fixtures rely on may have changed."
+            echo
+            echo "Run: $RUN_URL"
+            echo
+            echo '```'
+            tail -n 80 contract.log | sed -E 's/[A-Za-z0-9]{32}/[redacted]/g'
+            echo '```'
+          } > issue.md
+          gh issue create --title "$title" --label contract --body-file issue.md

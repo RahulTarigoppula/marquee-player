@@ -1,0 +1,21 @@
+{
+  "name": "marquee-proxy",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Marquee Lite's CORS + API-key proxy for OpenSubtitles (Cloudflare Worker).",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run test/worker.test.ts",
+    "test:contract": "vitest run --config vitest.contract.config.ts test/contract.test.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome ci .",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.14",
+    "@cloudflare/workers-types": "^5.20260929.1",
+    "typescript": "^5.9.3",
+    "vitest": "~4.1.11",
+    "wrangler": "^4.143.0"
+  }
+}

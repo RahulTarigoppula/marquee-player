@@ -1,0 +1,29 @@
+{
+  "status": true,
+  "results": [
+    {
+      "sd_id": 1,
+      "type": "movie",
+      "name": "The Third Man",
+      "imdb_id": "tt0041959",
+      "tmdb_id": 1092,
+      "first_air_date": null,
+      "year": 1949
+    }
+  ],
+  "subtitles": [
+    {
+      "release_name": "The.Third.Man.1949.1080p.BluRay.x264-AMIABLE",
+      "name": "SUBDL::the-third-man.zip",
+      "lang": "english",
+      "language": "EN",
+      "author": "x",
+      "url": "/subtitle/1234-5678.zip",
+      "subtitlePage": "/s/info/abc",
+      "season": 0,
+      "episode": null,
+      "hi": false,
+      "full_season": false
+    }
+  ]
+}

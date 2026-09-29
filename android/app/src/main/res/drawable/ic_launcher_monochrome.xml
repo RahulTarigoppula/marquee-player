@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Themed-icon layer (Android 13+): the bulb silhouette alone, legible at 48 dp.
+     The system tints it, so only the alpha shape matters. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- glass -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M54,32 C61.7,32 68,38.3 68,46 C68,50.8 65.6,54.3 62.8,57.3 C61.6,58.6 61,60.2 61,62 L61,64 L47,64 L47,62 C47,60.2 46.4,58.6 45.2,57.3 C42.4,54.3 40,50.8 40,46 C40,38.3 46.3,32 54,32 Z" />
+    <!-- screw base -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M47,66.5 L61,66.5 L61,69.5 L47,69.5 Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M49,72 L59,72 L59,74 Q59,76 57,76 L51,76 Q49,76 49,74 Z" />
+</vector>

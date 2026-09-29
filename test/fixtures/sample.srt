@@ -1,0 +1,16 @@
+1
+00:00:00,500 --> 00:00:02,000
+The house is dark.
+
+2
+00:00:02,500 --> 00:00:04,000
+<i>The beam finds the screen.</i>
+
+3
+00:00:04,500 --> 00:00:06,500
+Two lines of
+subtitle text.
+
+4
+00:00:07,000 --> 00:00:09,000
+{\an8}Top of the frame.

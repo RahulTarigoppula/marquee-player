@@ -1,0 +1,197 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  schedule:
+    - cron: '0 4 * * 1'          # Mondays 04:00 UTC — integration tests only
+  workflow_dispatch:             # manual run: artifacts only, no Release
+
+permissions:
+  contents: write                # softprops/action-gh-release needs this
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false      # never cancel a half-published release
+
+env:
+  FLUTTER_VERSION: '3.47.5'
+
+jobs:
+  # ---------------------------------------------------------------- integration
+  test:
+    name: integration (real libmpv, windows)
+    runs-on: windows-latest      # VS 2022 + C++ workload preinstalled
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: subosito/flutter-action@v2
+        with: { flutter-version: '${{ env.FLUTTER_VERSION }}', channel: stable, cache: true }
+      - run: flutter --version
+      - run: flutter pub get
+      - run: dart run build_runner build --delete-conflicting-outputs   # drift: *.g.dart is gitignored
+      - run: flutter analyze --fatal-infos
+      - name: Unit + widget tests (goldens are Linux-only)
+        run: flutter test --exclude-tags golden
+      - name: Integration tests against the committed fixtures
+        if: hashFiles('integration_test/**') != ''
+        run: flutter test integration_test -d windows
+
+  # ---------------------------------------------------------------- build matrix
+  build:
+    name: ${{ matrix.label }}
+    needs: test
+    if: github.event_name != 'schedule'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25          # N17: tag -> artifacts in under 25 min
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: windows-x64
+            os: windows-latest
+            target: windows
+          - label: android-apks
+            os: ubuntu-24.04     # Android SDK 34-37, build-tools, JDKs preinstalled
+            target: android
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Derive version
+        id: v
+        shell: bash
+        run: |
+          set -euo pipefail
+          RAW='${{ github.ref_type == 'tag' && github.ref_name || format('v0.0.{0}', github.run_number) }}'
+          echo "name=${RAW#v}"                  >> "$GITHUB_OUTPUT"
+          echo "code=${{ github.run_number }}"  >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-java@v4
+        if: matrix.target == 'android'
+        with:
+          distribution: temurin
+          java-version: '17'     # R1 — the proven version for this Flutter + AGP pair
+          cache: gradle
+
+      - uses: subosito/flutter-action@v2
+        with: { flutter-version: '${{ env.FLUTTER_VERSION }}', channel: stable, cache: true }
+
+      - run: flutter pub get
+      - run: dart run build_runner build --delete-conflicting-outputs   # drift: *.g.dart is gitignored
+
+      # ------------------------------------------------------------- Windows
+      - name: Build Windows release
+        if: matrix.target == 'windows'
+        run: >
+          flutter build windows --release
+          --build-name=${{ steps.v.outputs.name }}
+          --build-number=${{ steps.v.outputs.code }}
+          --dart-define=OS_API_KEY=${{ secrets.OS_API_KEY }}
+          --dart-define=TMDB_READ_TOKEN=${{ secrets.TMDB_READ_TOKEN }}
+          --dart-define=MARQUEE_VERSION=${{ steps.v.outputs.name }}
+
+      - name: Zip, gate on size, checksum
+        if: matrix.target == 'windows'
+        shell: pwsh
+        run: |
+          $src = 'build/windows/x64/runner/Release'
+          # media_kit_libs_windows_video copies the DLL here; a build without it runs nowhere.
+          foreach ($dll in 'libmpv-2.dll','flutter_windows.dll','msvcp140.dll','vcruntime140.dll') {
+            if (-not (Test-Path "$src/$dll")) { throw "$dll missing from the build output" }
+          }
+          New-Item -ItemType Directory -Force out | Out-Null
+          $zip = "out/marquee-${{ steps.v.outputs.name }}-windows-x64.zip"
+          Compress-Archive -Path "$src/*" -DestinationPath $zip
+          $mb = [math]::Round((Get-Item $zip).Length / 1MB, 1)
+          Write-Host "Windows zip: $mb MB"
+          if ($mb -gt 60) { throw "Windows zip is $mb MB; budget is 60 MB (N9)" }
+          Get-FileHash $zip -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" } |
+            Out-File -Encoding ascii out/SHA256SUMS-windows.txt
+
+      # ------------------------------------------------------------- Android
+      - name: Decode keystore
+        if: matrix.target == 'android'
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          test -n "$KS_B64" || { echo "::error::ANDROID_KEYSTORE_BASE64 is empty"; exit 1; }
+          printf '%s' "$KS_B64" | base64 -d > "$RUNNER_TEMP/release.p12"
+
+      - name: Build signed split-per-ABI APKs
+        if: matrix.target == 'android'
+        env:
+          ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/release.p12
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: >
+          flutter build apk --release --split-per-abi
+          --build-name=${{ steps.v.outputs.name }}
+          --build-number=${{ steps.v.outputs.code }}
+          --dart-define=OS_API_KEY=${{ secrets.OS_API_KEY }}
+          --dart-define=TMDB_READ_TOKEN=${{ secrets.TMDB_READ_TOKEN }}
+          --dart-define=MARQUEE_VERSION=${{ steps.v.outputs.name }}
+
+      - name: Verify signing, gate on size, rename, checksum
+        if: matrix.target == 'android'
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            src="build/app/outputs/flutter-apk/app-$abi-release.apk"
+            test -f "$src" || { echo "::error::$src was not built"; exit 1; }
+            # A debug-signed APK cannot update a release install: fail loudly, not silently.
+            "$APKSIGNER" verify --print-certs "$src" | grep -q 'Signer #1 certificate DN' \
+              || { echo "::error::$abi APK is not signed with the release key"; exit 1; }
+            if "$APKSIGNER" verify --print-certs "$src" | grep -qi 'CN=Android Debug'; then
+              echo "::error::$abi APK is DEBUG-signed"; exit 1
+            fi
+            cp "$src" "out/marquee-${{ steps.v.outputs.name }}-$abi.apk"
+          done
+          # No universal APK — libmpv is ~30-40 MB per ABI (N11)
+          test ! -f build/app/outputs/flutter-apk/app-release.apk
+          sz=$(stat -c%s "out/marquee-${{ steps.v.outputs.name }}-arm64-v8a.apk")
+          echo "arm64-v8a APK: $((sz / 1024 / 1024)) MB"
+          test "$sz" -le $((55 * 1024 * 1024)) \
+            || { echo "::error::arm64 APK exceeds the 55 MB budget (N10)"; exit 1; }
+          (cd out && sha256sum *.apk > SHA256SUMS-android.txt)
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: marquee-${{ matrix.label }}-${{ steps.v.outputs.name }}
+          path: out/
+          retention-days: 14
+
+  # ---------------------------------------------------------------- publish
+  publish:
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: dist, merge-multiple: true }
+      - run: ls -la dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          body: |
+            **Windows:** download `marquee-*-windows-x64.zip`, extract anywhere, run `marquee.exe`.
+            The exe is unsigned, so Windows SmartScreen will say "Windows protected your PC" —
+            More info → Run anyway. Nothing is installed and nothing writes outside the folder
+            except the app's own data directory.
+
+            **Android:** download `marquee-*-arm64-v8a.apk` on the phone (that is the right one for
+            every phone made since ~2019; `armeabi-v7a` for older, `x86_64` for emulators). Allow
+            "install unknown apps" once. It installs over the previous version.
+
+            Subtitles by OpenSubtitles.com. Playback by libmpv / FFmpeg / libass (LGPL — see
+            the Ticket Office for notices and source links). Verify downloads against `SHA256SUMS-*.txt`.
+          files: |
+            dist/*.zip
+            dist/*.apk
+            dist/SHA256SUMS-*.txt

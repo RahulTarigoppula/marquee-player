@@ -1,0 +1,26 @@
+{
+  "format": "marquee.cue-sheet.v1",
+  "cues": [
+    { "id": "playPause",      "keys": ["Space"],              "action": "Play / pause" },
+    { "id": "back5",          "keys": ["ArrowLeft"],          "action": "Back 5 s" },
+    { "id": "forward5",       "keys": ["ArrowRight"],         "action": "Forward 5 s" },
+    { "id": "back30",         "keys": ["Shift+ArrowLeft"],    "action": "Back 30 s" },
+    { "id": "forward30",      "keys": ["Shift+ArrowRight"],   "action": "Forward 30 s" },
+    { "id": "volumeUp",       "keys": ["ArrowUp"],            "action": "Volume up" },
+    { "id": "volumeDown",     "keys": ["ArrowDown"],          "action": "Volume down" },
+    { "id": "syncEarlier",    "keys": ["J"],                  "action": "Subtitles 50 ms earlier" },
+    { "id": "syncLater",      "keys": ["K"],                  "action": "Subtitles 50 ms later" },
+    { "id": "syncEarlierBig", "keys": ["Shift+J"],            "action": "Subtitles 500 ms earlier" },
+    { "id": "syncLaterBig",   "keys": ["Shift+K"],            "action": "Subtitles 500 ms later" },
+    { "id": "frameBack",      "keys": [","],                  "action": "Previous frame" },
+    { "id": "frameForward",   "keys": ["."],                  "action": "Next frame" },
+    { "id": "abLoop",         "keys": ["L"],                  "action": "A–B loop" },
+    { "id": "slower",         "keys": ["["],                  "action": "Slower (pitch-corrected)" },
+    { "id": "faster",         "keys": ["]"],                  "action": "Faster (pitch-corrected)" },
+    { "id": "fullscreen",     "keys": ["F"],                  "action": "Fullscreen" },
+    { "id": "subtitleTracks", "keys": ["S"],                  "action": "Subtitle booth" },
+    { "id": "audioTracks",    "keys": ["A"],                  "action": "Next audio track" },
+    { "id": "cueSheet",       "keys": ["?"],                  "action": "This cue sheet" },
+    { "id": "back",           "keys": ["Escape"],             "action": "Back one lighting state" }
+  ]
+}

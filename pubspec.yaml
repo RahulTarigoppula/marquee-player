@@ -1,0 +1,77 @@
+name: marquee
+description: Drop a film. The lights go down. The subtitles are already there.
+publish_to: none
+version: 1.0.0+1 # CI overrides both halves; this is the local default
+
+environment:
+  sdk: ^3.9.0
+  flutter: '>=3.47.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # ── playback (libmpv = ffmpeg + libass; MIT wrapper over LGPL natives) ──
+  media_kit: ^1.2.6
+  media_kit_video: ^2.0.1 # texture-backed video widget
+  media_kit_libs_video: ^1.0.7 # pulls the LGPL `default` native builds — NEVER encoders-gpl
+
+  # ── state ──
+  flutter_riverpod: ^3.0.0 # threadingProvider / houseProvider — the whole state layer
+
+  # ── database ──
+  drift: ^2.28.0 # code-generated: `dart run build_runner build …`
+  drift_flutter: ^0.2.0
+  sqlite3_flutter_libs: ^0.5.0
+
+  # ── platform ──
+  path_provider: ^2.1.0 # %LOCALAPPDATA%\Marquee — drift DB, mpv.log, subtitle fallback
+  path: ^1.9.0
+  file_picker: ^10.0.0 # SAF on Android, native dialog on Windows
+  flutter_secure_storage: ^9.2.0 # the OpenSubtitles JWT only, never the password
+  wakelock_plus: ^1.2.0
+  screen_brightness: ^2.0.0 # per-app override, restored on exit
+  window_manager: ^0.5.0 # frameless Windows window (MIT)
+
+  # ── presentation ──
+  flutter_svg: ^2.0.0 # the Lucide SVG subset in assets/icons/
+  material_color_utilities: ^0.13.0 # bias light — NOT palette_generator (discontinued)
+
+  # ── plumbing ──
+  http: ^1.2.0
+  clock: ^1.1.1 # injectable clock, TESTING determinism rules
+  desktop_drop: ^0.8.4
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  integration_test:
+    sdk: flutter
+  drift_dev: ^2.28.0
+  build_runner: ^2.4.0
+  flutter_lints: ^6.0.0
+  test: ^1.31.1
+  fake_async: ^1.3.3
+
+flutter:
+  uses-material-design: false # no Material icon font is shipped; icons are Lucide SVGs
+  assets:
+    - assets/icons/ # Lucide SVG subset (ISC), read by flutter_svg
+    - design/cue-sheet.json # the ONE keyboard cue sheet: `?` overlay + README
+  shaders:
+    - assets/shaders/beam.frag
+  fonts:
+    - family: Big Shoulders Display
+      fonts:
+        - asset: assets/fonts/BigShouldersDisplay-Variable.ttf
+    - family: Geist
+      fonts:
+        - asset: assets/fonts/Geist-Variable.ttf
+    - family: Geist Mono
+      fonts:
+        - asset: assets/fonts/GeistMono-Variable.ttf
+    - family: Noto Sans
+      fonts:
+        - asset: assets/fonts/NotoSans-Regular.ttf
+        - asset: assets/fonts/NotoSans-Bold.ttf
+          weight: 700

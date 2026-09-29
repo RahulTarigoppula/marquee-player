@@ -1,0 +1,7 @@
+HTTP/1.1 429 Too Many Requests
+Retry-After: 2
+X-RateLimit-Limit: 40
+X-RateLimit-Remaining: 0
+X-RateLimit-Reset: 2
+
+{"message":"Throttle limit reached. Retry later."}

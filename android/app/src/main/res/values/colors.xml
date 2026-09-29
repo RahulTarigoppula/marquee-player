@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- House Lights tokens (scripts/tokens.mjs): bg, accent, accent-2, ink -->
+    <color name="marquee_bg">#07060A</color>
+    <color name="marquee_tungsten">#FFC56E</color>
+    <color name="marquee_crimson">#A3252F</color>
+    <color name="marquee_ink">#F3E9DA</color>
+    <color name="ic_launcher_background">#07060A</color>
+</resources>

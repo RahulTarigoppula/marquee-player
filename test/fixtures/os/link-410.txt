@@ -1,0 +1,4 @@
+HTTP/1.1 410 Gone
+Content-Type: text/plain
+
+This link has expired

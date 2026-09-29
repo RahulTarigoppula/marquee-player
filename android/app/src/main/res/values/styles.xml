@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Marquee opens in the Auditorium (dark) whatever the system theme, so the launch window
+         is #07060A in light and dark mode alike. Flutter takes over the system bars
+         (edge-to-edge, light or dark icons per room) after the first frame. -->
+    <style name="LaunchTheme" parent="@android:style/Theme.Black.NoTitleBar">
+        <item name="android:windowBackground">@drawable/launch_background</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:statusBarColor">@color/marquee_bg</item>
+        <item name="android:navigationBarColor">@color/marquee_bg</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+    <!-- Behind the Flutter UI while it runs. -->
+    <style name="NormalTheme" parent="@android:style/Theme.Black.NoTitleBar">
+        <item name="android:windowBackground">@color/marquee_bg</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:statusBarColor">@color/marquee_bg</item>
+        <item name="android:navigationBarColor">@color/marquee_bg</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>
