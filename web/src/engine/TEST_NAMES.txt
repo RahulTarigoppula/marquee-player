@@ -1,0 +1,162 @@
+## api.test.ts (16)
+sorts query parameters alphabetically and drops empty ones
+searches by hash through the worker with sorted params and no key
+searches by the parsed name, or by the raw filename when confidence is low
+maps search results to candidates and treats an absent moviehash_match as false
+downloads with the bearer token and asks for srt
+maps a signed-out download to unauthorized with the sign-in sentence
+maps an expired token to unauthorized with the ticket-expired sentence
+maps a 406 to quota exhausted and keeps the reset instant
+maps a 410 to an expired link
+maps a 429 to rate limited and honours Retry-After
+maps a failed fetch to offline with the offline sentence
+maps an aborted request to cancelled
+prints the worker sentence for a rejected origin and upstream errors
+fetches the temporary link through the subtitle-file route
+logs in with the body sorted and reads user info with the token
+maps an unreadable success body to offline
+
+## capability.test.ts (13)
+marks natively playable codecs with a tick
+accepts maybe as native support
+marks AV1 with a cross when canPlayType is empty
+falls back to WebCodecs for HEVC
+marks HEVC with a cross when both probes are negative
+marks AC-3 with a cross
+always reads MKV partial without probing it
+ends the line with WebCodecs unavailable when VideoDecoder is undefined
+treats a throwing isConfigSupported as unsupported
+names the exact missing decoder for an MKV with HEVC and AC-3
+names a video decoder before an audio one
+says it could not decode when no codec is known to be missing
+recognises MP4, WebM, AVI and TS containers
+
+## filename.test.ts (14)
+parses the house film with year, resolution, source, codec and group
+flags a remastered release and keeps the title before the flag
+keeps a WEB-DL source whole and the H264 codec token verbatim
+parses season and episode as an episode
+reads a year in parentheses from a name with spaces
+parses the anime bracket form and discards the trailing CRC
+gives a bare name low confidence so the raw filename is searched
+rejects a subtitle file as not a video
+does not steal a year that is part of the title
+treats a trailing codec after the last dash as a codec, not a group
+parses a release name with a group glued to the source
+parses the 1x03 and Season Episode forms
+gives a multi-word title with quality tokens but no year medium confidence
+falls back to the parent directory when the basename is low confidence
+
+## osHash.test.ts (10)
+matches the published breakdance.avi vector
+pads the hash to 16 hex digits and accepts exactly 128 KiB
+wraps the chunk sums as unsigned 64-bit
+reads the tail chunk from an unaligned offset
+rejects a file one byte under 128 KiB as too small
+keeps 64-bit precision for a 4 GiB file
+reads exactly 131072 bytes from a 4 GiB file
+formats a hash with the top bit set without a sign or prefix
+wraps a failed read as hash unavailable
+wraps a short read as hash unavailable
+
+## scoring.test.ts (14)
+scores the hash-matched house release at 1414.09
+scores the same release without a hash match at 414.71
+lets a release-group match beat an fps mismatch at 232.96
+treats H264 and x264 as different codecs at 63.61
+ranks A, D, C, B and auto-picks A
+lists a machine-translated candidate below A but never auto-picks it
+auto-picks the best human translation when rank 1 is machine-translated
+breaks ties on download count
+keeps every candidate in the ranked list
+applies the language filter before scoring
+adds 60 to hearing-impaired candidates when HI is preferred without moving A
+never lights the match bulb for a Subdl candidate
+compares tokens case-insensitively and never matches null
+skips release comparisons when either name is unknown
+
+## srt2vtt.test.ts (9)
+converts the BOM + CRLF fixture byte for byte
+sorts cues by start and renumbers them
+shifts every cue by the delay
+clamps a negative shift at zero and keeps overlaps
+keeps italic, bold and underline tags and strips font tags to their text
+turns a leading an8 override into line 0
+caps a cue at 10000 characters
+ignores stray text outside a cue and a timing with no text
+formats VTT timestamps with milliseconds and unbounded hours
+
+## syncRule.test.ts (11)
+snaps a drag to the nearest 50 ms detent
+rounds to the nearest detent instead of flooring
+clamps a drag past the range to plus or minus two seconds
+rounds half away from zero on both sides
+steps later by 50 ms on K
+steps earlier by 50 ms on J
+steps 500 ms with Shift
+resets to zero and drops the folio suffix
+remembers the offset for the same moviehash
+starts a different moviehash at zero
+announces the value as plus or minus seconds
+
+## threading.test.ts (31)
+starts hashing on open with the numeral 3
+moves to searching by hash when the hash is ready
+skips silently to a filename search when the file is too small
+advances the sweep only while the phase is pending
+freezes the sweep when the search rejects
+never jumps the sweep to full or resets it to zero on a stall
+times out each phase at its deadline
+orders the fallback rows filename, subdl, manual, skip
+omits subdl when it is not enabled and rungs already tried
+inserts sign-in first when the download is unauthorized
+inserts sign-in first when the quota is exhausted
+offers a retry after a rate limit or going offline
+publishes the fallback rows within 500 ms of the failure
+auto-picks rank 1 and downloads when signed in with tickets
+stalls with the sign-in sentence instead of downloading when signed out
+makes no request when no tickets are left
+resumes the pending download after sign-in
+retries the download exactly once on a 410
+stalls with no results when only machine translations were found
+lets a tap override the auto-pick and cancel the download in flight
+resolves a cancel to done and still starts playback
+resolves skip to done without subtitles
+announces each phase once
+flashes for 66 ms and then plays with subtitles
+reattaches from the cache without a search
+runs a manual search with the typed query and repeats it on retry
+retries a stalled download or a stalled search on the same rung
+runs the filename and Subdl rungs when chosen
+ignores fallback choices and results that do not belong to the current phase
+labels the numerals and phases in plain words
+re-runs the filename rung when another print is requested after playback began
+
+## tickets.test.ts (13)
+prints remaining of total and the UTC reset from the download response
+turns crimson with a sign-in or Subdl offer at two left
+reads no tickets left at zero remaining
+reads no tickets left on an HTTP 406 whatever the counter said
+reads anonymous when signed out
+trusts allowed_downloads from the login response, never a constant
+marks a VIP account with its own total
+shows the count before the tear while the tear animation runs
+refills the strip once the reset time has passed
+reads unknown when signed in before any download reported a count
+keeps the known count when signing in again
+derives the total from requests plus remaining when login never said
+refreshes the quota from the user info without spending a ticket
+
+## timecode.test.ts (12)
+floors the position and ceils the remaining time
+prints the full duration as remaining at the start
+prints zero remaining at the end
+never shows an off-by-one just before a whole second
+never wraps at 24 hours
+prints an em dash for an unknown duration
+uses the minus sign U+2212, not a hyphen
+clamps a position past the end to zero remaining
+appends suffixes without replacing the timecode
+prints the threading folio
+uppercases the title and condenses it to 40 characters
+signs values with plus or the minus sign

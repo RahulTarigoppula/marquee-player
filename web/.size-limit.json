@@ -1,0 +1,14 @@
+[
+  {
+    "name": "Lite JS (gzip, without the lazy JASSUB chunks)",
+    "path": [
+      "dist/assets/*.js",
+      "!dist/assets/ass-*.js",
+      "!dist/assets/jassub-*.js",
+      "!dist/assets/worker-*.js",
+      "!dist/assets/fonts-*.js"
+    ],
+    "limit": "120 KB",
+    "gzip": true
+  }
+]

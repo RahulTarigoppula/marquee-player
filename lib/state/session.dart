@@ -75,7 +75,11 @@ class SessionNotifier extends Notifier<FilmSession?> {
 
   @override
   FilmSession? build() {
-    ref.onDispose(() => unawaited(close()));
+    ref.onDispose(() {
+      _resumeTimer?.cancel();
+      _undecodable?.cancel();
+      _machine?.dispose();
+    });
     return null;
   }
 
@@ -285,7 +289,20 @@ class SessionNotifier extends Notifier<FilmSession?> {
     if (cur == null || cur.file != file) return;
     state = cur.copyWith(mediaId: id, delayMs: delay);
     if (delay != 0) await cur.engine.setSubDelayMs(delay);
-    if (resumeAt != null) await cur.engine.player.seek(resumeAt);
+    if (resumeAt != null) {
+      // The hash resolves in ~40 ms, usually before libmpv has loaded the file: wait for a
+      // duration before seeking, or the seek is silently dropped.
+      try {
+        if (cur.engine.player.state.duration == Duration.zero) {
+          await cur.engine.player.stream.duration
+              .firstWhere((d) => d > Duration.zero)
+              .timeout(kUndecodableAfter);
+        }
+        await cur.engine.player.seek(resumeAt);
+      } on TimeoutException {
+        // Never loaded: the undecodable path will speak for it.
+      }
+    }
   }
 
   void _onThreading(ThreadingState t) {

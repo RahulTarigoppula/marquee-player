@@ -397,7 +397,7 @@ class _About extends StatelessWidget {
         line(
           'What leaves this device: the 16-hex moviehash, the file size, a filename-derived query, '
           'the chosen file id and your own OpenSubtitles token — to OpenSubtitles only. Subdl receives a '
-          'title query when you enable it. Never the file, a frame, a path or a device id. No analytics.',
+          'title query when you enable it. Never the file, a frame, a path or a device id. Nothing is measured or reported.',
         ),
         line('Marquee v$appVersion · MIT', mono: true),
       ],

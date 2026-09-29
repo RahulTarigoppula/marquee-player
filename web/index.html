@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; connect-src 'self' https://*.workers.dev http://localhost:8787 https://api.themoviedb.org https://image.tmdb.org; img-src 'self' data: blob: https://image.tmdb.org; media-src 'self' blob:; worker-src 'self' blob:; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'"
+    />
+    <meta name="theme-color" content="#07060A" />
+    <meta name="color-scheme" content="dark" />
+    <meta
+      name="description"
+      content="Marquee Lite — drop a film, the lights go down, and the subtitles are already there."
+    />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+    <title>Marquee Lite</title>
+  </head>
+  <body>
+    <noscript>Marquee Lite needs JavaScript to hash and play a film on this device.</noscript>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
