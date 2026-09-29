@@ -10,6 +10,7 @@ import 'package:media_kit/media_kit.dart';
 import 'app.dart';
 import 'db/database.dart';
 import 'platform/files.dart';
+import 'platform/pip.dart';
 import 'platform/window.dart';
 import 'state/providers.dart';
 import 'state/session.dart';
@@ -35,5 +36,9 @@ Future<void> main(List<String> args) async {
     final f = await fileFromPath(initial);
     if (f != null) unawaited(container.read(sessionProvider.notifier).open(f));
   }
-  unawaited(container.read(accountProvider.notifier).subdlKey()); // warms the account restore
+  onNewIntentUri((uri) async {
+    final f = await fileFromPath(uri);
+    if (f != null) await container.read(sessionProvider.notifier).open(f);
+  });
+  container.read(accountProvider); // restores a saved sign-in
 }

@@ -8,12 +8,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:screen_brightness/screen_brightness.dart';
 
 import '../../engine/bias_light.dart';
 import '../../engine/detents.dart';
 import '../../engine/models/models.dart';
 import '../../engine/sync_rule.dart';
 import '../../engine/timecode.dart';
+import '../../platform/pip.dart';
 import '../../player/engine.dart';
 import '../../state/providers.dart';
 import '../../state/session.dart';
@@ -42,6 +44,23 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
   List<Color>? _stops;
   double? _scrub;
   final _focus = FocusNode(debugLabel: 'auditorium');
+  double _rateBeforeHold = 1;
+  double? _brightness;
+
+  /// Edge dimmers (48 px wide): left = brightness (restored on dispose), right = volume.
+  void _edgeDimmer(DragUpdateDetails d, FilmSession session) {
+    final w = MediaQuery.sizeOf(context).width;
+    final h = MediaQuery.sizeOf(context).height;
+    final delta = -d.delta.dy / (h * 0.6);
+    if (d.localPosition.dx <= 48 && Platform.isAndroid) {
+      final next = ((_brightness ?? 0.5) + delta).clamp(0.02, 1.0);
+      _brightness = next;
+      unawaited(ScreenBrightness.instance.setApplicationScreenBrightness(next));
+    } else if (d.localPosition.dx >= w - 48) {
+      final player = session.engine.player;
+      unawaited(player.setVolume((player.state.volume + delta * 100).clamp(0, 100)));
+    }
+  }
 
   @override
   void initState() {
@@ -52,6 +71,9 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
 
   @override
   void dispose() {
+    if (_brightness != null) {
+      unawaited(ScreenBrightness.instance.resetApplicationScreenBrightness());
+    }
     _idle?.cancel();
     _bias?.cancel();
     _focus.dispose();
@@ -182,6 +204,13 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
     final booth = ref.watch(boothOpenProvider);
     final cue = ref.watch(cueSheetProvider);
     if (session == null) return const SizedBox.shrink();
+    if (ref.watch(pipProvider)) {
+      return Video(
+        controller: session.engine.controller,
+        controls: NoVideoControls,
+        fill: Tokens.pictureBg,
+      );
+    }
     final p = Tokens.auditorium; // playback is ALWAYS the Auditorium
     final pos = (_scrub ?? pb.position.inMilliseconds / 1000);
     final dur = pb.duration.inMilliseconds / 1000;
@@ -223,6 +252,12 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
               if (delta != Duration.zero) unawaited(player.seek(player.state.position + delta));
             },
             onDoubleTap: () {},
+            onLongPressStart: (_) {
+              _rateBeforeHold = session.engine.player.state.rate;
+              unawaited(session.engine.player.setRate(2));
+            },
+            onLongPressEnd: (_) => unawaited(session.engine.player.setRate(_rateBeforeHold)),
+            onVerticalDragUpdate: (d) => _edgeDimmer(d, session),
             child: ColoredBox(
               color: p.bg,
               child: Stack(

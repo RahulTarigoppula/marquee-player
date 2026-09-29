@@ -2,7 +2,7 @@
 
 > **Drop a film. The lights go down. The subtitles are already there.**
 
-**Status: Planned — not started** · Project 08 of 8 · design system **HOUSE LIGHTS** · repo name `marquee` (public)
+**Status: first build pass complete — see [docs/STATUS.md](docs/STATUS.md)** · Project 08 of 8 · design system **HOUSE LIGHTS** · repo name `marquee` (public)
 
 Marquee is one Flutter codebase that ships a **Windows `.exe`** and an **Android APK** on the same engine — libmpv (ffmpeg + libass) through `media_kit` — so an MKV with HEVC video, AC-3 audio and an ASS subtitle track plays identically on both, with no codec packs.
 The instant a file opens it is fingerprinted with the OpenSubtitles **moviehash** (128 KiB of I/O), looked up hash-first, and the best subtitle is downloaded, saved beside the file and attached **before the first frame is shown** — a hash hit means the subtitle was uploaded for that exact release, so it is already in sync.
@@ -16,6 +16,7 @@ Everything is free and open source: no accounts of our own, no telemetry, no sto
 
 | Doc | What is in it |
 |---|---|
+| [docs/STATUS.md](docs/STATUS.md) | What is built, how it was verified, deliberate deviations from the plan, and what is open |
 | [GOAL.md](GOAL.md) | The goal, success criteria, non-goals, MVP/v1/Someday feature split, platforms, constraints |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Stack, system diagram, folder layout, Dart + TypeScript data model, moviehash, the subtitle matching ladder, house-lights colour extraction, the Worker contract, budgets |
 | [docs/PLAN.md](docs/PLAN.md) | Phases 0–6 with checkbox tasks, acceptance criteria, effort, risks, and the Weekend MVP fast path |

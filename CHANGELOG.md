@@ -6,6 +6,12 @@ tags are `vX.Y.Z` and each one produces a GitHub Release (see `.github/workflows
 ## [Unreleased]
 
 ### Added
+- Flutter app for Windows + Android on media_kit/libmpv: Lobby, Threading leader, Auditorium
+  (film gate, sync rule, keyboard cue sheet, bias light, gestures, PiP), Subtitle Booth, Ticket
+  Office; zero-click hash-matched subtitles with sidecar + cache so a re-open costs no ticket.
+- Pure-Dart engine with the §6 golden tables, OpenSubtitles + Subdl clients, drift database with
+  export/import.
+- Marquee Lite (`web/`): the same ritual in the browser through the Worker.
 - `marquee-proxy` Cloudflare Worker (`worker/`): origin allow-list, server-side `Api-Key`, path
   allow-list, sorted query params, sign-in gate on `/download`, `/api/subtitle-file` with a
   streamed 2 MB cap, optional TMDB route, per-IP soft cap, no logging and no storage.

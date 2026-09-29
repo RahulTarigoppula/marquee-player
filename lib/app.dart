@@ -11,6 +11,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'engine/models/settings.dart';
 import 'platform/files.dart';
+import 'platform/pip.dart';
 import 'platform/window.dart';
 import 'state/providers.dart';
 import 'state/session.dart';
@@ -99,6 +100,7 @@ class _HouseLightsState extends ConsumerState<HouseLights> with SingleTickerProv
         );
       }
       unawaited(setLobbyChrome(lobby: !down));
+      unawaited(ref.read(pipProvider.notifier).setAutoEnter(enabled: down));
     });
     ref.listen(fullscreenProvider, (_, full) => unawaited(setFullscreen(full)));
 
