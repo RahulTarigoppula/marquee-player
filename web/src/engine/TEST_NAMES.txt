@@ -75,12 +75,13 @@ never lights the match bulb for a Subdl candidate
 compares tokens case-insensitively and never matches null
 skips release comparisons when either name is unknown
 
-## srt2vtt.test.ts (9)
+## srt2vtt.test.ts (10)
 converts the BOM + CRLF fixture byte for byte
 sorts cues by start and renumbers them
 shifts every cue by the delay
 clamps a negative shift at zero and keeps overlaps
 keeps italic, bold and underline tags and strips font tags to their text
+strips unknown tags, defuses a literal arrow and trims the cue
 turns a leading an8 override into line 0
 caps a cue at 10000 characters
 ignores stray text outside a cue and a timing with no text
@@ -147,7 +148,7 @@ keeps the known count when signing in again
 derives the total from requests plus remaining when login never said
 refreshes the quota from the user info without spending a ticket
 
-## timecode.test.ts (12)
+## timecode.test.ts (13)
 floors the position and ceils the remaining time
 prints the full duration as remaining at the start
 prints zero remaining at the end
@@ -156,6 +157,7 @@ never wraps at 24 hours
 prints an em dash for an unknown duration
 uses the minus sign U+2212, not a hyphen
 clamps a position past the end to zero remaining
+clamps a negative position to zero
 appends suffixes without replacing the timecode
 prints the threading folio
 uppercases the title and condenses it to 40 characters

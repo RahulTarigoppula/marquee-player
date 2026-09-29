@@ -63,7 +63,9 @@ export function score(
     s += W_MACHINE
     why.push('machine -500')
   }
-  s += Math.log10(Math.max(c.downloadCount, 1)) // the tie-breaker
+  const dl = Math.log10(Math.max(c.downloadCount, 1)) // the tie-breaker
+  s += dl
+  why.push(`downloads +${dl.toFixed(2)}`)
   return { score: s, reasons: why }
 }
 

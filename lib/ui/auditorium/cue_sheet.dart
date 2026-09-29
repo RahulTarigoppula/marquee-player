@@ -46,47 +46,53 @@ class CueSheet extends ConsumerWidget {
       onTap: () => ref.read(cueSheetProvider.notifier).set(false),
       child: ColoredBox(
         color: p.bg.withValues(alpha: 0.9),
+        // Scrolls: 21 cues overflow a phone and the 720×480 minimum window.
         child: Center(
-          child: Container(
-            constraints: const BoxConstraints(maxWidth: 640),
-            padding: const EdgeInsets.all(Tokens.space6),
-            decoration: BoxDecoration(
-              color: p.bgElevated,
-              border: Border.all(color: p.border),
-              borderRadius: BorderRadius.circular(Tokens.radiusMd),
-              boxShadow: Tokens.shadow3,
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'CUE SHEET',
-                  style: Txt.display(Tokens.text2Xl, p.ink, weight: FontWeight.w700),
-                ),
-                const SizedBox(height: Tokens.space4),
-                Wrap(
-                  runSpacing: Tokens.space2,
-                  children: [
-                    for (final c in cues)
-                      SizedBox(
-                        width: 290,
-                        child: Row(
-                          children: [
-                            SizedBox(
-                              width: 110,
-                              child: Text(
-                                c.keys.map(prettyKey).join(' / '),
-                                style: Txt.mono(Tokens.textSm, p.accent),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(Tokens.space4),
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 640),
+              padding: const EdgeInsets.all(Tokens.space6),
+              decoration: BoxDecoration(
+                color: p.bgElevated,
+                border: Border.all(color: p.border),
+                borderRadius: BorderRadius.circular(Tokens.radiusMd),
+                boxShadow: Tokens.shadow3,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'CUE SHEET',
+                    style: Txt.display(Tokens.text2Xl, p.ink, weight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: Tokens.space4),
+                  Wrap(
+                    runSpacing: Tokens.space2,
+                    children: [
+                      for (final c in cues)
+                        SizedBox(
+                          width: 290,
+                          child: Row(
+                            children: [
+                              SizedBox(
+                                width: 110,
+                                child: Text(
+                                  c.keys.map(prettyKey).join(' / '),
+                                  style: Txt.mono(Tokens.textSm, p.accent),
+                                ),
                               ),
-                            ),
-                            Expanded(child: Text(c.action, style: Txt.body(Tokens.textSm, p.ink))),
-                          ],
+                              Expanded(
+                                child: Text(c.action, style: Txt.body(Tokens.textSm, p.ink)),
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
-                  ],
-                ),
-              ],
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
         ),

@@ -66,7 +66,7 @@ describe('sync rule', () => {
   test('announces the value as plus or minus seconds', () => {
     expect(ariaValueText(0.35)).toBe('plus 0.35 seconds')
     expect(ariaValueText(-1)).toBe('minus 1.00 seconds')
-    expect(ariaValueText(0)).toBe('0.00 seconds')
+    expect(ariaValueText(0)).toBe('plus 0.00 seconds')
     expect(readout(-0.5)).toBe('SYNC −0.50')
     expect(toMs(-0.35)).toBe(-350)
   })

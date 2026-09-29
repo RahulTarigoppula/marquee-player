@@ -13,10 +13,10 @@ export function fmt(seconds: number): string {
   return `${pad2(Math.floor(s / 3600))}:${pad2(Math.floor((s % 3600) / 60))}:${pad2(s % 60)}`
 }
 
-/** `01:12:44 · −01:28:19`; an unknown duration (live / stream) prints `00:00:45 · —`. */
+/** `01:12:44 · −01:28:19`; an unknown, infinite or zero duration prints `00:00:45 · —`. */
 export function folio(position: number, duration: number | null): string {
-  const pos = Math.floor(Math.max(0, position))
-  if (duration === null || !Number.isFinite(duration)) return `${fmt(pos)} · —`
+  const pos = Number.isFinite(position) ? Math.floor(Math.max(0, position)) : 0
+  if (duration === null || !Number.isFinite(duration) || duration <= 0) return `${fmt(pos)} · —`
   return `${fmt(pos)} · ${MINUS}${fmt(Math.max(0, Math.ceil(duration) - pos))}`
 }
 

@@ -12,8 +12,9 @@ String fmtTimecode(int seconds) {
 }
 
 String folio(double position, double? duration) {
-  final pos = position.isNaN || position < 0 ? 0 : position.floor();
-  if (duration == null || duration.isNaN || duration <= 0) return '${fmtTimecode(pos)} · —';
+  final pos = !position.isFinite || position < 0 ? 0 : position.floor();
+  // Unknown, infinite (live) or empty durations print a dash — never a throw from ceil().
+  if (duration == null || !duration.isFinite || duration <= 0) return '${fmtTimecode(pos)} · —';
   final remaining = duration.ceil() - pos;
   return '${fmtTimecode(pos)} · $kMinus${fmtTimecode(remaining < 0 ? 0 : remaining)}';
 }

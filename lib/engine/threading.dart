@@ -174,10 +174,16 @@ class ThreadingMachine {
     languages: config.languages,
   );
 
+  /// Every port error reaches state typed: a raw exception (a bad zip, malformed JSON, a disk
+  /// error) is read as a timeout so the numeral stalls with a retry instead of hanging.
   Future<T> _guard<T>(Future<T> Function() f, Duration deadline) async {
     try {
       return await f().timeout(deadline);
+    } on ThreadingException {
+      rethrow;
     } on TimeoutException {
+      throw const ThreadingException(ThreadingFailure.timeout);
+    } on Object {
       throw const ThreadingException(ThreadingFailure.timeout);
     }
   }
@@ -202,13 +208,13 @@ class ThreadingMachine {
     // ── "3": read the print ──
     MovieHash? hash;
     try {
-      hash = await _guard(ports.hash, config.hashDeadline);
+      hash = await ports.hash().timeout(config.hashDeadline);
     } on FileTooSmall {
       hash = null; // SILENT: "3" completes normally, "2" starts with a filename query
     } on HashUnavailable {
       hash = null; // the file vanished mid-read: skip to filename search, no stall
-    } on ThreadingException {
-      hash = null; // a slow disk is not worth a stall either — the name still works
+    } on Object {
+      hash = null; // a slow disk (or any read error) is not worth a stall — the name still works
     }
     if (gen != _generation) return;
     if (hash != null) _emit(_state.copyWith(hash: hash));
@@ -221,8 +227,9 @@ class ThreadingMachine {
         await _finish(gen, existing);
         return;
       }
-    } on ThreadingException {
+    } on Object {
       // A broken cache row is not a stall — carry on to the network.
+      if (gen != _generation) return;
     }
 
     await _searchAndPick(gen, hash == null ? _nameRequest() : _hashRequest(hash));
@@ -258,11 +265,7 @@ class ThreadingMachine {
     if (gen != _generation) return;
 
     // Keep earlier rows (a Subdl or manual search appends to what was already listed).
-    final merged = <SubtitleCandidate>[
-      ...found,
-      for (final c in _state.candidates.map((s) => s.candidate))
-        if (!found.any((f) => f.provider == c.provider && f.id == c.id)) c,
-    ];
+    final merged = _mergeUnique(found, _state.candidates.map((s) => s.candidate));
     final ranked = _rank(merged);
     _emit(_state.copyWith(candidates: ranked));
 
@@ -274,7 +277,7 @@ class ThreadingMachine {
       try {
         final named = await _guard(() => ports.search(_nameRequest()), config.searchDeadline);
         if (gen != _generation) return;
-        _emit(_state.copyWith(candidates: _rank([...merged, ...named])));
+        _emit(_state.copyWith(candidates: _rank(_mergeUnique(merged, named))));
       } on ThreadingException {
         if (gen != _generation) return;
       }
@@ -288,6 +291,19 @@ class ThreadingMachine {
       return;
     }
     await _download(gen, pick);
+  }
+
+  /// [first] in order, then every row of [rest] not already listed (same provider and id).
+  static List<SubtitleCandidate> _mergeUnique(
+    Iterable<SubtitleCandidate> first,
+    Iterable<SubtitleCandidate> rest,
+  ) {
+    final out = <SubtitleCandidate>[];
+    final seen = <String>{};
+    for (final c in [...first, ...rest]) {
+      if (seen.add('${c.provider.name}|${c.id}')) out.add(c);
+    }
+    return out;
   }
 
   Future<void> _download(int gen, ScoredCandidate pick, {bool isRetry = false}) async {

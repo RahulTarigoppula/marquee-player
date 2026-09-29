@@ -43,6 +43,16 @@ describe('srt to vtt', () => {
     expect(cues[0]?.text).toBe('<b>Red</b> <u>u</u> <i>i</i>')
   })
 
+  test('strips unknown tags, defuses a literal arrow and trims the cue', () => {
+    const cues = parseSrt(
+      '1\n00:00:01,000 --> 00:00:02,000\n' +
+        '  <span class="x">left</span> --> <I>right</I>  \n\n' +
+        '2\n00:00:03,000 --> 00:00:04,000\n<font color="red"> </font>\n',
+    )
+    expect(cues).toHaveLength(1)
+    expect(cues[0]?.text).toBe('left → <I>right</I>')
+  })
+
   test('turns a leading an8 override into line 0', () => {
     const vtt = srtToVtt(fixture('sample.srt'))
     expect(vtt).toContain('00:00:07.000 --> 00:00:09.000 line:0\nTop of the frame.')

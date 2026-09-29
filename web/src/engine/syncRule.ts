@@ -33,11 +33,10 @@ export const reset = (): number => 0
 /** The readout beside the gate: `SYNC +0.35`. */
 export const readout = (v: number): string => `SYNC ${signed(v)}`
 
-/** aria-valuetext for the slider: "plus 0.35 seconds". */
+/** aria-valuetext for the slider: "plus 0.35 seconds"; zero reads "plus 0.00 seconds". */
 export function ariaValueText(v: number): string {
   const s = snap(v)
-  if (s === 0) return '0.00 seconds'
-  return `${s > 0 ? 'plus' : 'minus'} ${Math.abs(s).toFixed(2)} seconds`
+  return `${s < 0 ? 'minus' : 'plus'} ${Math.abs(s).toFixed(2)} seconds`
 }
 
 export const toMs = (v: number): number => Math.round(snap(v) * 1000)

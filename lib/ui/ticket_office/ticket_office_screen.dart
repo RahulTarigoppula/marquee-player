@@ -48,25 +48,34 @@ class _TicketOfficeScreenState extends ConsumerState<TicketOfficeScreen> {
   }
 
   Future<void> _export() async {
+    final name = ref.read(sessionProvider.notifier).exportName();
     final json = await ref.read(libraryActionsProvider).export(Platform.operatingSystem);
-    final path = await pickSaveLocation(ref.read(sessionProvider.notifier).exportName());
-    if (path == null) return;
-    await File(path).writeAsString(prettyJson(json));
-    setState(() => _backupSentence = 'Library exported.');
+    final path = await pickSaveLocation(name);
+    if (path == null || !mounted) return;
+    try {
+      await File(path).writeAsString(prettyJson(json));
+    } on FileSystemException {
+      if (mounted) setState(() => _backupSentence = "That folder can't be written to.");
+      return;
+    }
+    if (mounted) setState(() => _backupSentence = 'Library exported.');
   }
 
   Future<void> _import() async {
+    final actions = ref.read(libraryActionsProvider);
     final path = await pickJson();
-    if (path == null) return;
+    if (path == null || !mounted) return;
     try {
       final j = jsonDecode(await File(path).readAsString());
       if (j is! Map<String, Object?>) {
         throw const FormatException("That file isn't a Marquee library export.");
       }
-      await ref.read(libraryActionsProvider).import(j);
-      setState(() => _backupSentence = 'Library imported and merged.');
+      await actions.import(j);
+      if (mounted) setState(() => _backupSentence = 'Library imported and merged.');
     } on FormatException catch (e) {
-      setState(() => _backupSentence = e.message);
+      if (mounted) setState(() => _backupSentence = e.message);
+    } on FileSystemException {
+      if (mounted) setState(() => _backupSentence = "That file couldn't be read.");
     }
   }
 
@@ -76,6 +85,7 @@ class _TicketOfficeScreenState extends ConsumerState<TicketOfficeScreen> {
     final settings = ref.watch(settingsValueProvider);
     final account = ref.watch(accountProvider);
     final wide = MediaQuery.sizeOf(context).width >= 900;
+    final filmOpen = ref.watch(sessionProvider.select((s) => s != null));
     void edit(Settings Function(Settings) f) =>
         unawaited(ref.read(settingsProvider.notifier).edit(f));
 
@@ -237,8 +247,11 @@ class _TicketOfficeScreenState extends ConsumerState<TicketOfficeScreen> {
                   children: [
                     IconMark(
                       icon: 'arrow-left',
-                      label: 'Back to the lobby',
-                      onTap: () => ref.read(roomProvider.notifier).go(Room.lobby),
+                      label: filmOpen ? 'Back to the film' : 'Back to the lobby',
+                      // Reached mid-film from the threading "Sign in" row: go back to the film.
+                      onTap: () => ref
+                          .read(roomProvider.notifier)
+                          .go(filmOpen ? Room.auditorium : Room.lobby),
                     ),
                     Text(
                       'TICKET OFFICE',

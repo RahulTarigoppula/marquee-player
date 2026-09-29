@@ -35,6 +35,9 @@ describe('folio timecodes', () => {
   test('prints an em dash for an unknown duration', () => {
     expect(folio(45, null)).toBe('00:00:45 · —')
     expect(folio(45, Number.POSITIVE_INFINITY)).toBe('00:00:45 · —')
+    expect(folio(45, Number.NaN)).toBe('00:00:45 · —')
+    expect(folio(45, 0)).toBe('00:00:45 · —')
+    expect(folio(Number.POSITIVE_INFINITY, 10)).toBe('00:00:00 · −00:00:10')
   })
 
   test('uses the minus sign U+2212, not a hyphen', () => {
@@ -45,6 +48,11 @@ describe('folio timecodes', () => {
   test('clamps a position past the end to zero remaining', () => {
     expect(folio(100, 90)).toBe('00:01:40 · −00:00:00')
     expect(fmt(-3)).toBe('00:00:00')
+  })
+
+  test('clamps a negative position to zero', () => {
+    expect(folio(-3, 10)).toBe('00:00:00 · −00:00:10')
+    expect(fmt(-5)).toBe('00:00:00')
   })
 
   test('appends suffixes without replacing the timecode', () => {

@@ -91,8 +91,8 @@ jobs:
       # Media fixtures (scripts/make-fixtures.sh) join this job once the ffmpeg-built corpus exists.
       - name: Design tokens in sync (G9)
         run: node scripts/tokens.mjs && git diff --exit-code web/src/styles/tokens.css lib/theme/tokens.dart
-      - name: Engine test parity between Dart and TS (report only; --strict later)
-        run: node scripts/check-parity.mjs
+      - name: Engine test parity between Dart and TS
+        run: node scripts/check-parity.mjs --strict
       - name: Cue sheet in sync (G10)
         run: node scripts/check-cue-sheet.mjs
       - name: No secrets, no telemetry (G5/G6)

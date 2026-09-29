@@ -119,35 +119,39 @@ class _HouseLightsState extends ConsumerState<HouseLights> with SingleTickerProv
       matinee: widget.matinee && !inAuditorium,
       house: _house,
       reducedMotion: reduced,
-      child: ColoredBox(
-        color: palette.bg,
-        child: Column(
-          children: [
-            if (Platform.isWindows && !ref.watch(fullscreenProvider)) const WindowBar(),
-            Expanded(
-              child: DropTarget(
-                enable: room != Room.auditorium,
-                onDragEntered: (_) => setState(() => _dragOver = true),
-                onDragExited: (_) => setState(() => _dragOver = false),
-                onDragDone: (d) async {
-                  setState(() => _dragOver = false);
-                  final path = d.files.firstOrNull?.path;
-                  if (path == null) return;
-                  final f = await fileFromPath(path);
-                  if (f != null) await ref.read(sessionProvider.notifier).open(f);
-                },
-                child: AnimatedSwitcher(
-                  duration: reduced ? const Duration(milliseconds: 240) : Tokens.durSlow,
-                  switchInCurve: Tokens.easeOut,
-                  child: switch (room) {
-                    Room.lobby => LobbyScreen(key: const ValueKey('lobby'), dragOver: _dragOver),
-                    Room.auditorium => const AuditoriumScreen(key: ValueKey('auditorium')),
-                    Room.ticketOffice => const TicketOfficeScreen(key: ValueKey('office')),
+      // Every InkWell/InkResponse/TextField needs a Material ancestor; there is no Scaffold.
+      child: Material(
+        type: MaterialType.transparency,
+        child: ColoredBox(
+          color: palette.bg,
+          child: Column(
+            children: [
+              if (Platform.isWindows && !ref.watch(fullscreenProvider)) const WindowBar(),
+              Expanded(
+                child: DropTarget(
+                  enable: room != Room.auditorium,
+                  onDragEntered: (_) => setState(() => _dragOver = true),
+                  onDragExited: (_) => setState(() => _dragOver = false),
+                  onDragDone: (d) async {
+                    setState(() => _dragOver = false);
+                    final path = d.files.firstOrNull?.path;
+                    if (path == null) return;
+                    final f = await fileFromPath(path);
+                    if (f != null) await ref.read(sessionProvider.notifier).open(f);
                   },
+                  child: AnimatedSwitcher(
+                    duration: reduced ? const Duration(milliseconds: 240) : Tokens.durSlow,
+                    switchInCurve: Tokens.easeOut,
+                    child: switch (room) {
+                      Room.lobby => LobbyScreen(key: const ValueKey('lobby'), dragOver: _dragOver),
+                      Room.auditorium => const AuditoriumScreen(key: ValueKey('auditorium')),
+                      Room.ticketOffice => const TicketOfficeScreen(key: ValueKey('office')),
+                    },
+                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

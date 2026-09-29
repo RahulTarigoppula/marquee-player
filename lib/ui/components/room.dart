@@ -79,7 +79,9 @@ class Beam extends StatefulWidget {
   State<Beam> createState() => _BeamState();
 }
 
-class _BeamState extends State<Beam> with SingleTickerProviderStateMixin {
+// TickerProviderStateMixin, not Single…: the ticker is disposed and re-created whenever reduced
+// motion or TickerMode flips, and the single-ticker mixin asserts on the second createTicker.
+class _BeamState extends State<Beam> with TickerProviderStateMixin {
   static Future<ui.FragmentProgram?>? _program;
   ui.FragmentShader? _shader;
   Ticker? _ticker;

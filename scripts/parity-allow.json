@@ -1,0 +1,70 @@
+{
+  "$comment": "Engine tests that exist on one side only, with the reason. check-parity.mjs --strict fails on any unlisted difference AND on any entry here that is no longer needed. 'DISAGREES' marks a real behavioural difference between the engines that is reported, not fixed.",
+  "hash": {
+    "dart": {
+      "hashes a real file through a RandomAccessFile reading only two chunks": "Dart-only rafReader adapter over dart:io; the web reads Blob slices."
+    },
+    "ts": {}
+  },
+  "scoring": {
+    "dart": {
+      "parses every OpenSubtitles search fixture": "Dart maps API rows in SubtitleCandidate.fromOpenSubtitles; the TS mapping is tested in api.test.ts."
+    },
+    "ts": {}
+  },
+  "tickets": {
+    "dart": {
+      "says so when the count is unknown": "DISAGREES: Dart prints 'SIGNED IN · TICKETS UNKNOWN' (and quotaAfterLogin fills remaining); TS prints '20 TICKETS A DAY'.",
+      "carries the pending tear flag for the decrement-after-tear order": "DISAGREES: Dart only flags the tear and the widget holds the old count; TS ticketStrip adds the torn ticket back itself."
+    },
+    "ts": {
+      "reads no tickets left on an HTTP 406 whatever the counter said": "TS-only status406 option; Dart zeroes the quota in threading.dart on a 406 (threading test 'inserts sign-in first when the quota is exhausted').",
+      "shows the count before the tear while the tear animation runs": "DISAGREES: see the Dart entry 'carries the pending tear flag…'.",
+      "refills the strip once the reset time has passed": "TS-only injected clock; the Dart strip has no reset refill.",
+      "reads unknown when signed in before any download reported a count": "DISAGREES: see the Dart entry 'says so when the count is unknown'.",
+      "keeps the known count when signing in again": "TS quotaFromLogin takes the previous quota; Dart quotaAfterLogin has no previous-quota input.",
+      "derives the total from requests plus remaining when login never said": "TS-only fallback in quotaFromDownload; Dart quotaAfterDownload never derives a total.",
+      "refreshes the quota from the user info without spending a ticket": "TS-only quotaFromUserInfo (/infos/user); the Dart engine has no equivalent."
+    }
+  },
+  "timecode": {
+    "dart": {},
+    "ts": {}
+  },
+  "sync_rule": {
+    "dart": {
+      "formats the mpv sub-delay value": "Native-only: mpv's sub-delay property; the web shifts VTT cues instead."
+    },
+    "ts": {
+      "remembers the offset for the same moviehash": "TS OffsetBook lives in the engine; Dart persists offsets in the drift data layer, outside lib/engine.",
+      "starts a different moviehash at zero": "TS OffsetBook, as above."
+    }
+  },
+  "srt": {
+    "dart": {
+      "emits renumbered SRT": "Native-only: toSrt writes a sidecar beside the file; the web never writes SRT."
+    },
+    "ts": {}
+  },
+  "threading": {
+    "dart": {
+      "sends the raw filename when the name is low confidence": "Dart builds the search query inside the machine; TS builds it in api.ts (api.test.ts covers it).",
+      "skips to a name search when the file vanishes mid-hash without stalling": "Dart distinguishes HashUnavailable in the machine; the TS reducer receives hashed:null for both cases and is tested once.",
+      "lists name results but never spends a ticket when the hash misses": "Dart-only immediate free name search on a hash miss.",
+      "runs a manual search from the stall and downloads the pick": "DISAGREES: Dart retry() after a failed manual search re-runs the hash/name rung, not the typed query; TS repeats the manual query.",
+      "stalls instead of hanging when a port throws a raw error": "Dart ports can throw; the TS reducer has no ports (its caller maps errors to a 'failed' event before reduce).",
+      "lists a subtitle once when the hash and name searches both return it": "Dart-only merge of the immediate name search on a hash miss (STATUS D3)."
+    },
+    "ts": {
+      "stalls with the sign-in sentence instead of downloading when signed out": "Web-only: the Worker refuses anonymous downloads; native builds may spend the anonymous pool.",
+      "announces each phase once": "TS emits announce effects from the reducer; Dart announces from the widget layer.",
+      "runs a manual search with the typed query and repeats it on retry": "DISAGREES: see the Dart entry 'runs a manual search from the stall…'.",
+      "ignores fallback choices and results that do not belong to the current phase": "TS reducer event guards; Dart drops stale results with a generation counter (covered by the tap-override test).",
+      "re-runs the filename rung when another print is requested after playback began": "TS-only 'research' event."
+    }
+  },
+  "filename": {
+    "dart": {},
+    "ts": {}
+  }
+}

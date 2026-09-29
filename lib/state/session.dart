@@ -75,6 +75,9 @@ class SessionNotifier extends Notifier<FilmSession?> {
 
   @override
   FilmSession? build() {
+    // The machine holds its own quota; keep it current (sign-in, restore, sign-out) or a pick
+    // after signing in is refused as "no tickets" without a request.
+    ref.listen(quotaProvider, (_, q) => _machine?.setQuota(q));
     ref.onDispose(() {
       _resumeTimer?.cancel();
       _undecodable?.cancel();
@@ -113,30 +116,40 @@ class SessionNotifier extends Notifier<FilmSession?> {
     unawaited(db.sweepArtwork());
   }
 
+  bool _isCurrent(PlayerEngine engine) => state?.engine == engine && !engine.isDisposed;
+
   Future<void> _startPlayback(PlayerEngine engine, OpenedFile file) async {
     try {
       await engine.open(file.locator);
     } on Object {
-      _fail();
+      _fail(engine);
       return;
     }
+    // Closed or replaced while libmpv was opening: the timers belong to the next film.
+    if (!_isCurrent(engine)) return;
+    _undecodable?.cancel();
     _undecodable = Timer(kUndecodableAfter, () {
+      if (!_isCurrent(engine)) return;
       final s = engine.snapshot;
-      if (s.duration == Duration.zero && s.error != null) _fail();
+      if (s.duration == Duration.zero && s.error != null) _fail(engine);
     });
+    _resumeTimer?.cancel();
+    _resumeTimer = Timer.periodic(kResumeSaveEvery, (_) => unawaited(_saveResume()));
     unawaited(() async {
+      // container-fps and chapter-list only exist once the file has loaded.
+      if (!await engine.whenLoaded() || !_isCurrent(engine)) return;
       final fps = await engine.containerFps();
+      if (!_isCurrent(engine)) return;
       _machine?.setContainerFps(fps);
       final chapters = await engine.chapters();
       final cur = state;
       if (cur != null && cur.engine == engine) state = cur.copyWith(chapters: chapters);
     }());
-    _resumeTimer = Timer.periodic(kResumeSaveEvery, (_) => unawaited(_saveResume()));
   }
 
-  void _fail() {
+  void _fail(PlayerEngine engine) {
     final cur = state;
-    if (cur == null) return;
+    if (cur == null || cur.engine != engine) return;
     _machine?.skip();
     state = cur.copyWith(error: "This print can't be projected.");
   }
@@ -182,7 +195,12 @@ class SessionNotifier extends Notifier<FilmSession?> {
       subdl: settings.subdlEnabled
           ? (req) async {
               final key = await ref.read(accountProvider.notifier).subdlKey();
-              return SubdlClient(apiKey: key).search(req);
+              final client = SubdlClient(apiKey: key);
+              try {
+                return await client.search(req);
+              } finally {
+                client.client.close();
+              }
             }
           : null,
       download: (pick, hash) => _download(file, settings, pick, hash),
@@ -202,7 +220,13 @@ class SessionNotifier extends Notifier<FilmSession?> {
     int? remaining;
     DateTime? reset;
     if (c.provider == SubtitleProvider.subdl) {
-      final z = await SubdlClient().download(c.id);
+      final client = SubdlClient();
+      final ZipText z;
+      try {
+        z = await client.download(c.id);
+      } finally {
+        client.client.close();
+      }
       bytes = z.bytes;
       if (!z.name.toLowerCase().endsWith('.srt')) ext = 'ass';
     } else {
@@ -288,20 +312,21 @@ class SessionNotifier extends Notifier<FilmSession?> {
     final cur = state;
     if (cur == null || cur.file != file) return;
     state = cur.copyWith(mediaId: id, delayMs: delay);
-    if (delay != 0) await cur.engine.setSubDelayMs(delay);
-    if (resumeAt != null) {
+    final engine = cur.engine;
+    if (delay != 0) await engine.setSubDelayMs(delay);
+    final at = resumeAt;
+    if (at != null) {
       // The hash resolves in ~40 ms, usually before libmpv has loaded the file: wait for a
-      // duration before seeking, or the seek is silently dropped.
-      try {
-        if (cur.engine.player.state.duration == Duration.zero) {
-          await cur.engine.player.stream.duration
-              .firstWhere((d) => d > Duration.zero)
-              .timeout(kUndecodableAfter);
+      // duration before seeking, or the seek is silently dropped. NOT awaited — rung 0 (the
+      // sidecar and the cache) must not wait for libmpv.
+      unawaited(() async {
+        try {
+          if (!await engine.whenLoaded(timeout: kUndecodableAfter)) return;
+          if (_isCurrent(engine)) await engine.player.seek(at);
+        } on Object {
+          // Closed mid-seek: nothing to resume.
         }
-        await cur.engine.player.seek(resumeAt);
-      } on TimeoutException {
-        // Never loaded: the undecodable path will speak for it.
-      }
+      }());
     }
   }
 
@@ -313,11 +338,17 @@ class SessionNotifier extends Notifier<FilmSession?> {
       _attachedOnce = true;
       final a = t.attached;
       if (a is ExternalSubtitle) {
-        unawaited(
-          cur.engine.attachSubtitle(a.path, language: a.language).then((_) async {
-            if (cur.delayMs != 0) await cur.engine.setSubDelayMs(cur.delayMs);
-          }),
-        );
+        final engine = cur.engine;
+        unawaited(() async {
+          try {
+            await engine.attachSubtitle(a.path, language: a.language);
+            final now = state;
+            final delay = now != null && now.engine == engine ? now.delayMs : 0;
+            if (delay != 0) await engine.setSubDelayMs(delay);
+          } on Object {
+            // The film was closed while the subtitle was being attached.
+          }
+        }());
       }
     }
   }

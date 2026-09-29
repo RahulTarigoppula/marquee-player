@@ -49,6 +49,7 @@ There is no Android SDK here either, so the APK is CI-built only (as the plan al
 | D9 | drift data classes named after tables | `MediaRow`, `HashCacheRow`, `ResumeRow`, … | the default names collide with the engine models (`ResumePoint`, `MediaFile`) |
 | D10 | `LobbyCard` in the DB layer | in `lib/engine/models/media.dart` | widgets may not import `lib/db` (structural law) — the test caught it |
 | D11 | Subdl download inside the API layer only | `SessionNotifier` writes the extracted bytes through the same sidecar writer | one write path, one `.1` collision rule |
+| D12 | Dart and TS engines behave identically | Agreed on auto-pick (first human row), score reasons (`HI ±30`, `downloads +x.xx`), folio dash for unknown/infinite/≤ 0 durations, SRT tag/arrow/trim handling and spoken zero. **Still different, on purpose:** the ticket strip (Dart: VIP with 0 left stays `VIP`, signed-in-unknown reads `SIGNED IN · TICKETS UNKNOWN` and login fills `remaining`; TS: `exhausted` and `20 TICKETS A DAY`, plus reset refill / 406 / user-info in the strip) and threading (Dart: a hash timeout falls through silently to a name search, `retry()` after a failed manual search re-runs the hash/name rung, the sweep loops each second, a download stall offers no filename search; TS: stalls with `timeout`, repeats the typed query, holds the sweep at `SWEEP_HOLD`, offers filename search) | each is listed with a reason in `scripts/parity-allow.json`; `check-parity.mjs --strict` keeps the list honest |
 
 ## 4. Still open (next pass, in priority order)
 

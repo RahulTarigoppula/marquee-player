@@ -61,7 +61,7 @@ ScoredCandidate scoreCandidate(
   }
   if (c.hearingImpaired) {
     s += preferHI ? kHearingImpairedWeight : -kHearingImpairedWeight;
-    why.add(preferHI ? 'hi +30' : 'hi -30');
+    why.add(preferHI ? 'HI +30' : 'HI -30');
   }
   final machine = c.machineTranslated || c.aiTranslated;
   if (machine) {
@@ -97,6 +97,12 @@ List<ScoredCandidate> rankCandidates(
   return scored;
 }
 
-/// The auto-pick is rank 1 unless rank 1 may never be auto-picked (machine/AI translated).
-ScoredCandidate? autoPickOf(List<ScoredCandidate> ranked) =>
-    ranked.isNotEmpty && ranked.first.autoPick ? ranked.first : null;
+/// The auto-pick is the highest-ranked row that may be auto-picked: machine/AI-translated rows
+/// are listed but skipped, so a human translation below a machine-translated rank 1 is picked.
+/// None when every row is machine/AI translated.
+ScoredCandidate? autoPickOf(List<ScoredCandidate> ranked) {
+  for (final s in ranked) {
+    if (s.autoPick) return s;
+  }
+  return null;
+}

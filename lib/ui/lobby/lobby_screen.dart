@@ -47,109 +47,136 @@ class LobbyScreen extends ConsumerWidget {
       fit: StackFit.expand,
       children: [
         const SkyBand(),
-        Beam(width: dragOver ? 0.4 : 0.16),
+        if (settings.beam) Beam(width: dragOver ? 0.4 : 0.16),
         const Grain(),
         SafeArea(
           child: Padding(
             padding: EdgeInsets.symmetric(horizontal: wide ? Tokens.space8 : Tokens.marginPhone),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const SizedBox(height: Tokens.space5),
-                Center(
-                  child: MarqueeSign(
-                    title:
-                        latest?.title ?? (latest == null ? 'Marquee' : _clean(latest.displayName)),
-                    meta: latest == null
-                        ? null
-                        : [if (latest.year != null) '${latest.year}', 'NOW SHOWING'].join(' · '),
-                    identified: latest == null || latest.title != null,
-                    night: phase == SkyPhase.night || phase == SkyPhase.dusk,
-                    fontSize: wide ? Tokens.text4Xl : Tokens.text3Xl,
-                  ),
-                ),
-                const SizedBox(height: Tokens.space3),
-                Text(
-                  '${phase.name.toUpperCase()} · ${fmtTimecode(now.hour * 3600 + now.minute * 60).substring(0, 5)} · THE HOUSE IS OPEN'
-                  '${cards.isEmpty ? '' : ' · ${cards.length} PRINTS'}',
-                  textAlign: TextAlign.center,
-                  style: Txt.label(p.inkFaint),
-                ),
-                const SizedBox(height: Tokens.space7),
-                if (cards.isEmpty)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: Tokens.space6),
-                    child: Text(
-                      'The house is empty. Drop a film on the doors, or press Open.',
-                      textAlign: TextAlign.center,
-                      style: Txt.body(Tokens.textBase, p.inkMuted),
-                    ),
-                  )
-                else ...[
-                  Row(
+            // Scrolls when the room is shorter than its content (a 360×640 phone with a
+            // library, the 720×480 window); otherwise the doors sit centred between the
+            // marquee and the footer, as the two Spacers used to place them.
+            child: LayoutBuilder(
+              builder: (context, c) => SingleChildScrollView(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minHeight: c.maxHeight),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text('NOW SHOWING & RECENT', style: Txt.label(p.inkFaint)),
-                      const Spacer(),
-                      Text('TAP TO PROJECT', style: Txt.mono(Tokens.textXs, p.inkFaint)),
-                    ],
-                  ),
-                  const SizedBox(height: Tokens.space3),
-                  SizedBox(
-                    height: wide ? 250 : 220,
-                    child: ListView.separated(
-                      scrollDirection: Axis.horizontal,
-                      itemCount: cards.length,
-                      separatorBuilder: (_, _) => const SizedBox(width: Tokens.space4),
-                      itemBuilder: (context, i) => _NowShowingCard(
-                        card: cards[i],
-                        onTap: () => unawaited(_openCard(ref, cards[i])),
-                        onRemove: () =>
-                            unawaited(ref.read(libraryActionsProvider).remove(cards[i].id)),
-                      ),
-                    ),
-                  ),
-                ],
-                const Spacer(),
-                _Doors(lit: dragOver, onOpen: () => unawaited(_open(ref))),
-                const Spacer(),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Expanded(
-                      child: Text(
-                        'Subtitles by OpenSubtitles.com · libmpv/FFmpeg/libass (LGPL) · fonts OFL · Marquee is MIT',
-                        style: Txt.body(Tokens.textXs, p.inkFaint),
-                      ),
-                    ),
-                    IconMark(
-                      icon: 'settings-2',
-                      label: 'Ticket office',
-                      onTap: () => ref.read(roomProvider.notifier).go(Room.ticketOffice),
-                    ),
-                    Mark(
-                      label: 'Lobby light: ${settings.lobbyTheme.name}',
-                      onTap: () => unawaited(
-                        ref
-                            .read(settingsProvider.notifier)
-                            .edit(
-                              (s) => s.copyWith(
-                                lobbyTheme: LobbyTheme
-                                    .values[(s.lobbyTheme.index + 1) % LobbyTheme.values.length],
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          const SizedBox(height: Tokens.space5),
+                          Center(
+                            child: MarqueeSign(
+                              title:
+                                  latest?.title ??
+                                  (latest == null ? 'Marquee' : _clean(latest.displayName)),
+                              meta: latest == null
+                                  ? null
+                                  : [
+                                      if (latest.year != null) '${latest.year}',
+                                      'NOW SHOWING',
+                                    ].join(' · '),
+                              identified: latest == null || latest.title != null,
+                              night: phase == SkyPhase.night || phase == SkyPhase.dusk,
+                              fontSize: wide ? Tokens.text4Xl : Tokens.text3Xl,
+                            ),
+                          ),
+                          const SizedBox(height: Tokens.space3),
+                          Text(
+                            '${phase.name.toUpperCase()} · ${fmtTimecode(now.hour * 3600 + now.minute * 60).substring(0, 5)} · THE HOUSE IS OPEN'
+                            '${cards.isEmpty ? '' : ' · ${cards.length} PRINTS'}',
+                            textAlign: TextAlign.center,
+                            style: Txt.label(p.inkFaint),
+                          ),
+                          const SizedBox(height: Tokens.space7),
+                          if (cards.isEmpty)
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: Tokens.space6),
+                              child: Text(
+                                'The house is empty. Drop a film on the doors, or press Open.',
+                                textAlign: TextAlign.center,
+                                style: Txt.body(Tokens.textBase, p.inkMuted),
+                              ),
+                            )
+                          else ...[
+                            Row(
+                              children: [
+                                Text('NOW SHOWING & RECENT', style: Txt.label(p.inkFaint)),
+                                const Spacer(),
+                                Text('TAP TO PROJECT', style: Txt.mono(Tokens.textXs, p.inkFaint)),
+                              ],
+                            ),
+                            const SizedBox(height: Tokens.space3),
+                            SizedBox(
+                              height: wide ? 250 : 220,
+                              child: ListView.separated(
+                                scrollDirection: Axis.horizontal,
+                                itemCount: cards.length,
+                                separatorBuilder: (_, _) => const SizedBox(width: Tokens.space4),
+                                itemBuilder: (context, i) => _NowShowingCard(
+                                  card: cards[i],
+                                  onTap: () => unawaited(_openCard(ref, cards[i])),
+                                  onRemove: () => unawaited(
+                                    ref.read(libraryActionsProvider).remove(cards[i].id),
+                                  ),
+                                ),
                               ),
                             ),
+                          ],
+                          const SizedBox(height: Tokens.space6),
+                        ],
                       ),
-                      child: Text(switch (settings.lobbyTheme) {
-                        LobbyTheme.auditorium => 'NIGHT',
-                        LobbyTheme.matinee => 'DAY',
-                        LobbyTheme.auto => 'AUTO',
-                      }, style: Txt.mono(Tokens.textXs, p.inkMuted)),
-                    ),
-                    const SizedBox(width: Tokens.space3),
-                    OpenDisc(onTap: () => unawaited(_open(ref))),
-                  ],
+                      _Doors(lit: dragOver, onOpen: () => unawaited(_open(ref))),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          const SizedBox(height: Tokens.space6),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  'Subtitles by OpenSubtitles.com · libmpv/FFmpeg/libass (LGPL) · fonts OFL · Marquee is MIT',
+                                  style: Txt.body(Tokens.textXs, p.inkFaint),
+                                ),
+                              ),
+                              IconMark(
+                                icon: 'settings-2',
+                                label: 'Ticket office',
+                                onTap: () => ref.read(roomProvider.notifier).go(Room.ticketOffice),
+                              ),
+                              Mark(
+                                label: 'Lobby light: ${settings.lobbyTheme.name}',
+                                onTap: () => unawaited(
+                                  ref
+                                      .read(settingsProvider.notifier)
+                                      .edit(
+                                        (s) => s.copyWith(
+                                          lobbyTheme:
+                                              LobbyTheme.values[(s.lobbyTheme.index + 1) %
+                                                  LobbyTheme.values.length],
+                                        ),
+                                      ),
+                                ),
+                                child: Text(switch (settings.lobbyTheme) {
+                                  LobbyTheme.auditorium => 'NIGHT',
+                                  LobbyTheme.matinee => 'DAY',
+                                  LobbyTheme.auto => 'AUTO',
+                                }, style: Txt.mono(Tokens.textXs, p.inkMuted)),
+                              ),
+                              const SizedBox(width: Tokens.space3),
+                              OpenDisc(onTap: () => unawaited(_open(ref))),
+                            ],
+                          ),
+                          const SizedBox(height: Tokens.space4),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
-                const SizedBox(height: Tokens.space4),
-              ],
+              ),
             ),
           ),
         ),

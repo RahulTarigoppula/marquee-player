@@ -105,9 +105,8 @@ class _ThreadingOverlayState extends ConsumerState<ThreadingOverlay> {
         for (final c in t.candidates.take(8))
           _CandidateRow(
             scored: c,
-            picked: t.picked?.candidate.id == c.candidate.id,
-            downloading:
-                t.phase == LeaderPhase.downloading && t.picked?.candidate.id == c.candidate.id,
+            picked: _same(t.picked, c),
+            downloading: t.phase == LeaderPhase.downloading && _same(t.picked, c),
             onTap: () => unawaited(ref.read(sessionProvider.notifier).pick(c)),
           ),
         if (stalled != null) ..._fallbacks(stalled, p),
@@ -210,6 +209,9 @@ class _ThreadingOverlayState extends ConsumerState<ThreadingOverlay> {
         },
     ];
   }
+
+  static bool _same(ScoredCandidate? a, ScoredCandidate b) =>
+      a != null && a.candidate.provider == b.candidate.provider && a.candidate.id == b.candidate.id;
 
   static String _size(int bytes) {
     if (bytes >= 1 << 30) return '${(bytes / (1 << 30)).toStringAsFixed(2)} GB';

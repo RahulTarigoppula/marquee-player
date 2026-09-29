@@ -126,17 +126,38 @@ class PlayerEngine {
     await player.open(Media(locator, start: start), play: true);
   }
 
-  Future<void> attachSubtitle(String path, {required String language, String? title}) =>
-      player.setSubtitleTrack(
-        SubtitleTrack.uri(path, title: title ?? language.toUpperCase(), language: language),
-      );
+  bool get isDisposed => _disposed;
 
-  Future<void> setSubDelayMs(int ms) async =>
-      _native?.setProperty('sub-delay', (ms / 1000).toStringAsFixed(2));
+  /// Completes true once libmpv has loaded the file (a duration is known). `open()` returns
+  /// before that, and `sub-add`, `seek` and the chapter/fps properties are lost or unavailable
+  /// until then. False on timeout or when the engine is disposed first.
+  Future<bool> whenLoaded({Duration timeout = const Duration(seconds: 10)}) async {
+    if (_disposed) return false;
+    if (player.state.duration > Duration.zero) return true;
+    try {
+      await player.stream.duration.firstWhere((d) => d > Duration.zero).timeout(timeout);
+      return !_disposed;
+    } on Object {
+      return false; // timed out, or the stream closed because the player was disposed
+    }
+  }
+
+  /// Adds and selects an external subtitle — only after the file has loaded, or mpv drops it.
+  Future<void> attachSubtitle(String path, {required String language, String? title}) async {
+    if (!await whenLoaded()) return;
+    await player.setSubtitleTrack(
+      SubtitleTrack.uri(path, title: title ?? language.toUpperCase(), language: language),
+    );
+  }
+
+  Future<void> setSubDelayMs(int ms) async {
+    if (_disposed) return;
+    await _native?.setProperty('sub-delay', (ms / 1000).toStringAsFixed(2));
+  }
 
   Future<void> setSubStyle({double? scale, bool? outline, String? position}) async {
     final n = _native;
-    if (n == null) return;
+    if (n == null || _disposed) return;
     if (scale != null) await n.setProperty('sub-scale', scale.toStringAsFixed(2));
     if (outline != null) await n.setProperty('sub-border-size', outline ? '2' : '0');
     if (position != null) {
@@ -175,7 +196,8 @@ class PlayerEngine {
 
   Future<void> abLoop() async => _native?.command(['ab-loop']);
 
-  Future<Uint8List?> screenshot() => player.screenshot(format: 'image/jpeg');
+  Future<Uint8List?> screenshot() async =>
+      _disposed ? null : player.screenshot(format: 'image/jpeg');
 
   Future<void> dispose() async {
     if (_disposed) return;

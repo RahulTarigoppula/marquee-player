@@ -61,6 +61,7 @@ describe('scoring', () => {
       'res +50',
       'codec +20',
       'fps +40',
+      'downloads +4.09',
     ])
   })
 
@@ -97,6 +98,7 @@ describe('scoring', () => {
     const ranked = rank([E, D], opts)
     expect(ranked[0]?.candidate.id).toBe('E')
     expect(ranked.find((r) => r.autoPick)?.candidate.id).toBe('D')
+    expect(rank([E], opts).some((r) => r.autoPick)).toBe(false)
   })
 
   test('breaks ties on download count', () => {
@@ -128,6 +130,8 @@ describe('scoring', () => {
     expect(s(C, true) - s(C)).toBeCloseTo(60, 6)
     expect(s(B, true) - s(B)).toBeCloseTo(60, 6)
     expect(s(A, true)).toBeCloseTo(s(A), 6)
+    expect(score(C, FILE, FPS, true).reasons).toContain('HI +30')
+    expect(score(C, FILE, FPS, false).reasons).toContain('HI -30')
     const ranked = rank([B, C, D, A], { ...opts, preferHI: true })
     expect(ranked[0]?.candidate.id).toBe('A')
     expect(ranked[0]?.autoPick).toBe(true)
@@ -154,7 +158,7 @@ describe('scoring', () => {
   })
 
   test('skips release comparisons when either name is unknown', () => {
-    expect(score(A, null, null, false).reasons).toEqual(['hash +1000'])
+    expect(score(A, null, null, false).reasons).toEqual(['hash +1000', 'downloads +4.09'])
     expect(score(cand('n', { release: null }), FILE, null, false).score).toBe(0)
   })
 })

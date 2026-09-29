@@ -5,8 +5,8 @@ const int kMaxCueChars = 10000;
 final _timing = RegExp(
   r'^(\d{1,3}):(\d{2}):(\d{2})[,.](\d{1,3})\s*-->\s*(\d{1,3}):(\d{2}):(\d{2})[,.](\d{1,3})(.*)$',
 );
-final _fontOpen = RegExp(r'<font[^>]{0,200}>', caseSensitive: false);
-final _fontClose = RegExp(r'</font>', caseSensitive: false);
+// Keep <i> <b> <u> (VTT supports them); strip every other tag, <font …> included, to its text.
+final _foreignTag = RegExp(r'<(?!/?[ibu]>)[^>]{0,200}>', caseSensitive: false);
 final _an8 = RegExp(r'^\{\\an8\}');
 final _assOverride = RegExp(r'\{\\[^}]{0,200}\}');
 
@@ -35,14 +35,13 @@ List<Cue> parseSrt(String input) {
 
   void flush() {
     if (start != null && end != null) {
+      // Same order as srt2vtt.ts: trim, an8 → line:0, strip overrides and foreign tags, defuse
+      // a literal "-->" (it would read as a cue timing), trim again, cap. Empty cues are dropped.
       var t = body.join('\n').trim();
-      if (t.length > kMaxCueChars) t = t.substring(0, kMaxCueChars);
       var cueSettings = settings;
-      if (_an8.hasMatch(t)) {
-        t = t.replaceFirst(_an8, '');
-        cueSettings = '$cueSettings line:0'.trim();
-      }
-      t = t.replaceAll(_fontOpen, '').replaceAll(_fontClose, '').replaceAll(_assOverride, '');
+      if (_an8.hasMatch(t)) cueSettings = '$cueSettings line:0'.trim();
+      t = t.replaceAll(_assOverride, '').replaceAll(_foreignTag, '').replaceAll('-->', '→').trim();
+      if (t.length > kMaxCueChars) t = t.substring(0, kMaxCueChars);
       if (t.isNotEmpty) cues.add(Cue(start!, end!, t, settings: cueSettings));
     }
     start = null;

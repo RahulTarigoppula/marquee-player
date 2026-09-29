@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart' show SubtitleTrack;
 
 import '../../engine/models/models.dart';
+import '../../player/engine.dart';
 import '../../state/providers.dart';
 import '../../state/session.dart';
 import '../../theme/house.dart';
@@ -28,6 +29,7 @@ class _BoothSheetState extends ConsumerState<BoothSheet> {
   final _search = TextEditingController();
   double _drag = 0;
   bool _wasPlaying = false;
+  PlayerEngine? _engine; // captured: `ref` is unusable in dispose() (Riverpod 3)
   String _size = 'M';
   bool _outline = true;
   String _position = 'bottom';
@@ -35,15 +37,16 @@ class _BoothSheetState extends ConsumerState<BoothSheet> {
   @override
   void initState() {
     super.initState();
-    final player = ref.read(sessionProvider)?.engine.player;
+    _engine = ref.read(sessionProvider)?.engine;
+    final player = _engine?.player;
     _wasPlaying = player?.state.playing ?? false;
     if (_wasPlaying) unawaited(player?.pause()); // booth glass only ever sits over a paused frame
   }
 
   @override
   void dispose() {
-    final player = ref.read(sessionProvider)?.engine.player;
-    if (_wasPlaying) unawaited(player?.play());
+    final e = _engine;
+    if (_wasPlaying && e != null && !e.isDisposed) unawaited(e.player.play());
     _search.dispose();
     super.dispose();
   }
@@ -68,7 +71,7 @@ class _BoothSheetState extends ConsumerState<BoothSheet> {
     final s = ref.watch(sessionProvider);
     if (s == null) return const SizedBox.shrink();
     final p = House.paletteOf(context);
-    final pb = s.engine.snapshot;
+    final pb = ref.watch(playbackProvider).value ?? s.engine.snapshot;
     final attached = s.threading.attached;
     final h = MediaQuery.sizeOf(context).height;
     return Stack(

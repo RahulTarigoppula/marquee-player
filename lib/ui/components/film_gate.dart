@@ -144,7 +144,9 @@ class _FilmGateState extends State<FilmGate> with SingleTickerProviderStateMixin
                 });
               },
               onTapUp: (d) => widget.onSeek(_secondsAt(d.localPosition.dx, w)),
+              // Full width: a childless CustomPaint in a loose (cross-centred) parent is 0 px wide.
               child: SizedBox(
+                width: w.isFinite ? w : null,
                 height: widget.height,
                 child: AnimatedBuilder(
                   animation: _flicker,

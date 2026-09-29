@@ -13,9 +13,9 @@ const MAX_CUE_CHARS = 10_000
 const TIMING =
   /^(\d{1,3}):(\d{2}):(\d{2})[,.](\d{1,3})\s*-->\s*(\d{1,3}):(\d{2}):(\d{2})[,.](\d{1,3})/
 const AN8 = /^\{\\an8\}/
-const ASS_OVERRIDE = /\{\\[^}]*\}/g
+const ASS_OVERRIDE = /\{\\[^}]{0,200}\}/g
 // Keep <i> <b> <u> (VTT supports them); strip every other tag, <font …> included, to its text.
-const FOREIGN_TAG = /<(?!\/?[ibu]>)[^>]*>/gi
+const FOREIGN_TAG = /<(?!\/?[ibu]>)[^>]{0,200}>/gi
 
 const ms = (h: string, m: string, s: string, f: string): number =>
   ((Number(h) * 60 + Number(m)) * 60 + Number(s)) * 1000 + Number(f.padEnd(3, '0'))
@@ -27,12 +27,14 @@ export function parseSrt(input: string): Cue[] {
   let body: string[] = []
 
   const flush = () => {
-    if (cur && body.length > 0) {
-      let text = body.join('\n')
+    if (cur) {
+      // Same order as srt.dart: trim, an8 → line:0, strip overrides and foreign tags, defuse a
+      // literal "-->" (it would read as a cue timing), trim again, cap. Empty cues are dropped.
+      let text = body.join('\n').trim()
       if (AN8.test(text)) cur.settings = ' line:0'
-      text = text.replace(ASS_OVERRIDE, '').replace(FOREIGN_TAG, '').replace(/-->/g, '→')
+      text = text.replace(ASS_OVERRIDE, '').replace(FOREIGN_TAG, '').replace(/-->/g, '→').trim()
       cur.text = text.slice(0, MAX_CUE_CHARS)
-      cues.push(cur)
+      if (cur.text !== '') cues.push(cur)
     }
     cur = null
     body = []

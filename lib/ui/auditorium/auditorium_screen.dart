@@ -46,6 +46,7 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
   final _focus = FocusNode(debugLabel: 'auditorium');
   double _rateBeforeHold = 1;
   double? _brightness;
+  bool _biasBusy = false;
 
   /// Edge dimmers (48 px wide): left = brightness (restored on dispose), right = volume.
   void _edgeDimmer(DragUpdateDetails d, FilmSession session) {
@@ -82,6 +83,12 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
 
   void _poke() {
     _idle?.cancel();
+    // A booth/overlay TextField that took focus and was then disposed leaves nothing focused:
+    // take it back so the keyboard map keeps working.
+    if (FocusManager.instance.primaryFocus == null ||
+        FocusManager.instance.primaryFocus is FocusScopeNode) {
+      _focus.requestFocus();
+    }
     if (!_controls) setState(() => _controls = true);
     _idle = Timer(Tokens.controlsIdle, () {
       if (mounted && !ref.read(boothOpenProvider) && !_syncOpen) setState(() => _controls = false);
@@ -94,11 +101,14 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
     if (!settings.biasLight) return;
     final every = Duration(milliseconds: Platform.isAndroid ? 1000 : 500);
     _bias = Timer.periodic(every, (_) async {
+      // One screenshot at a time: they run under the player's lock, ahead of seeks and pauses.
+      if (_biasBusy || !mounted) return;
       final s = ref.read(sessionProvider);
       if (s == null || !s.engine.player.state.playing) return; // paused ⇒ the glow freezes
-      final bytes = await s.engine.screenshot();
-      if (bytes == null || !mounted) return;
+      _biasBusy = true;
       try {
+        final bytes = await s.engine.screenshot();
+        if (bytes == null || !mounted) return;
         final codec = await ui.instantiateImageCodec(bytes, targetWidth: 64, targetHeight: 36);
         final frame = await codec.getNextFrame();
         final data = await frame.image.toByteData(format: ui.ImageByteFormat.rawRgba);
@@ -109,7 +119,9 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
         if (!mounted) return;
         setState(() => _stops = stops?.argb.map(Color.new).toList());
       } on Object {
-        // A bad frame is not worth a word.
+        // A bad frame (or a film closed mid-screenshot) is not worth a word.
+      } finally {
+        _biasBusy = false;
       }
     });
   }
@@ -133,6 +145,11 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
 
   KeyEventResult _onKey(FocusNode node, KeyEvent e) {
     if (e is! KeyDownEvent && e is! KeyRepeatEvent) return KeyEventResult.ignored;
+    // Keys typed into the booth/threading search fields are text, not transport controls.
+    final ctx = FocusManager.instance.primaryFocus?.context;
+    if (ctx != null && ctx.findAncestorWidgetOfExactType<EditableText>() != null) {
+      return KeyEventResult.ignored;
+    }
     final s = ref.read(sessionProvider);
     if (s == null) return KeyEventResult.ignored;
     final player = s.engine.player;

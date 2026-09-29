@@ -11,21 +11,27 @@ ChunkReader bytesReader(Uint8List all, {List<int>? reads}) => (offset, length) a
 
 void main() {
   group('moviehash', () {
-    test('accepts exactly 128 KiB of zeros and pads the hash to 16 hex digits', () async {
+    test('pads the hash to 16 hex digits and accepts exactly 128 KiB', () async {
       final h = await movieHashOf(bytesReader(Uint8List(131072)), 131072);
       expect(h.value, '0000000000020000');
       expect(h.isValid, isTrue);
     });
 
-    test('wraps 0xFF chunks as unsigned 64-bit arithmetic', () async {
+    test('wraps the chunk sums as unsigned 64-bit', () async {
       final all = Uint8List(131072)..fillRange(0, 131072, 0xFF);
       final h = await movieHashOf(bytesReader(all), 131072);
       expect(h.value, '000000000001c000');
     });
 
-    test('reads the tail at an offset that is not chunk-aligned', () async {
-      final h = await movieHashOf(bytesReader(Uint8List(200000)), 200000);
+    test('reads the tail chunk from an unaligned offset', () async {
+      final offsets = <int>[];
+      final all = Uint8List(200000);
+      final h = await movieHashOf((offset, length) async {
+        offsets.add(offset);
+        return Uint8List.sublistView(all, offset, offset + length);
+      }, 200000);
       expect(h.value, '0000000000030d40');
+      expect(offsets, contains(200000 - kChunk));
     });
 
     test('rejects a file one byte under 128 KiB as too small', () async {
@@ -35,7 +41,7 @@ void main() {
       );
     });
 
-    test('hashes a 2^32-byte stub without truncating the size or the seek', () async {
+    test('keeps 64-bit precision for a 4 GiB file', () async {
       const size = 4294967296;
       final offsets = <int>[];
       final h = await movieHashOf((offset, length) async {
@@ -46,23 +52,34 @@ void main() {
       expect(offsets, [0, size - 65536]);
     });
 
-    test('reads exactly 131072 bytes regardless of file size', () async {
-      final reads = <int>[];
-      await movieHashOf(bytesReader(Uint8List(1 << 20), reads: reads), 1 << 20);
-      expect(reads.fold<int>(0, (a, b) => a + b), 131072);
+    test('reads exactly 131072 bytes from a 4 GiB file', () async {
+      var bytesRead = 0;
+      await movieHashOf((offset, length) async {
+        bytesRead += length;
+        return Uint8List(length);
+      }, 4 * 1024 * 1024 * 1024);
+      expect(bytesRead, 131072);
     });
 
-    test('formats a hash with the top bit set without a minus sign', () {
+    test('formats a hash with the top bit set without a sign or prefix', () async {
+      final bytes = Uint8List(131072);
+      bytes[7] = 0x80;
+      final h = await movieHashOf(bytesReader(bytes), 131072);
+      expect(h.value, '8000000000020000');
+      expect(h.value, matches(RegExp(r'^[0-9a-f]{16}$')));
       expect(formatHash(-1).value, 'ffffffffffffffff');
       expect(formatHash(-2).value, 'fffffffffffffffe');
       expect(formatHash(0x7fffffffffffffff).value, '7fffffffffffffff');
     });
 
-    test('wraps a vanished file as HashUnavailable', () async {
+    test('wraps a failed read as hash unavailable', () async {
       expect(
         () => movieHashOf((o, l) async => throw const FileSystemException('gone'), 200000),
         throwsA(isA<HashUnavailable>()),
       );
+    });
+
+    test('wraps a short read as hash unavailable', () async {
       expect(
         () => movieHashOf((o, l) async => Uint8List(10), 200000),
         throwsA(isA<HashUnavailable>()),
@@ -79,7 +96,7 @@ void main() {
       expect(h.value, '0000000000030d40');
     });
 
-    test('matches the published breakdance.avi vector when the sample is available', () async {
+    test('matches the published breakdance.avi vector', () async {
       final path = Platform.environment['MARQUEE_BREAKDANCE'];
       if (path == null || !File(path).existsSync()) {
         markTestSkipped('breakdance.avi not fetched (set MARQUEE_BREAKDANCE) — skipped');
