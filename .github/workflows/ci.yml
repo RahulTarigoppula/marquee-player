@@ -114,5 +114,7 @@ jobs:
         with: { node-version: 22, cache: npm, cache-dependency-path: web/package-lock.json }
       - run: npm ci
       - run: npm run build
-        env: { VITE_BASE_PATH: /, VITE_API_BASE: ${{ vars.WORKER_URL }} }
+        env:
+          VITE_BASE_PATH: /
+          VITE_API_BASE: ${{ vars.WORKER_URL }}
       - run: npx @lhci/cli autorun     # thresholds in web/lighthouserc.json (N14)
