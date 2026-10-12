@@ -20,9 +20,9 @@ dependencies:
   flutter_riverpod: ^3.0.0 # threadingProvider / houseProvider — the whole state layer
 
   # ── database ──
-  drift: ^2.28.0 # code-generated: `dart run build_runner build …`
-  drift_flutter: ^0.2.0
-  sqlite3_flutter_libs: ^0.5.0
+  drift: ^2.34.4 # code-generated: `dart run build_runner build …`
+  drift_flutter: ^0.3.1
+  sqlite3_flutter_libs: ^0.6.0+eol
 
   # ── platform ──
   path_provider: ^2.1.0 # %LOCALAPPDATA%\Marquee — drift DB, mpv.log, subtitle fallback
@@ -47,7 +47,7 @@ dev_dependencies:
     sdk: flutter
   integration_test:
     sdk: flutter
-  drift_dev: ^2.28.0
+  drift_dev: ^2.34.0
   build_runner: ^2.4.0
   flutter_lints: ^6.0.0
   test: ^1.31.1
