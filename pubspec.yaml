@@ -28,7 +28,7 @@ dependencies:
   path_provider: ^2.1.0 # %LOCALAPPDATA%\Marquee — drift DB, mpv.log, subtitle fallback
   path: ^1.9.0
   file_picker: ^10.0.0 # SAF on Android, native dialog on Windows
-  flutter_secure_storage: ^9.2.0 # the OpenSubtitles JWT only, never the password
+  flutter_secure_storage: ^10.3.4 # the OpenSubtitles JWT only, never the password
   wakelock_plus: ^1.2.0
   screen_brightness: ^2.0.0 # per-app override, restored on exit
   window_manager: ^0.5.0 # frameless Windows window (MIT)
