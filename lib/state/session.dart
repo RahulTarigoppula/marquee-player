@@ -184,7 +184,7 @@ class SessionNotifier extends Notifier<FilmSession?> {
         );
       },
       search: (req) async {
-        if (!os.hasKey) throw const ThreadingException(ThreadingFailure.noResults);
+        if (!os.hasKey) throw const ThreadingException(ThreadingFailure.noApiKey);
         final key = OpenSubtitlesClient.cacheKey(req);
         final cached = await db.cachedSearch(key);
         if (cached != null) return OpenSubtitlesClient.parseSearch(cached);
@@ -231,7 +231,7 @@ class SessionNotifier extends Notifier<FilmSession?> {
       if (!z.name.toLowerCase().endsWith('.srt')) ext = 'ass';
     } else {
       final os = ref.read(openSubtitlesProvider);
-      if (!os.hasKey) throw const ThreadingException(ThreadingFailure.noResults);
+      if (!os.hasKey) throw const ThreadingException(ThreadingFailure.noApiKey);
       try {
         final link = await os.requestDownload(c.id);
         remaining = link.remaining;

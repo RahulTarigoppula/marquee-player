@@ -48,7 +48,7 @@ jobs:
       - run: npm run build
         env:
           VITE_BASE_PATH: /marquee/
-          VITE_API_BASE: https://marquee-proxy.<subdomain>.workers.dev/api
+          VITE_API_BASE: ${{ vars.WORKER_URL }}
       - run: npx size-limit          # N12 / N13
 
   worker:
@@ -62,7 +62,7 @@ jobs:
       - run: npm ci
       - run: npx biome ci .          # includes the noConsole rule scoped to worker/
       - run: npx tsc --noEmit
-      - run: npm test                # every §7.6 invariant
+      - run: npm test                # every Â§7.6 invariant
 
   e2e:
     name: playwright
@@ -114,5 +114,5 @@ jobs:
         with: { node-version: 22, cache: npm, cache-dependency-path: web/package-lock.json }
       - run: npm ci
       - run: npm run build
-        env: { VITE_BASE_PATH: /, VITE_API_BASE: https://marquee-proxy.<subdomain>.workers.dev/api }
+        env: { VITE_BASE_PATH: /, VITE_API_BASE: ${{ vars.WORKER_URL }} }
       - run: npx @lhci/cli autorun     # thresholds in web/lighthouserc.json (N14)

@@ -1,7 +1,10 @@
 // Public configuration only. The OpenSubtitles key lives in the Worker, never in a VITE_* var
 // (that prefix is inlined verbatim into the public bundle).
 
-export const API_BASE: string = import.meta.env.VITE_API_BASE ?? 'http://localhost:8787/api'
+// Dev with no setting → the local wrangler dev Worker. A build with no (or an empty) setting →
+// no Worker: films still play and subtitle search says so in one sentence.
+export const API_BASE: string =
+  import.meta.env.VITE_API_BASE ?? (import.meta.env.DEV ? 'http://localhost:8787/api' : '')
 export const APP_VERSION: string = import.meta.env.VITE_APP_VERSION ?? 'dev'
 
 /**

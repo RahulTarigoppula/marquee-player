@@ -53,6 +53,7 @@ final settingsValueProvider = Provider<Settings>(
 const _jwtKey = 'os_jwt';
 const _hostKey = 'os_host';
 const _subdlKey = 'subdl_key';
+const _osKey = 'os_api_key';
 
 enum AccountStatus { signedOut, signingIn, signedIn, expired, error }
 
@@ -89,6 +90,13 @@ class AccountNotifier extends Notifier<Account> {
 
   Future<void> _restore() async {
     try {
+      if (!_client.hasKey) {
+        final own = await _store.read(key: _osKey);
+        if (own != null && own.isNotEmpty) {
+          _client.apiKey = own;
+          ref.read(osKeyProvider.notifier).set(true);
+        }
+      }
       final jwt = await _store.read(key: _jwtKey);
       if (jwt == null || jwt.isEmpty) return;
       _client.jwt = jwt;
@@ -150,6 +158,18 @@ class AccountNotifier extends Notifier<Account> {
     sentence: 'Ticket expired — sign in again.',
   );
 
+  /// The user's own OpenSubtitles consumer key — only asked for when the build has none.
+  Future<void> setApiKey(String key) async {
+    final k = key.trim();
+    if (k.isEmpty) {
+      await _store.delete(key: _osKey);
+    } else {
+      await _store.write(key: _osKey, value: k);
+    }
+    _client.apiKey = k.isEmpty ? kOsApiKey : k;
+    ref.read(osKeyProvider.notifier).set(_client.hasKey);
+  }
+
   Future<String?> subdlKey() => _store.read(key: _subdlKey);
   Future<void> setSubdlKey(String key) =>
       key.isEmpty ? _store.delete(key: _subdlKey) : _store.write(key: _subdlKey, value: key);
@@ -209,3 +229,15 @@ class LibraryActions {
 }
 
 final libraryActionsProvider = Provider<LibraryActions>(LibraryActions.new);
+
+/// Whether subtitle search can run at all (a built-in or user-supplied OpenSubtitles key).
+class OsKeyNotifier extends Notifier<bool> {
+  @override
+  bool build() => OpenSubtitlesClient.hasBuiltInKey;
+  void set(bool v) => state = v;
+}
+
+final osKeyProvider = NotifierProvider<OsKeyNotifier, bool>(OsKeyNotifier.new);
+
+/// True when CI injected a consumer key at build time.
+bool get buildHasApiKey => OpenSubtitlesClient.hasBuiltInKey;

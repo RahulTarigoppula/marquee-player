@@ -1,6 +1,7 @@
 import 'package:marquee/engine/hash.dart';
 import 'package:marquee/engine/models/models.dart';
 import 'package:marquee/engine/sentences.dart';
+import 'package:marquee/engine/threading.dart' show fallbacksFor;
 import 'package:test/test.dart';
 
 void main() {
@@ -111,6 +112,17 @@ void main() {
         }),
         isNull,
       );
+    });
+
+    test('sends a build without an API key to the ticket office first', () {
+      final next = fallbacksFor(
+        ThreadingFailure.noApiKey,
+        subdlEnabled: false,
+        filenameSearchDone: true,
+        at: LeaderPhase.searching,
+      );
+      expect(next.first, FallbackAction.signIn);
+      expect(sentenceFor(ThreadingFailure.noApiKey), contains('API key'));
     });
   });
 }

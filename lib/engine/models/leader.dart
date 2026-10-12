@@ -16,6 +16,7 @@ enum ThreadingFailure {
   writeFailed,
   decodeFailed,
   cancelled,
+  noApiKey, // this build has no OpenSubtitles consumer key and the user has not added one
 }
 
 enum FallbackAction { signIn, retry, filenameSearch, subdl, manualSearch, skip }

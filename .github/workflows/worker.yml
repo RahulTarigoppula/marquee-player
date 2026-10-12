@@ -27,7 +27,15 @@ jobs:
         working-directory: worker
       - run: npm test                       # the Worker is the only component that can leak a key:
         working-directory: worker           # it never deploys red
+      - name: Cloudflare credentials present?
+        id: cf
+        env:
+          TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -n "$TOKEN" ]; then echo "ready=true" >> "$GITHUB_OUTPUT"
+          else echo "::notice::CLOUDFLARE_API_TOKEN is not set — tests ran, deploy skipped."; fi
       - uses: cloudflare/wrangler-action@v3
+        if: steps.cf.outputs.ready == 'true'
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

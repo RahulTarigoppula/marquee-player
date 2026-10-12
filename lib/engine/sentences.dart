@@ -14,6 +14,8 @@ String sentenceFor(ThreadingFailure f, {int? retryAfterSeconds}) => switch (f) {
   ThreadingFailure.writeFailed => "Couldn't write beside the file — saved in app storage instead.",
   ThreadingFailure.decodeFailed => "This print can't be projected.",
   ThreadingFailure.cancelled => 'Skipped subtitles.',
+  ThreadingFailure.noApiKey =>
+    'Add your free OpenSubtitles API key at the ticket office to search for subtitles.',
 };
 
 /// The phase announcement, once per phase — never per sweep frame.

@@ -87,7 +87,9 @@ List<FallbackAction> fallbacksFor(
   required LeaderPhase at,
 }) {
   final next = <FallbackAction>[
-    if (f == ThreadingFailure.unauthorized || f == ThreadingFailure.quotaExhausted)
+    if (f == ThreadingFailure.unauthorized ||
+        f == ThreadingFailure.quotaExhausted ||
+        f == ThreadingFailure.noApiKey)
       FallbackAction.signIn,
     if (f == ThreadingFailure.timeout ||
         f == ThreadingFailure.rateLimited ||

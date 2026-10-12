@@ -31,6 +31,7 @@ class _TicketOfficeScreenState extends ConsumerState<TicketOfficeScreen> {
   final _user = TextEditingController();
   final _pass = TextEditingController();
   final _subdl = TextEditingController();
+  final _osKey = TextEditingController();
   String? _backupSentence;
 
   @override
@@ -38,6 +39,7 @@ class _TicketOfficeScreenState extends ConsumerState<TicketOfficeScreen> {
     _user.dispose();
     _pass.dispose();
     _subdl.dispose();
+    _osKey.dispose();
     super.dispose();
   }
 
@@ -96,6 +98,22 @@ class _TicketOfficeScreenState extends ConsumerState<TicketOfficeScreen> {
         count: ref.watch(quotaProvider).remaining,
       ),
       const SizedBox(height: Tokens.space3),
+      if (!buildHasApiKey) ...[
+        Text(
+          ref.watch(osKeyProvider)
+              ? 'Using your own API key.'
+              : 'This build has no OpenSubtitles API key. Create a free one at '
+                    'opensubtitles.com → Profile → API consumers, and paste it here.',
+          style: Txt.body(Tokens.textSm, ref.watch(osKeyProvider) ? p.inkMuted : p.warning),
+        ),
+        _Underline(
+          controller: _osKey,
+          hint: 'OpenSubtitles API key (kept in secure storage)',
+          obscure: true,
+          onSubmit: (k) => unawaited(ref.read(accountProvider.notifier).setApiKey(k)),
+        ),
+        const SizedBox(height: Tokens.space3),
+      ],
       if (account.status == AccountStatus.signedIn) ...[
         Text(
           'Signed in${account.username == null ? '' : ' as ${account.username}'}',

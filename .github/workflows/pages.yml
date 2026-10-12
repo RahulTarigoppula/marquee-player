@@ -35,7 +35,7 @@ jobs:
         env:
           VITE_BASE_PATH: /${{ github.event.repository.name }}/
           # Public config only. The API key lives in the Worker.
-          VITE_API_BASE: https://marquee-proxy.<subdomain>.workers.dev/api
+          VITE_API_BASE: ${{ vars.WORKER_URL }}
           VITE_APP_VERSION: ${{ github.sha }}
       - name: SPA fallback for deep links
         run: cp dist/index.html dist/404.html

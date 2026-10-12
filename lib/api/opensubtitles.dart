@@ -35,7 +35,9 @@ class DownloadLink {
 
 class OpenSubtitlesClient {
   final http.Client client;
-  final String apiKey;
+
+  /// The build's key (--dart-define), or the user's own key from the Ticket Office.
+  String apiKey;
   final Future<void> Function(Duration) wait;
   String host;
   String? jwt;
@@ -49,6 +51,9 @@ class OpenSubtitlesClient {
   }) : client = client ?? http.Client();
 
   bool get hasKey => apiKey.isNotEmpty;
+
+  /// True when CI injected a consumer key, so the Ticket Office need not ask for one.
+  static bool get hasBuiltInKey => kOsApiKey.isNotEmpty;
 
   Map<String, String> _headers({bool json = false}) => {
     'Api-Key': apiKey,
