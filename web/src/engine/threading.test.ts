@@ -419,4 +419,46 @@ describe('leader state machine', () => {
     expect(effects.at(-1)).toEqual({ kind: 'search', rung: 'filename' })
     expect(run([...toSearch(), { type: 'research', at: 200 }]).s.phase).toBe('searching')
   })
+
+  test('lists other prints for a pick instead of downloading one when another is requested', () => {
+    const { s, effects } = run([
+      ...toSearch(),
+      { type: 'searched', at: 100, candidates: [A] },
+      { type: 'attached', at: 200, inSync: true },
+      { type: 'flashed', at: 300 },
+      { type: 'research', at: 5000, exclude: A.candidate.id },
+      { type: 'searched', at: 5100, candidates: [A, D] },
+    ])
+    expect(s.phase).toBe('done')
+    expect(s.candidates).toEqual([D])
+    expect(s.failure).toBeNull()
+    expect(kinds(effects).filter((k) => k === 'download')).toHaveLength(1)
+  })
+
+  test('downloads a print picked from the booth while the film plays', () => {
+    const { s, effects } = run([
+      ...toSearch(),
+      { type: 'cancel', at: 100 },
+      { type: 'research', at: 5000 },
+      { type: 'searched', at: 5100, candidates: [A, D] },
+      { type: 'pick', at: 6000, candidate: D },
+    ])
+    expect(s.phase).toBe('downloading')
+    expect(s.picked).toBe(D)
+    expect(effects.at(-1)).toEqual({ kind: 'download', candidate: D })
+  })
+
+  test('finds another print again after that search stalled', () => {
+    const stalled = run([
+      ...toSearch(),
+      { type: 'cancel', at: 100 },
+      { type: 'research', at: 5000, exclude: A.candidate.id },
+      { type: 'searched', at: 5100, candidates: [A] },
+    ])
+    expect(stalled.s.failure).toBe('no-results')
+    const again = reduce(stalled.m, { type: 'research', at: 6000 })
+    expect(again.machine.state.phase).toBe('searching')
+    expect(again.machine.state.failure).toBeNull()
+    expect(again.effects.at(-1)).toEqual({ kind: 'search', rung: 'filename' })
+  })
 })

@@ -5,6 +5,7 @@
     "includes": [
       "**",
       "!dist",
+      "!dist-e2e-*",
       "!dev-dist",
       "!coverage",
       "!playwright-report",

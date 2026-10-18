@@ -1,40 +1,28 @@
 // The No Print card (§4.6): names the EXACT missing decoder in one sentence and offers exactly
-// two actions. When window.VideoDecoder is undefined the WebCodecs button is ABSENT from the
-// DOM — not merely hidden. Nothing on this card uses --danger as a background.
+// two actions — the native builds, or another film. (A WebCodecs path was never wired to a
+// demuxer, so it is not offered.) Nothing on this card uses --danger as a background.
 import type { NoPrintReason } from '../engine/capability'
 import { h } from './dom'
 
 export interface NoPrintOptions {
   reason: NoPrintReason
-  webCodecsAvailable: boolean
   releasesUrl: string
-  onWebCodecs(): void
   onOpenAnother(): void
 }
 
 export function noPrint(o: NoPrintOptions): HTMLElement {
-  const actions = h('div', { class: 'noprint__actions' })
-  if (o.webCodecsAvailable) {
-    const wc = h('button', { class: 'btn', type: 'button' }, 'Try the WebCodecs path')
-    wc.addEventListener('click', o.onWebCodecs)
-    actions.append(wc)
-  }
-  actions.append(
+  const another = h('button', { class: 'btn btn--ghost', type: 'button' }, 'Open another film')
+  another.addEventListener('click', o.onOpenAnother)
+  const actions = h(
+    'div',
+    { class: 'noprint__actions' },
     h(
       'a',
-      {
-        class: o.webCodecsAvailable ? 'btn btn--ghost' : 'btn',
-        href: o.releasesUrl,
-        rel: 'noopener',
-      },
+      { class: 'btn', href: o.releasesUrl, rel: 'noopener' },
       'Open in Marquee for Windows / Android',
     ),
+    another,
   )
-  if (!o.webCodecsAvailable) {
-    const another = h('button', { class: 'btn btn--ghost', type: 'button' }, 'Open another film')
-    another.addEventListener('click', o.onOpenAnother)
-    actions.append(another)
-  }
   return h(
     'section',
     { class: 'overlay noprint', 'aria-labelledby': 'noprint-title' },
@@ -44,6 +32,7 @@ export function noPrint(o: NoPrintOptions): HTMLElement {
       {
         class: 'noprint__card',
         role: 'alertdialog',
+        'aria-modal': 'true',
         'aria-labelledby': 'noprint-title',
         'aria-describedby': 'noprint-why',
       },
@@ -55,7 +44,11 @@ export function noPrint(o: NoPrintOptions): HTMLElement {
       ),
       o.reason.tags ? h('p', { class: 'noprint__tags mono' }, o.reason.tags) : null,
       h('p', { class: 'sentence', id: 'noprint-why' }, o.reason.sentence),
-      h('p', { class: 'sentence', role: 'status', 'data-webcodecs-note': true }),
+      h(
+        'p',
+        { class: 'sentence sentence--muted' },
+        'The Windows and Android apps play every format, with the same subtitles.',
+      ),
       actions,
     ),
   )

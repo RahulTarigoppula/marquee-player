@@ -34,7 +34,7 @@ test.describe('No Print card', () => {
     expect(backgrounds).not.toContain(danger)
   })
 
-  test('leaves the WebCodecs button out of the DOM when VideoDecoder is undefined', async ({
+  test('offers exactly the native builds and another film, never a WebCodecs path', async ({
     page,
   }) => {
     await page.addInitScript(() => {
@@ -43,10 +43,11 @@ test.describe('No Print card', () => {
     await page.goto('/')
     await expect(page.locator('#capline')).toContainText('· WebCodecs unavailable')
     await page.locator('input[type="file"]').setInputFiles(unplayableMkv())
-    await expect(page.getByRole('alertdialog')).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Try the WebCodecs path' })).toHaveCount(0)
     const card = page.getByRole('alertdialog')
+    await expect(card).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Try the WebCodecs path' })).toHaveCount(0)
     await expect(card.getByRole('link', { name: /Open in Marquee for Windows/ })).toBeVisible()
+    await expect(card.getByRole('button', { name: 'Open another film' })).toBeVisible()
     await expect(card.getByRole('link').or(card.getByRole('button'))).toHaveCount(2)
   })
 })

@@ -1,8 +1,9 @@
-// The Marquee Lite landing (§4.6): a lit sign, the idle beam, a sky that knows the time, a
-// keyboard-operable drop frame backed by a REAL <input type="file">, and an honest,
-// computed capability line.
+// The Marquee Lite landing (§4.6): a lit sign, the idle beam, a sky that knows the time, a big
+// keyboard-operable drop frame backed by a REAL <input type="file" multiple>, and an honest,
+// computed capability line. What the subtitle story is depends on whether online search exists.
+import { LANGUAGES } from '../engine/languages'
 import type { Capability } from '../engine/types'
-import { h } from './dom'
+import { h, ICONS, icon } from './dom'
 
 export type Sky = 'dawn' | 'day' | 'dusk' | 'night'
 
@@ -19,6 +20,10 @@ const SIGN = 'MARQUEE LITE'
 const BULBS_PER_ROW = 23
 const WARMUP_CAP = 24 // letters; 60 ms stagger → at most 1.44 s
 
+/** Films, plus the subtitle files that may come with them. */
+export const ACCEPT =
+  'video/*,audio/*,.mkv,.mk3d,.mka,.avi,.ts,.m2ts,.mov,.m4v,.srt,.vtt,.ass,.ssa,text/vtt,application/x-subrip'
+
 const bulbRow = () =>
   h(
     'div',
@@ -29,8 +34,12 @@ const bulbRow = () =>
 export interface LiteOptions {
   now: Date
   releasesUrl: string
-  onFile(file: File): void
+  /** A Worker is configured: subtitles are searched online (sign-in needed to download). */
+  searchEnabled: boolean
+  language: string
+  onFiles(files: File[]): void
   onOffice(): void
+  onLanguage(code: string): void
   strip: HTMLElement
 }
 
@@ -39,6 +48,8 @@ export interface LiteView {
   input: HTMLInputElement
   setCapability(cap: Capability): void
   setSentence(text: string | null): void
+  setDragging(on: boolean): void
+  setLanguage(code: string): void
 }
 
 export function liteLanding(o: LiteOptions): LiteView {
@@ -46,7 +57,7 @@ export function liteLanding(o: LiteOptions): LiteView {
     h(
       'span',
       { class: i < WARMUP_CAP ? 'ltr warm' : 'ltr', style: `--i:${i}` },
-      ch === ' ' ? ' ' : ch,
+      ch === ' ' ? '\u00A0' : ch,
     ),
   )
   const sky = skyFor(o.now)
@@ -76,8 +87,9 @@ export function liteLanding(o: LiteOptions): LiteView {
     type: 'file',
     class: 'sr',
     tabindex: -1,
-    accept: 'video/*,audio/*,.mkv,.mk3d,.avi,.ts,.m2ts,.srt,.ass,.ssa',
-    'aria-label': 'Choose a film file',
+    multiple: true,
+    accept: ACCEPT,
+    'aria-label': 'Choose a film (and its subtitle file)',
   })
   const capline = h('p', { class: 'capline', id: 'capline' })
   const doors = h(
@@ -87,16 +99,64 @@ export function liteLanding(o: LiteOptions): LiteView {
       role: 'button',
       tabindex: 0,
       'aria-label': 'Drop a film here, or press Enter to open one',
-      'aria-describedby': 'capline',
+      'aria-describedby': 'doors-hint capline',
     },
+    h('span', { class: 'doors__icon', 'aria-hidden': 'true' }, icon(...ICONS.film)),
     h('span', { class: 'doors__head' }, 'Drop a film here'),
-    h('span', {}, 'or'),
-    h('span', { class: 'disc', 'aria-hidden': 'true' }, 'Open'),
+    h('span', { class: 'disc', 'aria-hidden': 'true' }, 'Open a film'),
+    h(
+      'span',
+      { class: 'doors__hint', id: 'doors-hint' },
+      'Got a subtitle file? Choose it together with the film, or drop both at once.',
+    ),
   )
   const sentence = h('p', { class: 'lite__sentence', role: 'status', hidden: true })
 
-  const office = h('button', { class: 'linkbtn', type: 'button' }, 'Ticket office · sign in')
-  office.addEventListener('click', o.onOffice)
+  const lang = h(
+    'select',
+    { class: 'select', 'aria-label': 'Subtitle language' },
+    ...LANGUAGES.map((l) => h('option', { value: l.code }, l.name)),
+  )
+  lang.value = o.language
+  lang.addEventListener('change', () => o.onLanguage(lang.value))
+
+  const native = h(
+    'a',
+    { class: 'linkbtn', href: o.releasesUrl, rel: 'noopener' },
+    'Open in Marquee for Windows / Android →',
+  )
+
+  let subs: HTMLElement
+  if (o.searchEnabled) {
+    const office = h('button', { class: 'linkbtn', type: 'button' }, 'Ticket office · sign in')
+    office.addEventListener('click', o.onOffice)
+    subs = h(
+      'section',
+      { class: 'lite__card', 'aria-labelledby': 'subs-title' },
+      h('h2', { class: 'label', id: 'subs-title' }, 'Subtitles'),
+      h(
+        'p',
+        { class: 'sentence' },
+        'Marquee finds subtitles for the film by itself. Downloading them needs a free OpenSubtitles account.',
+      ),
+      h('label', { class: 'langrow' }, h('span', {}, 'Language'), lang),
+      h('div', { class: 'lite__links' }, office),
+      o.strip,
+    )
+  } else {
+    subs = h(
+      'section',
+      { class: 'lite__card', 'aria-labelledby': 'subs-title' },
+      h('h2', { class: 'label', id: 'subs-title' }, 'Subtitles'),
+      h(
+        'p',
+        { class: 'sentence' },
+        'Bring your own .srt, .vtt or .ass file — add it with the film, or from the player. Online subtitle search needs the ',
+        h('a', { href: o.releasesUrl, rel: 'noopener' }, 'Windows / Android app'),
+        ' or a configured server.',
+      ),
+    )
+  }
 
   const el = h(
     'main',
@@ -106,21 +166,15 @@ export function liteLanding(o: LiteOptions): LiteView {
     input,
     sentence,
     capline,
-    h(
-      'nav',
-      { class: 'lite__links', 'aria-label': 'Elsewhere' },
-      h(
-        'a',
-        { class: 'linkbtn', href: o.releasesUrl, rel: 'noopener' },
-        'Open in Marquee for Windows / Android →',
-      ),
-      office,
-    ),
-    o.strip,
+    subs,
+    h('nav', { class: 'lite__links', 'aria-label': 'Elsewhere' }, native),
     h(
       'p',
       { class: 'attrib' },
-      'Subtitles by OpenSubtitles.com · Fonts: Big Shoulders Display, Geist (OFL 1.1) · MIT. Nothing you open leaves this device except its 16-digit fingerprint.',
+      o.searchEnabled
+        ? 'Your film never leaves this device. To find its subtitles, Marquee sends OpenSubtitles its 16-digit fingerprint and the title and year from its file name. '
+        : 'Your film and subtitle files never leave this device — nothing is uploaded. ',
+      'Subtitles by OpenSubtitles.com · Fonts: Big Shoulders Display, Geist (OFL 1.1) · MIT.',
     ),
   )
 
@@ -133,20 +187,9 @@ export function liteLanding(o: LiteOptions): LiteView {
     }
   })
   input.addEventListener('change', () => {
-    const f = input.files?.[0]
-    if (f) o.onFile(f)
+    const files = [...(input.files ?? [])]
     input.value = ''
-  })
-  const over = (on: boolean) => (e: DragEvent) => {
-    e.preventDefault()
-    doors.classList.toggle('is-over', on)
-  }
-  el.addEventListener('dragover', over(true))
-  el.addEventListener('dragleave', over(false))
-  el.addEventListener('drop', (e) => {
-    over(false)(e)
-    const f = e.dataTransfer?.files[0]
-    if (f) o.onFile(f)
+    if (files.length > 0) o.onFiles(files)
   })
 
   return {
@@ -158,6 +201,13 @@ export function liteLanding(o: LiteOptions): LiteView {
     setSentence(text) {
       sentence.hidden = text === null
       sentence.textContent = text ?? ''
+    },
+    setDragging(on) {
+      doors.classList.toggle('is-over', on)
+      el.classList.toggle('is-dragging', on)
+    },
+    setLanguage(code) {
+      lang.value = code
     },
   }
 }

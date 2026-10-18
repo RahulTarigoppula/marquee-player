@@ -1,0 +1,791 @@
+/* Marquee Lite — the auditorium as an overlaid player, the seek bar, the transport, menus,
+   notices, the booth's scrim and the cue sheet. Token variables only (no literal colours). */
+
+/* ── the auditorium ── */
+.auditorium {
+  --grain-opacity: 0;
+  --pad-l: max(var(--space-4), env(safe-area-inset-left));
+  --pad-r: max(var(--space-4), env(safe-area-inset-right));
+  background: var(--picture-bg);
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.stage {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+.pic {
+  position: absolute;
+  inset: 0;
+  background: var(--picture-bg);
+}
+.pic video {
+  width: 100%;
+  height: 100%;
+  display: block;
+  background: var(--picture-bg);
+  object-fit: contain;
+}
+.pic canvas {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+video::cue {
+  font-family: var(--font-body);
+  font-size: var(--cue-size, 1em);
+  line-height: 1.3;
+  color: white;
+  background: transparent;
+  text-shadow:
+    0 0 2px var(--picture-bg),
+    1.5px 1.5px 0 var(--picture-bg),
+    -1.5px 1.5px 0 var(--picture-bg),
+    1.5px -1.5px 0 var(--picture-bg),
+    -1.5px -1.5px 0 var(--picture-bg),
+    0 3px 6px var(--shade);
+}
+
+/* the gradients that keep the chrome legible over a bright frame */
+.scrim {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 1;
+  pointer-events: none;
+  transition: opacity var(--dur-slow) var(--ease-in-out);
+}
+.scrim--top {
+  top: 0;
+  height: 150px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklch, var(--picture-bg) 78%, transparent),
+    color-mix(in oklch, var(--picture-bg) 30%, transparent) 55%,
+    transparent
+  );
+}
+.scrim--bottom {
+  bottom: 0;
+  height: 170px;
+  background: linear-gradient(
+    0deg,
+    color-mix(in oklch, var(--picture-bg) 86%, transparent),
+    color-mix(in oklch, var(--picture-bg) 40%, transparent) 55%,
+    transparent
+  );
+}
+
+.player__top {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: max(var(--space-3), env(safe-area-inset-top)) var(--pad-r) 0 var(--pad-l);
+  transition:
+    opacity var(--dur-slow) var(--ease-in-out),
+    transform var(--dur-base) var(--ease-out);
+}
+.player__heading {
+  flex: 1;
+  min-width: 0;
+}
+.player__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: var(--text-xl);
+  letter-spacing: var(--tracking-display);
+  text-transform: uppercase;
+  line-height: var(--leading-tight);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.player__folio {
+  margin: 2px 0 0;
+  font-size: var(--text-xs);
+  color: var(--ink-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.player__bottom {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  padding: 0 var(--pad-r) max(var(--space-2), env(safe-area-inset-bottom)) var(--pad-l);
+  transition:
+    opacity var(--dur-slow) var(--ease-in-out),
+    transform var(--dur-base) var(--ease-out);
+}
+
+.auditorium.is-idle {
+  cursor: none;
+}
+.auditorium.is-idle .player__top,
+.auditorium.is-idle .player__bottom,
+.auditorium.is-idle .scrim {
+  opacity: 0;
+  pointer-events: none;
+}
+.auditorium.is-idle .player__top {
+  transform: translateY(-8px);
+}
+.auditorium.is-idle .player__bottom {
+  transform: translateY(8px);
+}
+
+/* the big play mark: only over a paused frame */
+.bigplay {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 2;
+  width: 84px;
+  height: 84px;
+  margin: -42px 0 0 -42px;
+  border-radius: var(--radius-full);
+  background: color-mix(in oklch, var(--accent) 92%, transparent);
+  color: var(--accent-ink);
+  display: grid;
+  place-items: center;
+  box-shadow:
+    0 0 48px color-mix(in oklch, var(--accent) 40%, transparent),
+    var(--shadow-3);
+  opacity: 0;
+  transform: scale(0.85);
+  pointer-events: none;
+  transition:
+    opacity var(--dur-base) var(--ease-out),
+    transform var(--dur-base) var(--ease-out);
+}
+.bigplay svg {
+  width: 34px;
+  height: 34px;
+  margin-left: 4px;
+  fill: currentColor;
+}
+.auditorium.is-paused .bigplay {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+/* the pulse after a click on the picture, and the double-tap ripples */
+.pulse,
+.ripple {
+  position: absolute;
+  top: 50%;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-full);
+  pointer-events: none;
+  opacity: 0;
+}
+.pulse {
+  left: 50%;
+  width: 72px;
+  height: 72px;
+  margin: -36px 0 0 -36px;
+  background: color-mix(in oklch, var(--picture-bg) 55%, transparent);
+  color: var(--ink);
+}
+.pulse svg {
+  width: 30px;
+  height: 30px;
+  fill: currentColor;
+}
+.pulse.is-on {
+  animation: pulse-out 520ms var(--ease-out);
+}
+.auditorium.is-paused .pulse {
+  display: none;
+}
+@keyframes pulse-out {
+  from {
+    opacity: 1;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.35);
+  }
+}
+.ripple {
+  width: 112px;
+  height: 112px;
+  margin-top: -56px;
+  background: color-mix(in oklch, var(--ink) 14%, transparent);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+.ripple--l {
+  left: 16%;
+  margin-left: -56px;
+}
+.ripple--r {
+  right: 16%;
+  margin-right: -56px;
+}
+.ripple.is-on {
+  animation: ripple-out 600ms var(--ease-out);
+}
+@keyframes ripple-out {
+  0% {
+    opacity: 1;
+    transform: scale(0.8);
+  }
+  60% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.1);
+  }
+}
+
+/* notices: one sentence, never a red banner */
+.player__notices {
+  position: absolute;
+  z-index: 4;
+  top: calc(max(var(--space-3), env(safe-area-inset-top)) + 64px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(560px, calc(100% - 2 * var(--space-4)));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  pointer-events: none;
+}
+.notice {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--booth-glass);
+  backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-2);
+  font-size: var(--text-sm);
+  animation: row-in var(--dur-base) var(--ease-out) both;
+}
+.notice p {
+  flex: 1;
+  margin: var(--space-2) 0;
+}
+.notice--resume {
+  padding-right: var(--space-4);
+}
+
+/* ── the seek bar ── */
+.seek {
+  position: relative;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  touch-action: none;
+}
+.seek:focus-visible {
+  outline-offset: 0;
+}
+.seek__track {
+  position: relative;
+  width: 100%;
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: color-mix(in oklch, var(--ink) 22%, transparent);
+  transition: height var(--dur-fast) var(--ease-out);
+}
+.seek:hover .seek__track,
+.seek.is-drag .seek__track,
+.seek:focus-visible .seek__track {
+  height: 6px;
+}
+.seek__buf,
+.seek__hover,
+.seek__played {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: inherit;
+}
+.seek__buf {
+  background: color-mix(in oklch, var(--ink) 34%, transparent);
+}
+.seek__hover {
+  width: 0;
+  background: color-mix(in oklch, var(--ink) 20%, transparent);
+}
+.seek__played {
+  background: var(--accent);
+  box-shadow: 0 0 10px color-mix(in oklch, var(--accent) 45%, transparent);
+}
+.seek.is-buffering .seek__played {
+  animation: buffer 1s var(--ease-in-out) infinite;
+}
+@keyframes buffer {
+  50% {
+    opacity: 0.55;
+  }
+}
+.seek__marks {
+  position: absolute;
+  inset: 0;
+}
+.seek__detent {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: color-mix(in oklch, var(--picture-bg) 55%, transparent);
+}
+.seek__thumb {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  box-shadow:
+    0 0 0 3px color-mix(in oklch, var(--accent) 22%, transparent),
+    0 0 14px color-mix(in oklch, var(--accent) 50%, transparent);
+  transform: translate(-50%, -50%) scale(0);
+  transition: transform var(--dur-fast) var(--ease-out);
+  pointer-events: none;
+}
+.seek:hover .seek__thumb,
+.seek.is-drag .seek__thumb,
+.seek:focus-visible .seek__thumb,
+.auditorium.is-paused .seek__thumb {
+  transform: translate(-50%, -50%) scale(1);
+}
+.seek.is-detent .seek__thumb {
+  background: var(--ink);
+}
+.seek__tip {
+  position: absolute;
+  bottom: 26px;
+  transform: translateX(-50%);
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: var(--shadow-2);
+}
+.seek__fine {
+  position: absolute;
+  right: 0;
+  bottom: 26px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--accent);
+}
+
+/* ── the transport ── */
+.transport {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.transport .spacer {
+  flex: 1;
+}
+.mark {
+  position: relative;
+  min-width: var(--target-min);
+  min-height: var(--target-min);
+  padding: 0 var(--space-2);
+  display: inline-grid;
+  place-items: center;
+  border-radius: var(--radius-full);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out);
+}
+.mark:hover {
+  background: color-mix(in oklch, var(--ink) 10%, transparent);
+}
+.mark.is-on,
+.mark[aria-pressed="true"] {
+  color: var(--accent);
+}
+.mark.is-on::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 7px;
+  width: 14px;
+  height: 2px;
+  margin-left: -7px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  box-shadow: var(--bulb-halo);
+}
+.mark svg {
+  width: 22px;
+  height: 22px;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.mark--play svg {
+  fill: currentColor;
+  stroke: none;
+  width: 24px;
+  height: 24px;
+}
+.mark--skip svg {
+  width: 26px;
+  height: 26px;
+}
+.mark__n {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding-top: 2px;
+  font-size: 9px;
+  font-weight: 600;
+  pointer-events: none;
+}
+.mark--sm {
+  min-width: 36px;
+  min-height: 36px;
+}
+.mark--sm svg {
+  width: 18px;
+  height: 18px;
+}
+.mark--speed {
+  min-width: 52px;
+  font-size: var(--text-sm);
+}
+.volgroup {
+  display: flex;
+  align-items: center;
+}
+.volume {
+  width: 0;
+  opacity: 0;
+  margin: 0;
+  height: var(--target-min);
+  background: transparent;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  transition:
+    width var(--dur-base) var(--ease-out),
+    opacity var(--dur-base) var(--ease-out);
+}
+.volgroup:hover .volume,
+.volume:focus-visible,
+.volume:active {
+  width: 88px;
+  opacity: 1;
+  margin-right: var(--space-2);
+}
+.volume::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: linear-gradient(
+    90deg,
+    var(--ink) var(--v, 100%),
+    color-mix(in oklch, var(--ink) 25%, transparent) var(--v, 100%)
+  );
+}
+.volume::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -4px;
+  border-radius: var(--radius-full);
+  background: var(--ink);
+}
+.volume::-moz-range-track {
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: color-mix(in oklch, var(--ink) 25%, transparent);
+}
+.volume::-moz-range-progress {
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: var(--ink);
+}
+.volume::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--ink);
+}
+.player__time {
+  margin-left: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--ink);
+  white-space: nowrap;
+}
+.syncchip {
+  min-height: 32px;
+  padding: 0 var(--space-3);
+  margin-right: var(--space-1);
+  border-radius: var(--radius-full);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+  color: var(--ink-muted);
+  font-size: var(--text-xs);
+}
+.syncchip:hover {
+  color: var(--ink);
+}
+
+/* the speed menu */
+.menuwrap {
+  position: relative;
+}
+.menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + var(--space-2));
+  z-index: 5;
+  min-width: 148px;
+  padding: var(--space-1);
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-md);
+  background: var(--booth-glass);
+  backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-3);
+}
+.menu__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 36px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  text-align: left;
+}
+.menu__item:hover,
+.menu__item:focus-visible {
+  background: color-mix(in oklch, var(--ink) 10%, transparent);
+}
+.menu__item[aria-checked="true"] {
+  color: var(--accent);
+}
+.menu__item[aria-checked="true"]::after {
+  content: "✓";
+}
+
+/* ── the booth: a scrim to click away, and its own row of controls ── */
+.boothwrap {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+}
+.sheet__scrim {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in oklch, var(--picture-bg) 35%, transparent);
+}
+.sheet__head h2 {
+  margin: 0;
+}
+.sheet__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+.tracks {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.trackrow__t {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.btn--icon {
+  gap: var(--space-2);
+  align-self: flex-start;
+}
+.btn--icon svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.sheet .mark svg {
+  width: 20px;
+  height: 20px;
+}
+.lite__card .sentence {
+  margin: 0;
+  color: var(--ink-muted);
+}
+.lite__card .ticketstrip {
+  width: 100%;
+}
+.fallback--own {
+  color: var(--accent);
+}
+.sentence--muted {
+  color: var(--ink-muted);
+  margin-top: 0;
+}
+.office a,
+.lite__card a {
+  color: var(--accent);
+}
+
+/* ── the cue sheet ── */
+.cuesheet {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: var(--space-5);
+  background: color-mix(in oklch, var(--bg) 82%, transparent);
+  backdrop-filter: blur(6px);
+}
+.cuesheet__card {
+  width: min(720px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  padding: var(--space-5) var(--space-6);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-3);
+}
+.cuesheet__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.cuesheet__head h2 {
+  margin: 0;
+}
+.cuegrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 var(--space-6);
+  margin: var(--space-3) 0;
+}
+.cuegrid div {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--ink-muted);
+  border-bottom: 1px solid var(--border);
+  padding: 6px 0;
+}
+.cuegrid kbd {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink);
+}
+
+/* A phone held upright: the video box hugs the picture, so cues sit on it, not at the
+   bottom of the screen under the controls. */
+@media (orientation: portrait) and (max-width: 720px) {
+  .pic video {
+    position: absolute;
+    top: 50%;
+    left: 0;
+    height: auto;
+    max-height: 100%;
+    transform: translateY(-50%);
+  }
+}
+
+/* ── safe areas on the landing ── */
+.lite {
+  padding-left: max(var(--margin-phone), env(safe-area-inset-left));
+  padding-right: max(var(--margin-phone), env(safe-area-inset-right));
+  padding-bottom: max(var(--space-7), env(safe-area-inset-bottom));
+}
+
+/* ── phone ── */
+@media (max-width: 720px) {
+  .cuegrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .cue-mark,
+  .volume {
+    display: none;
+  }
+  .doors {
+    min-height: 240px;
+    margin-top: var(--space-3);
+  }
+}
+@media (max-width: 560px) {
+  /* phones: hardware volume and double-tap skips; the booth holds the sync rule */
+  .syncchip,
+  .mark--skip,
+  .volgroup {
+    display: none;
+  }
+  .player__time {
+    font-size: var(--text-xs);
+  }
+  .player__title {
+    font-size: var(--text-lg);
+  }
+}
+/* a phone held sideways: the thinnest chrome, all of it over the picture */
+@media (max-height: 500px) and (orientation: landscape) {
+  .scrim--top {
+    height: 96px;
+  }
+  .scrim--bottom {
+    height: 130px;
+  }
+  .player__folio {
+    display: none;
+  }
+}
+@media (pointer: coarse) {
+  .seek {
+    height: 36px;
+  }
+  .seek__thumb {
+    transform: translate(-50%, -50%) scale(1);
+  }
+}

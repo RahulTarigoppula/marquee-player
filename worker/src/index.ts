@@ -34,6 +34,8 @@ function cors(origin: string): Record<string, string> {
     'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type,Authorization',
     'Access-Control-Max-Age': '86400',
+    // Lite reads the wait from a 429 and the gateway's budget; without this the browser hides them.
+    'Access-Control-Expose-Headers': 'Retry-After, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset',
     Vary: 'Origin',
   }
 }
@@ -95,18 +97,26 @@ function forbiddenOrigin(): Response {
   )
 }
 
-// Cache-API sliding counter: 60 requests per minute per client IP. No KV, no logging.
+// A best-effort soft cap: 60 requests per minute per client IP, counted in the Cache API. No KV,
+// no logging. HONEST LIMITS: the Cache API is per data centre, and on a *.workers.dev hostname
+// cache operations are no-ops — there this never limits anything (OpenSubtitles' own per-key and
+// per-user limits still apply). It only bites on a custom domain. It always fails OPEN: a cache
+// error never blocks a request.
 async function overRateLimit(req: Request): Promise<boolean> {
-  const ip = req.headers.get('cf-connecting-ip') ?? 'anon'
-  const minute = Math.floor(Date.now() / 60_000)
-  const key = new Request(`https://rl.marquee.invalid/${encodeURIComponent(ip)}/${minute}`)
-  const cache = caches.default
-  const hit = await cache.match(key)
-  const n = hit ? Number(await hit.text()) : 0
-  if (n >= IP_LIMIT_PER_MIN) return true
-  await cache.put(key, new Response(String(n + 1), {
-    headers: { 'Cache-Control': 'max-age=90' },
-  }))
+  try {
+    const ip = req.headers.get('cf-connecting-ip') ?? 'anon'
+    const minute = Math.floor(Date.now() / 60_000)
+    const key = new Request(`https://rl.marquee.invalid/${encodeURIComponent(ip)}/${minute}`)
+    const cache = caches.default
+    const hit = await cache.match(key)
+    const n = hit ? Number(await hit.text()) : 0
+    if (n >= IP_LIMIT_PER_MIN) return true
+    await cache.put(key, new Response(String(n + 1), {
+      headers: { 'Cache-Control': 'max-age=90' },
+    }))
+  } catch {
+    // fail open
+  }
   return false
 }
 

@@ -1,14 +1,15 @@
 import { expect, test } from '@playwright/test'
 
 test.describe('drop frame', () => {
-  test('is reachable by keyboard and Enter opens a real file picker', async ({ page }) => {
+  test('is reachable by keyboard and Enter opens a real multi-file picker', async ({ page }) => {
     await page.goto('/')
     const doors = page.getByRole('button', { name: /Drop a film here/ })
     await doors.focus()
     await expect(doors).toBeFocused()
     const chooser = page.waitForEvent('filechooser')
     await page.keyboard.press('Enter')
-    expect((await chooser).isMultiple()).toBe(false)
+    // multiple: a film and its subtitle file can be chosen together
+    expect((await chooser).isMultiple()).toBe(true)
   })
 
   test('Space opens the picker too, and a real file input exists', async ({ page }) => {

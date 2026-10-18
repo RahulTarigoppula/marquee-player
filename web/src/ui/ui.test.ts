@@ -14,38 +14,37 @@ const REASON = {
   sentence: 'This browser has no AC-3 decoder.',
   missing: 'AC-3',
 }
-const card = (webCodecsAvailable: boolean) =>
+const card = () =>
   noPrint({
     reason: REASON,
-    webCodecsAvailable,
     releasesUrl: 'https://github.com/o/marquee/releases/latest',
-    onWebCodecs: () => undefined,
     onOpenAnother: () => undefined,
   })
 
 describe('No Print card', () => {
-  test('leaves the WebCodecs button out of the DOM without VideoDecoder', () => {
-    const el = card(false)
-    expect(queryByRole(el, 'button', { name: 'Try the WebCodecs path' })).toBeNull()
-    expect(el.querySelectorAll('.noprint__actions > *')).toHaveLength(2)
+  test('never offers the unwired WebCodecs path', () => {
+    expect(queryByRole(card(), 'button', { name: 'Try the WebCodecs path' })).toBeNull()
   })
 
-  test('offers the WebCodecs path and the native builds when VideoDecoder exists', () => {
-    const el = card(true)
-    getByRole(el, 'button', { name: 'Try the WebCodecs path' })
+  test('offers exactly the native builds and another film, and names the decoder', () => {
+    const el = card()
     getByRole(el, 'link', { name: 'Open in Marquee for Windows / Android' })
+    getByRole(el, 'button', { name: 'Open another film' })
     expect(el.querySelectorAll('.noprint__actions > *')).toHaveLength(2)
     expect(el.textContent).toContain('This browser has no AC-3 decoder.')
   })
 })
 
 describe('landing', () => {
-  const landing = (onFile = vi.fn()) =>
+  const landing = (searchEnabled = true, onFiles = vi.fn()) =>
     liteLanding({
       now: new Date('2026-09-06T21:14:00+05:30'),
-      releasesUrl: '#',
-      onFile,
+      releasesUrl: 'https://github.com/o/marquee/releases/latest',
+      searchEnabled,
+      language: 'en',
+      onFiles,
       onOffice: () => undefined,
+      onLanguage: () => undefined,
       strip: document.createElement('div'),
     })
 
@@ -58,6 +57,24 @@ describe('landing', () => {
     doors.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }))
     expect(click).toHaveBeenCalledTimes(2)
     expect(view.input.type).toBe('file')
+    expect(view.input.multiple).toBe(true)
+    expect(view.input.accept).toContain('.vtt')
+  })
+
+  test('without a server, offers no ticket office and points to the apps for search', () => {
+    const view = landing(false)
+    expect(queryByRole(view.el, 'button', { name: /Ticket office/ })).toBeNull()
+    expect(view.el.textContent).toContain('Online subtitle search needs the')
+    expect(getByRole(view.el, 'link', { name: 'Windows / Android app' }).getAttribute('href')).toBe(
+      'https://github.com/o/marquee/releases/latest',
+    )
+    expect(view.el.textContent).toContain('nothing is uploaded')
+  })
+
+  test('with a server, says what a search sends', () => {
+    const view = landing(true)
+    getByRole(view.el, 'button', { name: /Ticket office/ })
+    expect(view.el.textContent).toContain('the title and year from its file name')
   })
 
   test('picks the sky band from the local clock', () => {
@@ -71,7 +88,12 @@ describe('landing', () => {
 describe('leader', () => {
   test('announces each phase once, never per sweep frame', () => {
     const view = leader(
-      { onChoose: () => undefined, onPick: () => undefined, onManual: () => undefined },
+      {
+        onChoose: () => undefined,
+        onPick: () => undefined,
+        onManual: () => undefined,
+        onSidecar: () => undefined,
+      },
       document.createElement('div'),
     )
     const live = view.el.querySelector('[aria-live="polite"]') as HTMLElement

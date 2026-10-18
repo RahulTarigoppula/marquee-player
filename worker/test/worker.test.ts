@@ -156,6 +156,9 @@ function expectCors(res: Response, origin = ORIGIN): void {
   expect(res.headers.get('Access-Control-Allow-Headers')).toBe('Content-Type,Authorization')
   expect(res.headers.get('Access-Control-Max-Age')).toBe('86400')
   expect(res.headers.get('Vary')).toBe('Origin')
+  expect(res.headers.get('Access-Control-Expose-Headers')).toBe(
+    'Retry-After, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset',
+  )
 }
 
 function expectNoCors(res: Response): void {
@@ -889,6 +892,30 @@ describe('P20 per-IP rate limit', () => {
     // The next minute starts a fresh bucket.
     vi.setSystemTime(new Date('2026-09-29T12:01:05Z'))
     expect((await call('/api/nope', { ip: one })).res.status).toBe(404)
+  })
+
+  it('a broken cache fails open: the request is served, never refused', async () => {
+    const real = (globalThis as { caches?: unknown }).caches
+    Object.defineProperty(globalThis, 'caches', {
+      value: {
+        default: {
+          match: () => Promise.reject(new Error('no cache here')),
+          put: () => Promise.reject(new Error('no')),
+        },
+      },
+      configurable: true,
+      writable: true,
+    })
+    try {
+      const c = await call('/api/nope')
+      expectWorkerError(c, 404, 'not-found')
+    } finally {
+      Object.defineProperty(globalThis, 'caches', {
+        value: real,
+        configurable: true,
+        writable: true,
+      })
+    }
   })
 
   it('preflights are not counted against the cap', async () => {

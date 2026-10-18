@@ -36,6 +36,10 @@ export interface Machine {
   query: string | null // the last manual query, so 'retry' can repeat it
   tried: SearchRung[]
   retried410: boolean
+  /** "Find another print": list the results for a pick instead of auto-downloading one. */
+  listOnly: boolean
+  /** The file_id already attached, never offered again by "Find another print". */
+  exclude: string | null
   subdlEnabled: boolean
   language: string
 }
@@ -65,7 +69,7 @@ export type ThreadingEvent =
   | { type: 'signed-in'; at: number; quota: Quota }
   | { type: 'flashed'; at: number }
   | { type: 'cancel'; at: number }
-  | { type: 'research'; at: number }
+  | { type: 'research'; at: number; exclude?: string | null }
 
 export interface Step {
   machine: Machine
@@ -118,6 +122,8 @@ export function initial(o: MachineOptions, quota: Quota): Machine {
     query: null,
     tried: [],
     retried410: false,
+    listOnly: false,
+    exclude: null,
     subdlEnabled: o.subdlEnabled,
     language: o.language,
   }
@@ -278,6 +284,23 @@ export function reduce(m: Machine, e: ThreadingEvent): Step {
 
     case 'searched': {
       if (s.phase !== 'searching' || s.failure !== null) return same
+      if (m.listOnly) {
+        // "Find another print": every other print, for the viewer to pick. No ticket is spent
+        // until they do.
+        const list = e.candidates.filter((c) => c.candidate.id !== m.exclude)
+        const listed: Machine = { ...m, state: { ...s, candidates: list } }
+        if (list.length === 0) return stall(listed, 'no-results', e.at)
+        const machine: Machine = {
+          ...listed,
+          phaseStartedAt: e.at,
+          stalledIn: null,
+          state: { ...listed.state, phase: 'done', sweep: 1, failure: null, next: [] },
+        }
+        return {
+          machine,
+          effects: [{ kind: 'announce', text: `${list.length} other prints found — pick one` }],
+        }
+      }
       const withList: Machine = { ...m, state: { ...s, candidates: e.candidates } }
       const pick = e.candidates.find((c) => c.autoPick)
       if (!pick) return stall(withList, 'no-results', e.at)
@@ -343,7 +366,8 @@ export function reduce(m: Machine, e: ThreadingEvent): Step {
       return search(m, 'manual', e.at, e.query)
 
     case 'pick':
-      if (s.phase !== 'searching' && s.phase !== 'downloading') return same
+      // While threading, or from the booth once the film plays (phase done).
+      if (s.phase !== 'searching' && s.phase !== 'downloading' && s.phase !== 'done') return same
       return download(m, e.candidate, e.at, [{ kind: 'abort' }])
 
     case 'signed-in': {
@@ -359,10 +383,17 @@ export function reduce(m: Machine, e: ThreadingEvent): Step {
       return finish(m, e.at)
 
     case 'research':
-      // "Find another print" from the booth: the filename rung again, without leaving the film.
-      if (s.phase !== 'done') return same
+      // "Find another print" from the booth: the filename rung again, without leaving the film,
+      // listing the results for a pick. It works again after that search (or a pick) stalled.
+      if (s.phase !== 'done' && s.failure === null) return same
       return search(
-        { ...m, retried410: false, tried: m.tried.filter((r) => r !== 'filename') },
+        {
+          ...m,
+          retried410: false,
+          listOnly: true,
+          exclude: e.exclude ?? null,
+          tried: m.tried.filter((r) => r !== 'filename'),
+        },
         'filename',
         e.at,
       )

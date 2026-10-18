@@ -47,6 +47,11 @@ parses the 1x03 and Season Episode forms
 gives a multi-word title with quality tokens but no year medium confidence
 falls back to the parent directory when the basename is low confidence
 
+## languages.test.ts (3)
+maps browser language tags to OpenSubtitles codes
+defaults to the first searchable browser language, else English
+labels a code in plain words
+
 ## osHash.test.ts (10)
 matches the published breakdance.avi vector
 pads the hash to 16 hex digits and accepts exactly 128 KiB
@@ -75,6 +80,14 @@ never lights the match bulb for a Subdl candidate
 compares tokens case-insensitively and never matches null
 skips release comparisons when either name is unknown
 
+## sidecar.test.ts (6)
+names the kind of a subtitle file and rejects a film
+decodes strict UTF-8 and drops a UTF-8 BOM
+honours UTF-16 byte order marks
+falls back to windows-1252 when the bytes are not UTF-8
+reads WebVTT with hour-less timestamps, settings and notes
+parses SRT and leaves ASS to libass
+
 ## srt2vtt.test.ts (10)
 converts the BOM + CRLF fixture byte for byte
 sorts cues by start and renumbers them
@@ -100,7 +113,7 @@ remembers the offset for the same moviehash
 starts a different moviehash at zero
 announces the value as plus or minus seconds
 
-## threading.test.ts (31)
+## threading.test.ts (34)
 starts hashing on open with the numeral 3
 moves to searching by hash when the hash is ready
 skips silently to a filename search when the file is too small
@@ -132,6 +145,9 @@ runs the filename and Subdl rungs when chosen
 ignores fallback choices and results that do not belong to the current phase
 labels the numerals and phases in plain words
 re-runs the filename rung when another print is requested after playback began
+lists other prints for a pick instead of downloading one when another is requested
+downloads a print picked from the booth while the film plays
+finds another print again after that search stalled
 
 ## tickets.test.ts (13)
 prints remaining of total and the UTC reset from the download response

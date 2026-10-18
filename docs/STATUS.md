@@ -63,3 +63,32 @@ There is no Android SDK here either, so the APK is CI-built only (as the plan al
 4. `tools/libmpv-windows.sha256` — needs the DLL from the first CI build.
 5. Day-1 API spike answers (§9.1 0.2) into RESEARCH.md; the nightly contract run records them.
 6. Align Dart and TS engine test names so `node scripts/check-parity.mjs --strict` passes.
+
+## 5. Pass 2 (2026-10-18)
+
+The first pass was green locally but **red on GitHub**: format gate tripped on build_runner output,
+the token check ran `dart format` without a package config, Biome failed on UTF-8 mojibake
+(PowerShell 5.1 rewrote files as cp1252), Playwright ran without a mocked API base, the Windows
+release lacked the MSVC runtime, the APK check mis-read apksigner, and Pages was never enabled.
+All fixed; see the commits of 2026-10-18.
+
+| Area | What changed |
+|---|---|
+| CI/CD | tracked-file format gate; `--reporter github`; Windows release bundles the MSVC runtime and ships an **Inno Setup per-user installer** (Start menu, "Open with" for 15 video types) beside a portable zip; robust APK signature check with a debug-key note in the release notes; Pages skips with one warning when off; grouped monthly Dependabot |
+| Screenshots | `test/screens` renders every room on Linux CI (`screenshots.yml`) to the `screenshots` branch — the review loop for a build machine that cannot run Flutter |
+| Playback | ~25 runtime defects from a static audit (Android picker copied whole films to cache, film played under the leader, fullscreen trap, negative seeks, laggy bias light, focus loss, re-entrant open, resume fragility…) and an overlay player with volume/audio/subtitle/speed/picture/chapter/sleep menus, next-in-folder with Up next, thumbnails, single-instance Windows, PiP button |
+| Lobby / Settings | thumbnail-led Lobby (hero, Continue watching, grid, Undo remove, Open URL); Settings in plain-language sections; component kit; repaint fixes |
+| Lite | see web/README.md |
+
+New deviations:
+
+| # | Plan said | Built | Why |
+|---|---|---|---|
+| D13 | libass renders all subtitles | On **Android**, text subtitles whose language/script libass's single bundled font cannot draw are rendered by Flutter (`SystemFontSubtitles`, system fonts) with mpv's own subtitles hidden; bitmap subs stay with mpv | libass on Android sees one font file; loading `/system/fonts` would load every font into memory. ASS positioning is lost only for those tracks |
+| D14 | bias light on by default | **off** by default, one unlocked JPEG every 3 s when on | the 500 ms full-resolution screenshot held the player lock and made seeks lag |
+| D15 | resume "finished" = position 0 | finished stored as position = duration | a film closed at 0 s looked fully watched |
+| D16 | zip-only Windows release | installer + portable zip | friends need Start menu and "Open with" |
+
+Still open: C++ single-instance and Kotlin picker/PiP changes are verified only by CI compile
+and real devices; Android has no folder-sibling "next episode" (needs a SAF tree grant);
+Media Session / SMTC integration; seek-bar thumbnails.

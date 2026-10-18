@@ -360,54 +360,95 @@ a {
 
 /* ── the drop frame (the doors) ── */
 .doors {
-  width: min(620px, 100%);
-  min-height: 168px;
-  margin-top: var(--space-7);
-  padding: var(--space-6) var(--space-5);
+  position: relative;
+  width: min(680px, 100%);
+  min-height: 280px;
+  margin-top: var(--space-6);
+  padding: var(--space-8) var(--space-6);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: var(--space-2);
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius-lg);
+  gap: var(--space-4);
+  border: 1.5px dashed var(--border-strong);
+  border-radius: var(--radius-xl);
+  background:
+    radial-gradient(
+      70% 80% at 50% 0%,
+      color-mix(in oklch, var(--accent) 7%, transparent),
+      transparent 70%
+    ),
+    color-mix(in oklch, var(--bg-elevated) 55%, transparent);
+  box-shadow: var(--shadow-2);
   text-align: center;
   color: var(--ink-muted);
   cursor: pointer;
   transition:
     border-color var(--dur-base) var(--ease-out),
-    background var(--dur-base) var(--ease-out);
+    background-color var(--dur-base) var(--ease-out),
+    transform var(--dur-base) var(--ease-out);
 }
 .doors:hover,
 .doors.is-over {
   border-color: var(--accent);
-  background: color-mix(in oklch, var(--accent) 5%, transparent);
+}
+.doors.is-over {
+  border-style: solid;
+  transform: scale(1.012);
+  background-color: color-mix(in oklch, var(--accent) 8%, transparent);
+}
+.doors__icon {
+  width: 56px;
+  height: 56px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-full);
+  background: color-mix(in oklch, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+.doors__icon svg {
+  width: 28px;
+  height: 28px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 .doors__head {
   font-family: var(--font-display);
-  font-weight: 700;
-  font-size: var(--text-2xl);
+  font-weight: 800;
+  font-size: clamp(var(--text-2xl), 5vw, var(--text-4xl));
   letter-spacing: var(--tracking-display);
   text-transform: uppercase;
   color: var(--ink);
   line-height: var(--leading-tight);
 }
 .disc {
-  width: 64px;
-  height: 64px;
+  min-height: 52px;
+  padding: 0 var(--space-7);
   border-radius: var(--radius-full);
   background: var(--accent);
   color: var(--accent-ink);
-  display: grid;
+  display: inline-grid;
   place-items: center;
   font-weight: 600;
-  font-size: var(--text-sm);
+  font-size: var(--text-base);
   box-shadow:
-    0 0 24px color-mix(in oklch, var(--accent) 30%, transparent),
+    0 0 32px color-mix(in oklch, var(--accent) 34%, transparent),
     var(--shadow-2);
+  transition: filter var(--dur-fast) var(--ease-out);
+}
+.doors:hover .disc {
+  filter: brightness(1.07);
+}
+.doors__hint {
+  max-width: 44ch;
+  font-size: var(--text-sm);
+  color: var(--ink-muted);
 }
 .capline {
-  width: min(620px, 100%);
+  width: min(680px, 100%);
   margin: 0;
   font-size: var(--text-sm);
   color: var(--ink-muted);
@@ -416,22 +457,58 @@ a {
   color: var(--ink);
   font-size: var(--text-xs);
 }
+.lite__card {
+  width: min(680px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-5);
+  background: color-mix(in oklch, var(--bg-elevated) 70%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.lite__card h2 {
+  margin: 0;
+}
+.langrow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--ink-muted);
+}
+.select {
+  min-height: 40px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--text-sm);
+  accent-color: var(--accent);
+}
 .lite__links {
-  width: min(620px, 100%);
+  width: min(680px, 100%);
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2) var(--space-6);
   align-items: center;
 }
+.lite__card .lite__links {
+  width: auto;
+}
 .lite__sentence {
-  width: min(620px, 100%);
+  width: min(680px, 100%);
   margin: 0;
-  color: var(--ink-muted);
+  color: var(--accent);
   font-size: var(--text-sm);
+  text-align: center;
 }
 .attrib {
   margin: auto 0 0;
-  width: min(620px, 100%);
+  padding-top: var(--space-6);
+  width: min(680px, 100%);
   font-size: var(--text-xs);
   color: var(--ink-faint);
 }
@@ -789,273 +866,7 @@ a {
   color: var(--accent-2-lit);
 }
 
-/* ── the auditorium ── */
-.auditorium {
-  --grain-opacity: 0;
-}
-.auditorium > .folio {
-  padding: var(--space-3) var(--space-6) 0;
-  z-index: 3;
-}
-.picarea {
-  position: relative;
-  z-index: 1;
-  flex: 1;
-  min-height: 0;
-}
-.pic {
-  position: absolute;
-  inset: var(--space-3) var(--space-6);
-  background: var(--picture-bg);
-}
-.pic video {
-  width: 100%;
-  height: 100%;
-  display: block;
-  background: var(--picture-bg);
-  object-fit: contain;
-}
-.pic canvas {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-}
-video::cue {
-  font-family: "Noto Sans", sans-serif;
-  font-size: var(--cue-size, 1em);
-  color: white;
-  background: transparent;
-  text-shadow:
-    0 0 2px var(--picture-bg),
-    1.5px 1.5px 0 var(--picture-bg),
-    -1.5px 1.5px 0 var(--picture-bg),
-    1.5px -1.5px 0 var(--picture-bg),
-    -1.5px -1.5px 0 var(--picture-bg),
-    0 3px 6px var(--shade);
-}
-.aisle {
-  display: flex;
-  gap: 18px;
-  justify-content: center;
-  padding: 2px 0 var(--space-2);
-  z-index: 2;
-}
-.aisle .bulb {
-  opacity: 0.18;
-  box-shadow: none;
-}
-.controls {
-  position: relative;
-  z-index: 4;
-  padding: 0 var(--space-6) var(--space-4);
-  transition:
-    opacity var(--dur-slow) var(--ease-in-out),
-    transform var(--dur-base) var(--ease-out);
-}
-.controls.is-hidden {
-  opacity: 0;
-  transform: translateY(8px);
-  pointer-events: none;
-}
-.auditorium.is-idle {
-  cursor: none;
-}
-
-/* the film gate */
-.gate {
-  position: relative;
-  height: var(--gate-height);
-  border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  overflow: hidden;
-  touch-action: none;
-  cursor: ew-resize;
-}
-.gate__perf {
-  position: absolute;
-  left: 0;
-  right: 0;
-  height: 4px;
-  background: repeating-linear-gradient(
-    90deg,
-    transparent 0 7px,
-    var(--surface-2) 7px 10px,
-    transparent 10px 17px
-  );
-}
-.gate__perf--t {
-  top: 5px;
-}
-.gate__perf--b {
-  bottom: 5px;
-}
-.gate__strip,
-.gate__buf,
-.gate__played {
-  position: absolute;
-  left: 0;
-  top: 14px;
-  bottom: 14px;
-}
-.gate__strip {
-  right: 0;
-  background: var(--surface);
-}
-.gate__buf {
-  background: var(--surface-2);
-}
-.gate__played {
-  background: color-mix(in oklch, var(--accent) 20%, var(--surface-2));
-}
-.gate__detent {
-  position: absolute;
-  top: 14px;
-  bottom: 14px;
-  width: 1px;
-  background: var(--border-strong);
-}
-.gate__frame {
-  position: absolute;
-  top: 7px;
-  bottom: 7px;
-  aspect-ratio: 16 / 9;
-  transform: translateX(-50%);
-  border: 1px solid var(--accent);
-  border-radius: 2px;
-  background: color-mix(in oklch, var(--accent) 12%, transparent);
-  box-shadow: 0 0 12px color-mix(in oklch, var(--accent) 26%, transparent);
-  display: grid;
-  place-items: center;
-}
-.gate__tc {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  opacity: 0;
-  transition: opacity var(--dur-fast);
-}
-.gate.is-drag .gate__tc {
-  opacity: 0.9;
-}
-.gate__fine {
-  position: absolute;
-  right: var(--space-2);
-  top: 0;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--accent);
-}
-.gate.is-detent .gate__frame {
-  border-color: var(--ink);
-  background: color-mix(in oklch, var(--accent) 26%, transparent);
-}
-.gate.is-buffering .gate__frame {
-  animation: buffer 500ms steps(1, end) infinite;
-}
-@keyframes buffer {
-  50% {
-    opacity: 0.35;
-  }
-}
-
-.transport {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding-top: var(--space-3);
-  flex-wrap: wrap;
-}
-.transport .spacer {
-  flex: 1;
-}
-.mark {
-  min-width: var(--target-min);
-  min-height: var(--target-min);
-  padding: 0 var(--space-2);
-  display: inline-grid;
-  place-items: center;
-  border-radius: var(--radius-sm);
-  color: var(--ink-muted);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  transition:
-    color var(--dur-fast) var(--ease-out),
-    text-shadow var(--dur-fast) var(--ease-out);
-}
-.mark:hover {
-  color: var(--ink);
-  text-shadow: 0 0 12px color-mix(in oklch, var(--accent) 45%, transparent);
-}
-.mark.is-on,
-.mark[aria-pressed="true"] {
-  color: var(--accent);
-}
-.mark svg {
-  width: 20px;
-  height: 20px;
-  stroke: currentColor;
-  stroke-width: 1.5;
-  fill: none;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-.mark--play {
-  width: var(--target-min);
-  height: var(--target-min);
-  border-radius: var(--radius-full);
-  background: var(--accent);
-  color: var(--accent-ink);
-}
-.mark--play:hover {
-  color: var(--accent-ink);
-}
-.mark--play svg {
-  fill: currentColor;
-  stroke: none;
-}
-.sync {
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  color: var(--ink);
-  padding: 0 var(--space-2);
-  min-height: var(--target-min);
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border-radius: var(--radius-sm);
-}
-
-/* the cue sheet */
-.cuesheet {
-  position: fixed;
-  inset: 0;
-  z-index: 30;
-  display: grid;
-  place-items: center;
-  padding: var(--space-7);
-  background: color-mix(in oklch, var(--bg) 88%, transparent);
-}
-.cuegrid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px var(--space-6);
-  margin: var(--space-4) 0;
-  width: min(640px, 100%);
-}
-.cuegrid div {
-  display: grid;
-  grid-template-columns: 110px minmax(0, 1fr);
-  gap: var(--space-3);
-  font-size: var(--text-sm);
-  color: var(--ink-muted);
-  border-bottom: 1px solid var(--border);
-  padding: 5px 0;
-}
-.cuegrid kbd {
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  color: var(--ink);
-}
+/* the auditorium, the seek bar and the transport live in player.css */
 
 /* ── the booth sheet (≤ 70 %) ── */
 .sheet {
@@ -1336,25 +1147,9 @@ video::cue {
   .leader {
     width: min(190px, 52vw);
   }
-  .threading,
-  .auditorium > .folio,
-  .controls {
+  .threading {
     padding-left: var(--margin-phone);
     padding-right: var(--margin-phone);
-  }
-  .pic {
-    inset: var(--space-2) var(--margin-phone);
-  }
-  .transport {
-    gap: 0;
-    justify-content: space-between;
-  }
-  .transport .spacer,
-  .cue-mark {
-    display: none;
-  }
-  .cuegrid {
-    grid-template-columns: minmax(0, 1fr);
   }
   .marquee__title {
     font-size: var(--text-3xl);
@@ -1364,7 +1159,7 @@ video::cue {
   .sheet {
     left: auto;
     right: var(--space-6);
-    bottom: var(--space-9);
+    bottom: calc(var(--space-11) + var(--space-6));
     width: 420px;
     border-radius: var(--radius-lg);
     border: 1px solid var(--border);

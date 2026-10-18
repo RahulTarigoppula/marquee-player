@@ -1,9 +1,11 @@
 // The Subtitle Booth (§4.4): a sheet that never exceeds 70 % of the height, over a paused
-// frame. Tracks, size S/M/L, the sync rule (FIXED caret, MOVING ruler), "Find another print"
-// and the ticket count.
+// frame. Tracks (and Off), "Add subtitle file…", size S/M/L, the sync rule (FIXED caret, MOVING
+// ruler) and — when online search exists — the language, "Find another print" and the tickets.
+// Modal: Tab stays inside, Esc or a click outside closes it.
+import { LANGUAGES } from '../engine/languages'
 import { ariaValueText, RANGE, readout, snap, step } from '../engine/syncRule'
 import type { ScoredCandidate } from '../engine/types'
-import { fill, h } from './dom'
+import { fill, h, ICONS, icon, trapFocus } from './dom'
 import { candidateRow } from './leader'
 
 export const PX_PER_SECOND = 200 // 10 px per 50 ms detent
@@ -16,7 +18,7 @@ export const CUE_SCALE: Readonly<Record<CueSize, number>> = { S: 0.86, M: 1, L: 
 export interface BoothTrack {
   id: string
   label: string
-  status: 'synced' | 'by-name' | null
+  status: 'synced' | 'by-name' | 'yours' | null
 }
 
 export interface BoothOptions {
@@ -26,6 +28,11 @@ export interface BoothOptions {
   onFindAnother(): void
   onPick(c: ScoredCandidate): void
   onClose(): void
+  onAddSubtitle?(): void
+  onLanguage?(code: string): void
+  onSignIn?(): void
+  /** Online search (a Worker) exists: show the language, "Find another print" and tickets. */
+  search?: boolean
 }
 
 export interface BoothView {
@@ -35,11 +42,14 @@ export interface BoothView {
   close(): void
   setTracks(tracks: BoothTrack[], selected: string | null): void
   setSync(v: number): void
+  setSize(size: CueSize): void
+  setLanguage(code: string): void
   setTickets(text: string): void
   setCandidates(
     list: ScoredCandidate[],
     picked: ScoredCandidate | null,
     sentence: string | null,
+    signIn?: boolean,
   ): void
 }
 
@@ -79,46 +89,102 @@ export function booth(o: BoothOptions): BoothView {
     h('div', { class: 'rule__caret', 'aria-hidden': 'true' }),
   )
   const syncOut = h('span', { class: 'mono' }, readout(0))
-  const tracks = h('div', { role: 'radiogroup', 'aria-label': 'Subtitle tracks' })
+  const tracks = h('div', { class: 'tracks', role: 'radiogroup', 'aria-label': 'Subtitle tracks' })
   const sizes = (['S', 'M', 'L'] as const).map((s) => {
     const b = h(
       'button',
-      { class: 'preset', type: 'button', 'aria-pressed': s === 'M' ? 'true' : 'false' },
+      {
+        class: 'preset',
+        type: 'button',
+        'aria-pressed': s === 'M' ? 'true' : 'false',
+        'aria-label': `Subtitle size ${s === 'S' ? 'small' : s === 'M' ? 'medium' : 'large'}`,
+        'data-size': s,
+      },
       s,
     )
     b.addEventListener('click', () => {
-      for (const x of sizes) x.setAttribute('aria-pressed', x === b ? 'true' : 'false')
+      setSize(s)
       o.onSize(s)
     })
     return b
   })
+  const setSize = (s: CueSize) => {
+    for (const x of sizes) x.setAttribute('aria-pressed', x.dataset.size === s ? 'true' : 'false')
+  }
+
+  const add = h(
+    'button',
+    { class: 'btn btn--ghost btn--icon', type: 'button' },
+    icon(...ICONS.filePlus),
+    'Add subtitle file…',
+  )
+  add.addEventListener('click', () => o.onAddSubtitle?.())
+
   const tickets = h('span', { class: 'ticketlabel' })
   const find = h('button', { class: 'btn', type: 'button' }, 'Find another print')
   find.addEventListener('click', o.onFindAnother)
+  const lang = h(
+    'select',
+    { class: 'select', 'aria-label': 'Subtitle language' },
+    ...LANGUAGES.map((l) => h('option', { value: l.code }, l.name)),
+  )
+  lang.addEventListener('change', () => o.onLanguage?.(lang.value))
   const results = h('div', { class: 'rows', role: 'radiogroup', 'aria-label': 'Other prints' })
   const sentence = h('p', { class: 'sentence', role: 'status' })
-  const close = h('button', { class: 'mark', type: 'button', 'aria-label': 'Close the booth' }, '×')
+  const signInBtn = h(
+    'button',
+    { class: 'linkbtn', type: 'button', hidden: true },
+    'Sign in at the ticket office (free)',
+  )
+  signInBtn.addEventListener('click', () => o.onSignIn?.())
+  const close = h(
+    'button',
+    { class: 'mark', type: 'button', 'aria-label': 'Close the booth', title: 'Close (Esc)' },
+    icon(...ICONS.close),
+  )
   close.addEventListener('click', o.onClose)
 
-  const el = h(
+  const searchSec = o.search
+    ? h(
+        'div',
+        { class: 'sheet__sec' },
+        h(
+          'div',
+          { class: 'sheet__head' },
+          h('span', { class: 'label' }, 'Online · OpenSubtitles'),
+          tickets,
+        ),
+        h('div', { class: 'sheet__row' }, lang, find),
+        sentence,
+        signInBtn,
+        results,
+      )
+    : null
+
+  const sheet = h(
     'section',
     {
       class: 'sheet',
       role: 'dialog',
-      'aria-modal': 'false',
-      'aria-label': 'Subtitle booth',
-      hidden: true,
+      'aria-modal': 'true',
+      'aria-labelledby': 'booth-title',
     },
     h('div', { class: 'grain', 'aria-hidden': 'true' }),
     h(
       'div',
       { class: 'sheet__body' },
-      h('div', { class: 'sheet__head' }, h('span', { class: 'label' }, 'Tracks'), close),
+      h(
+        'div',
+        { class: 'sheet__head' },
+        h('h2', { class: 'label', id: 'booth-title' }, 'Subtitle booth · tracks'),
+        close,
+      ),
       tracks,
+      add,
       h(
         'div',
         { class: 'sheet__sec' },
-        h('span', { class: 'label' }, 'Style · size'),
+        h('span', { class: 'label' }, 'Size'),
         h('div', { class: 'presets', role: 'group', 'aria-label': 'Subtitle size' }, ...sizes),
       ),
       h(
@@ -127,15 +193,12 @@ export function booth(o: BoothOptions): BoothView {
         h('div', { class: 'sheet__head' }, h('span', { class: 'label' }, 'Sync'), syncOut),
         rule,
       ),
-      h(
-        'div',
-        { class: 'sheet__sec' },
-        h('div', { class: 'sheet__head' }, find, tickets),
-        sentence,
-        results,
-      ),
+      searchSec,
     ),
   )
+  const scrim = h('div', { class: 'sheet__scrim', 'aria-hidden': 'true' })
+  scrim.addEventListener('click', o.onClose)
+  const el = h('div', { class: 'boothwrap', hidden: true }, scrim, sheet)
 
   const set = (v: number) => {
     value = snap(v)
@@ -147,7 +210,7 @@ export function booth(o: BoothOptions): BoothView {
 
   let drag: { x: number; v: number } | null = null
   rule.addEventListener('pointerdown', (e) => {
-    rule.setPointerCapture(e.pointerId)
+    rule.setPointerCapture?.(e.pointerId)
     drag = { x: e.clientX, v: value }
   })
   rule.addEventListener('pointermove', (e) => {
@@ -162,8 +225,8 @@ export function booth(o: BoothOptions): BoothView {
   rule.addEventListener('pointercancel', end)
   rule.addEventListener('keydown', (e) => {
     const k = e.key.toLowerCase()
-    const later = e.key === 'ArrowRight' || e.key === 'ArrowUp' || k === 'k'
-    const earlier = e.key === 'ArrowLeft' || e.key === 'ArrowDown' || k === 'j'
+    const later = e.key === 'ArrowRight' || e.key === 'ArrowUp' || k === 'h'
+    const earlier = e.key === 'ArrowLeft' || e.key === 'ArrowDown' || k === 'g'
     if (e.key === 'Home') o.onSync(0)
     else if (later || earlier) o.onSync(step(value, { isK: later, shift: e.shiftKey }))
     else return
@@ -178,6 +241,8 @@ export function booth(o: BoothOptions): BoothView {
     }
   })
 
+  let release: (() => void) | null = null
+
   return {
     el,
     get isOpen() {
@@ -185,10 +250,14 @@ export function booth(o: BoothOptions): BoothView {
     },
     open() {
       el.hidden = false
-      rule.focus()
+      release = trapFocus(sheet)
+      const first = tracks.querySelector<HTMLElement>('[aria-checked="true"]') ?? close
+      first.focus()
     },
     close() {
       el.hidden = true
+      release?.()
+      release = null
     },
     setTracks(list, selected) {
       const rows = [...list, { id: '', label: 'Off', status: null } as BoothTrack].map((t) => {
@@ -205,18 +274,26 @@ export function booth(o: BoothOptions): BoothView {
           h('span', { class: 'trackrow__t' }, t.label),
           t.status === 'synced' ? h('span', { class: 'oklabel' }, 'synced ✓') : null,
           t.status === 'by-name' ? h('span', { class: 'warnlabel' }, 'CHECK SYNC') : null,
+          t.status === 'yours' ? h('span', { class: 'label' }, 'your file') : null,
         )
         b.addEventListener('click', () => o.onTrack(t.id === '' ? null : t.id))
         return b
       })
+      const hadFocus = tracks.contains(document.activeElement)
       fill(tracks, ...rows)
+      if (hadFocus) tracks.querySelector<HTMLElement>('[aria-checked="true"]')?.focus()
     },
     setSync: set,
+    setSize,
+    setLanguage(code) {
+      lang.value = code
+    },
     setTickets(text) {
       tickets.textContent = text
     },
-    setCandidates(list, picked, text) {
+    setCandidates(list, picked, text, signIn = false) {
       sentence.textContent = text ?? ''
+      signInBtn.hidden = !signIn
       fill(results, ...list.map((c) => candidateRow(c, c === picked, () => o.onPick(c))))
     },
   }

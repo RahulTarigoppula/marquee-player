@@ -1,6 +1,7 @@
-// The film gate (§3.6.3): a 56 px strip of 35 mm film as the seek bar. role="slider" with a
-// timecode aria-valuetext; 5-minute detents (the web has no chapter list); release snaps to a
-// detent within 6 px; dragging UP off the strip switches to FINE (1/8 gain, no detents).
+// The seek bar (the film gate, §3.6.3, made slim): played in tungsten, buffered in warm grey, a
+// hover/drag time tip, 5-minute detents (the web has no chapter list) that a release snaps to
+// within 6 px, and dragging UP off the bar switches to FINE (1/8 gain, no detents).
+// role="slider" with a timecode aria-valuetext.
 import { fmt } from '../engine/timecode'
 import { fill, h } from './dom'
 
@@ -37,38 +38,42 @@ export function snapTarget(
   return best !== null && bestDist <= CAPTURE_PX ? best : releasePx * secondsPerPx
 }
 
+/** A player clock: 4:05, 1:02:13 (hours only when the film has them). */
+export function clock(seconds: number, withHours = seconds >= 3600): string {
+  const s = Math.max(0, Math.floor(Number.isFinite(seconds) ? seconds : 0))
+  const hh = Math.floor(s / 3600)
+  const mm = Math.floor((s % 3600) / 60)
+  const ss = String(s % 60).padStart(2, '0')
+  return withHours ? `${hh}:${String(mm).padStart(2, '0')}:${ss}` : `${mm}:${ss}`
+}
+
 export interface GateView {
   el: HTMLElement
   update(position: number, duration: number, bufferedEnd: number, buffering: boolean): void
 }
 
 export function filmGate(onSeek: (t: number) => void): GateView {
-  const buf = h('div', { class: 'gate__buf' })
-  const played = h('div', { class: 'gate__played' })
-  const marks = h('div', { 'aria-hidden': 'true' })
-  const tc = h('span', { class: 'gate__tc' })
-  const frame = h('div', { class: 'gate__frame' }, tc)
-  const fine = h('span', { class: 'gate__fine', hidden: true }, 'FINE')
+  const buf = h('div', { class: 'seek__buf' })
+  const played = h('div', { class: 'seek__played' })
+  const hover = h('div', { class: 'seek__hover' })
+  const marks = h('div', { class: 'seek__marks' })
+  const thumb = h('div', { class: 'seek__thumb' })
+  const tip = h('div', { class: 'seek__tip', hidden: true })
+  const fine = h('span', { class: 'seek__fine', hidden: true }, 'FINE')
   const el = h(
     'div',
     {
-      class: 'gate',
+      class: 'seek',
       role: 'slider',
       tabindex: 0,
-      'aria-label': 'Film gate — seek',
+      'aria-label': 'Seek',
       'aria-valuemin': 0,
       'aria-valuemax': 0,
       'aria-valuenow': 0,
       'aria-valuetext': '00:00:00',
     },
-    h('div', { class: 'gate__perf gate__perf--t', 'aria-hidden': 'true' }),
-    h('div', { class: 'gate__strip', 'aria-hidden': 'true' }),
-    buf,
-    played,
-    marks,
-    h('div', { class: 'gate__perf gate__perf--b', 'aria-hidden': 'true' }),
-    frame,
-    fine,
+    h('div', { class: 'seek__track', 'aria-hidden': 'true' }, buf, hover, played, marks),
+    h('div', { 'aria-hidden': 'true' }, thumb, tip, fine),
   )
 
   let pos = 0
@@ -77,11 +82,11 @@ export function filmGate(onSeek: (t: number) => void): GateView {
   let drag: { startX: number; startY: number; anchor: number; fine: boolean; t: number } | null =
     null
 
+  const pct = (t: number) => (dur > 0 ? Math.max(0, Math.min(100, (t / dur) * 100)) : 0)
   const draw = (t: number) => {
-    const pct = dur > 0 ? (t / dur) * 100 : 0
-    played.style.width = `${pct}%`
-    frame.style.left = `${pct}%`
-    tc.textContent = fmt(t)
+    const p = pct(t)
+    played.style.width = `${p}%`
+    thumb.style.left = `${p}%`
     el.setAttribute('aria-valuenow', String(Math.floor(t)))
     el.setAttribute('aria-valuetext', `${fmt(t)} of ${fmt(dur)}`)
   }
@@ -89,23 +94,37 @@ export function filmGate(onSeek: (t: number) => void): GateView {
     const r = el.getBoundingClientRect()
     return Math.max(0, Math.min(r.width, clientX - r.left))
   }
+  const showTip = (t: number) => {
+    if (dur <= 0) return
+    tip.hidden = false
+    tip.textContent = clock(t, dur >= 3600)
+    tip.style.left = `${pct(t)}%`
+  }
   const detentFlash = () => {
     el.classList.add('is-detent')
     requestAnimationFrame(() => el.classList.remove('is-detent'))
   }
 
   el.addEventListener('pointerdown', (e) => {
-    if (dur <= 0) return
-    el.setPointerCapture(e.pointerId)
+    if (dur <= 0 || e.button > 0) return
+    el.setPointerCapture?.(e.pointerId)
     const width = el.getBoundingClientRect().width || 1
     const t = (at(e.clientX) / width) * dur
     drag = { startX: e.clientX, startY: e.clientY, anchor: t, fine: false, t }
     el.classList.add('is-drag')
     draw(t)
+    showTip(t)
   })
   el.addEventListener('pointermove', (e) => {
-    if (!drag) return
     const width = el.getBoundingClientRect().width || 1
+    if (!drag) {
+      if (e.pointerType === 'mouse') {
+        const t = (at(e.clientX) / width) * dur
+        hover.style.width = `${pct(t)}%`
+        showTip(t)
+      }
+      return
+    }
     const spp = dur / width
     drag.fine = drag.startY - e.clientY > FINE_LIFT_PX
     fine.hidden = !drag.fine
@@ -116,6 +135,12 @@ export function filmGate(onSeek: (t: number) => void): GateView {
     drag.t = next
     if (!drag.fine && detentsFor(dur).some((d) => (prev - d) * (next - d) < 0)) detentFlash()
     draw(next)
+    showTip(next)
+  })
+  el.addEventListener('pointerleave', () => {
+    if (drag) return
+    tip.hidden = true
+    hover.style.width = '0'
   })
   const release = (e: PointerEvent) => {
     if (!drag) return
@@ -124,6 +149,7 @@ export function filmGate(onSeek: (t: number) => void): GateView {
     drag = null
     el.classList.remove('is-drag')
     fine.hidden = true
+    if (e.pointerType !== 'mouse') tip.hidden = true
     draw(t)
     onSeek(t)
   }
@@ -153,14 +179,15 @@ export function filmGate(onSeek: (t: number) => void): GateView {
       dur = Number.isFinite(duration) ? duration : 0
       el.setAttribute('aria-valuemax', String(Math.floor(dur)))
       el.classList.toggle('is-buffering', buffering)
-      buf.style.width = dur > 0 ? `${(bufferedEnd / dur) * 100}%` : '0'
+      buf.style.width = `${pct(bufferedEnd)}%`
       if (marksFor !== dur) {
         marksFor = dur
         fill(
           marks,
           ...detentsFor(dur)
             .slice(1)
-            .map((d) => h('i', { class: 'gate__detent', style: `left:${(d / dur) * 100}%` })),
+            .filter((d) => d < dur)
+            .map((d) => h('i', { class: 'seek__detent', style: `left:${(d / dur) * 100}%` })),
         )
       }
       if (!drag) draw(position)

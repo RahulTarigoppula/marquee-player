@@ -3,12 +3,13 @@
 //   offsets    key hash              → StoredOffset
 //   session    key 'session'         → StoredSession (the JWT SEALED, never plaintext)
 //   keys       key 'jwt'             → a NON-EXTRACTABLE AES-GCM CryptoKey
+//   resume     key hash (or name|size) → the last position, for "Resume from 1:02:13"
 import type { CachedSubtitle, LiteSession, MovieHash, StoredOffset } from '../engine/types'
 
 const DB_NAME = 'marquee-lite'
-const DB_VERSION = 1
-type Store = 'subtitles' | 'offsets' | 'session' | 'keys'
-const STORES: Store[] = ['subtitles', 'offsets', 'session', 'keys']
+const DB_VERSION = 2
+type Store = 'subtitles' | 'offsets' | 'session' | 'keys' | 'resume'
+const STORES: Store[] = ['subtitles', 'offsets', 'session', 'keys', 'resume']
 
 const req = <T>(r: IDBRequest<T>): Promise<T> =>
   new Promise((resolve, reject) => {
@@ -51,6 +52,21 @@ export const subtitleKey = (hash: MovieHash, lang: string) => `${hash}|${lang}`
 export const subtitles = {
   get: (hash: MovieHash, lang: string) => get<CachedSubtitle>('subtitles', subtitleKey(hash, lang)),
   put: (c: CachedSubtitle) => put('subtitles', subtitleKey(c.hash, c.language), c),
+}
+
+/** A subtitle file the viewer added, cached by moviehash so the film re-attaches it. */
+export const SIDECAR_LANG = 'sidecar'
+
+export interface ResumePoint {
+  position: number // seconds
+  duration: number
+  savedAt: number
+}
+
+export const resume = {
+  get: (key: string) => get<ResumePoint>('resume', key),
+  put: (key: string, p: ResumePoint) => put('resume', key, p),
+  clear: (key: string) => del('resume', key),
 }
 
 export const offsets = {

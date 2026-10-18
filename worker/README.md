@@ -69,6 +69,19 @@ curl -s "$W/api/tmdb/find/tt0041959?external_source=imdb_id" \
   -H "Origin: https://<owner>.github.io" | head -c 200
 ```
 
+## Limits, honestly
+
+- The per-IP soft cap (60 requests a minute) counts in the Cache API. On a `*.workers.dev`
+  hostname Cloudflare makes cache operations no-ops, so there it never limits anything; it only
+  works on a custom domain, and even then per data centre. It always fails open. OpenSubtitles'
+  own limits (per key, per user) still apply. A real cap needs the Workers Rate Limiting binding.
+- Responses expose `Retry-After` and `X-RateLimit-*` (`Access-Control-Expose-Headers`), so Lite
+  can say how long to wait after a 429.
+- A VIP account's `base_url` from `/login` is not honoured: every call goes to
+  `UPSTREAM_BASE`, which serves VIP accounts too.
+- Lite works without this Worker: films play and viewers add their own subtitle files; online
+  search is the only thing the Worker adds.
+
 ## Roll back
 
 ```bash

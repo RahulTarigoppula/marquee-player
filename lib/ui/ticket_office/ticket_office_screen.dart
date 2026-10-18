@@ -1213,7 +1213,7 @@ class _AboutSection extends ConsumerWidget {
         _Group(
           title: 'Privacy',
           children: [
-            line('No ads, no tracking, no analytics: nothing is measured or reported.', c: p.ink),
+            line('No ads, no tracking, no usage statistics: nothing is measured or reported.', c: p.ink),
             line(
               'To find subtitles, only three things leave this device: the file\'s fingerprint '
               '(a 16-character hash), its size, and a title guessed from the file name. They go '

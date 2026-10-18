@@ -21,10 +21,14 @@ export interface LeaderCallbacks {
   onChoose(action: NextAction): void
   onPick(c: ScoredCandidate): void
   onManual(query: string): void
+  /** Open the picker for a subtitle file from this device. */
+  onSidecar(): void
 }
 
 export interface LeaderView {
   el: HTMLElement
+  /** Move focus into the leader (it is a full-screen layer). */
+  focus(): void
   render(m: Machine, sentence: string | null): void
   setMeta(sizeBytes: number | null): void
   showManual(): void
@@ -119,6 +123,12 @@ export function leader(cb: LeaderCallbacks, strip: HTMLElement): LeaderView {
     if (q !== '') cb.onManual(q)
   })
   const skip = h('button', { class: 'linkbtn', type: 'button' }, 'Skip subtitles')
+  const own = h(
+    'button',
+    { class: 'fallback fallback--own', type: 'button' },
+    'Use a subtitle file from this device',
+  )
+  own.addEventListener('click', cb.onSidecar)
   skip.addEventListener('click', () => cb.onChoose('skip'))
 
   const el = h(
@@ -154,6 +164,9 @@ export function leader(cb: LeaderCallbacks, strip: HTMLElement): LeaderView {
 
   return {
     el,
+    focus() {
+      skip.focus({ preventScroll: true })
+    },
     setMeta(bytes) {
       size = bytes
     },
@@ -179,22 +192,21 @@ export function leader(cb: LeaderCallbacks, strip: HTMLElement): LeaderView {
       const key = s.next.join('|')
       if (key !== lastNext) {
         lastNext = key
-        fill(
-          fallbacks,
-          ...s.next.map((a, i) => {
-            const b = h(
-              'button',
-              {
-                class: a === 'skip' && s.failure === 'offline' ? 'fallback is-lit' : 'fallback',
-                type: 'button',
-                style: `--i:${i}`,
-              },
-              NEXT_LABEL[a],
-            )
-            b.addEventListener('click', () => cb.onChoose(a))
-            return b
-          }),
-        )
+        const rows = s.next.map((a, i) => {
+          const b = h(
+            'button',
+            {
+              class: a === 'skip' && s.failure === 'offline' ? 'fallback is-lit' : 'fallback',
+              type: 'button',
+              style: `--i:${i}`,
+            },
+            NEXT_LABEL[a],
+          )
+          b.addEventListener('click', () => cb.onChoose(a))
+          return b
+        })
+        own.style.setProperty('--i', String(rows.length))
+        fill(fallbacks, ...rows, s.next.length > 0 ? own : null)
       }
       if (s.failure === null) manual.hidden = true
     },

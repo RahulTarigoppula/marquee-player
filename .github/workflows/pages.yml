@@ -32,7 +32,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci
       - run: npm test -- --run                 # a broken Lite never reaches the live URL
-      - name: Build Marquee Lite (served from /marquee/)
+      - name: Build Marquee Lite (served from /<repo>/)
         run: npm run build
         env:
           VITE_BASE_PATH: /${{ github.event.repository.name }}/

@@ -2,7 +2,33 @@
 
 > **Drop a film. The lights go down. The subtitles are already there.**
 
-**Status: first build pass complete — see [docs/STATUS.md](docs/STATUS.md)** · Project 08 of 8 · design system **HOUSE LIGHTS** · repo name `marquee` (public)
+**Status: v1.1 — see [docs/STATUS.md](docs/STATUS.md)** · design system **HOUSE LIGHTS** · [screenshots](https://github.com/RahulTarigoppula/marquee-player/tree/screenshots)
+
+![Lobby](https://raw.githubusercontent.com/RahulTarigoppula/marquee-player/screenshots/lobby_library_desktop.png)
+
+## Install (2 minutes)
+
+Get the files from the **[latest release](https://github.com/RahulTarigoppula/marquee-player/releases/latest)**.
+
+| You have | Download | Then |
+|---|---|---|
+| **Windows 10/11** | `marquee-windows-x64-setup.exe` | Run it. SmartScreen says "Windows protected your PC" (the app isn't code-signed) → **More info → Run anyway**. No admin needed. Right-click any video → **Open with → Marquee**. |
+| Windows, no install | `marquee-windows-x64-portable.zip` | Extract anywhere, run `marquee.exe`. |
+| **Android 8+** | `marquee-android-arm64-v8a.apk` | Open it on the phone, allow "install unknown apps" once. Older phones: `armeabi-v7a`. |
+
+**Subtitles:** open **Settings** (gear) → **Subtitles** and sign in with a free [OpenSubtitles.com](https://www.opensubtitles.com) account. If the app asks for an API key, create a free one at OpenSubtitles → *Profile → API Consumers* and paste it there. Files you already have subtitles for (`film.srt` beside `film.mkv`, or subtitles inside the MKV) need nothing.
+
+**What it does:** plays practically any video file (MKV, MP4, AVI, HEVC, AC-3, DTS, ASS…), finds matching subtitles automatically, remembers where you stopped and your subtitle timing per film, plays the next episode in the folder, and keeps a library of what you watched with frames from each film. Full keyboard control on Windows (press `?`), gestures on Android (double-tap ±10 s, swipe edges for brightness/volume, long-press 2×).
+
+**Privacy:** no accounts of ours, no telemetry, no analytics. Only the file's fingerprint, size and a title query go to OpenSubtitles when searching. Everything else stays on your device.
+
+### Owner checklist (one-time, repo settings)
+
+1. **Settings → Secrets → Actions → `OS_API_KEY`** — your OpenSubtitles consumer key, so friends don't need their own.
+2. **Android signing** — `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_PASSWORD`, `ANDROID_KEY_ALIAS` (see §4 below). Without them APKs are signed with a throwaway CI key and won't update in place.
+3. **Settings → Pages → Source: GitHub Actions**, then re-run the `pages` workflow, for Marquee Lite at `https://rahultarigoppula.github.io/marquee-player/`.
+4. Optional: `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` + repo variable `WORKER_URL` to give Lite online subtitle search.
+5. Release: `git tag v1.2.0 && git push --tags`.
 
 Marquee is one Flutter codebase that ships a **Windows `.exe`** and an **Android APK** on the same engine — libmpv (ffmpeg + libass) through `media_kit` — so an MKV with HEVC video, AC-3 audio and an ASS subtitle track plays identically on both, with no codec packs.
 The instant a file opens it is fingerprinted with the OpenSubtitles **moviehash** (128 KiB of I/O), looked up hash-first, and the best subtitle is downloaded, saved beside the file and attached **before the first frame is shown** — a hash hit means the subtitle was uploaded for that exact release, so it is already in sync.
