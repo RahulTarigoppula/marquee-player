@@ -1,0 +1,57 @@
+name: screenshots
+
+# Renders every room (test/screens, tag `screenshot`) on the Linux renderer and publishes the
+# PNGs to the orphan `screenshots` branch. The README links them; reviewers read them there.
+on:
+  push:
+    branches: [main]
+    paths: ['lib/**', 'test/screens/**', 'assets/**', '.github/workflows/screenshots.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: screenshots
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: '3.47.5'
+
+jobs:
+  render:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: subosito/flutter-action@v2
+        with: { flutter-version: '${{ env.FLUTTER_VERSION }}', channel: stable, cache: true }
+      - run: flutter pub get
+      - run: dart run build_runner build --delete-conflicting-outputs
+      - name: Render
+        run: flutter test test/screens --tags screenshot --update-goldens --reporter github
+      - name: Publish to the screenshots branch
+        if: always()
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(test/screens/goldens/*.png)
+          if [ ${#files[@]} -eq 0 ]; then echo "::warning::no screenshots were rendered"; exit 0; fi
+          out="$RUNNER_TEMP/shots"
+          mkdir -p "$out"
+          cp "${files[@]}" "$out/"
+          {
+            echo "# Marquee screenshots"
+            echo
+            echo "Rendered by \`screenshots.yml\` from ${GITHUB_SHA::7} on $(date -u +%Y-%m-%d)."
+            echo
+            for f in "$out"/*.png; do n=$(basename "$f"); echo "## ${n%.png}"; echo; echo "![${n%.png}]($n)"; echo; done
+          } > "$out/README.md"
+          cd "$out"
+          git init -q -b screenshots
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -q -m "screenshots for ${GITHUB_SHA::7}"
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" screenshots
+          ls -la

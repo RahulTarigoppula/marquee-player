@@ -1,0 +1,5 @@
+tags:
+  # Renders every room to PNG (test/screens). Excluded from normal runs; see screenshots.yml.
+  screenshot:
+  # Pixel goldens that are only stable on the Linux CI renderer.
+  golden:

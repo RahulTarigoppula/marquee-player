@@ -29,7 +29,7 @@ jobs:
       - name: dart format (tracked files)
         run: git ls-files -z '*.dart' | xargs -0 dart format --output=none --set-exit-if-changed
       - run: flutter analyze --fatal-infos
-      - run: flutter test --coverage --reporter github
+      - run: flutter test --coverage --reporter github --exclude-tags screenshot
       - name: Coverage gates
         run: dart run tool/check_coverage.dart coverage/lcov.info
       - uses: actions/upload-artifact@v4

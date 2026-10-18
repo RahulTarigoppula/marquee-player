@@ -23,6 +23,29 @@ class OpenedFile {
   const OpenedFile({required this.locator, required this.displayName, required this.sizeBytes});
 
   bool get isContentUri => locator.startsWith('content://');
+
+  /// A network stream (http, https, rtsp, …): no hash, no sidecar, no resume by hash.
+  bool get isRemote => remoteSchemes.any((s) => locator.toLowerCase().startsWith('$s://'));
+}
+
+const remoteSchemes = ['http', 'https', 'rtsp', 'rtmp', 'mms', 'udp', 'srt'];
+
+/// A URL the user typed or pasted ("Open URL…"), or null when it is not a playable address.
+OpenedFile? openedFromUrl(String input) {
+  final url = input.trim();
+  final uri = Uri.tryParse(url);
+  if (uri == null || !uri.hasScheme || !remoteSchemes.contains(uri.scheme.toLowerCase())) {
+    return null;
+  }
+  if (uri.host.isEmpty) return null;
+  final last = uri.pathSegments.where((s) => s.isNotEmpty).lastOrNull;
+  var name = last ?? uri.host;
+  try {
+    name = Uri.decodeComponent(name);
+  } on ArgumentError {
+    // Keep the raw segment.
+  }
+  return OpenedFile(locator: url, displayName: name, sizeBytes: 0);
 }
 
 const _content = MethodChannel('marquee/content');

@@ -32,7 +32,7 @@ jobs:
       - run: dart run build_runner build --delete-conflicting-outputs   # drift: *.g.dart is gitignored
       - run: flutter analyze --fatal-infos
       - name: Unit + widget tests (goldens are Linux-only)
-        run: flutter test --exclude-tags golden --reporter github
+        run: flutter test --exclude-tags golden,screenshot --reporter github
       - name: Integration tests against the committed fixtures
         if: hashFiles('integration_test/**') != ''
         run: flutter test integration_test -d windows
