@@ -8,6 +8,7 @@ import '../api/opensubtitles.dart';
 import '../db/database.dart';
 import '../engine/models/models.dart';
 import '../engine/tickets.dart';
+import 'thumbnails.dart';
 
 const String appVersion = kMarqueeVersion;
 
@@ -79,11 +80,17 @@ final quotaProvider = NotifierProvider<QuotaNotifier, Quota>(QuotaNotifier.new);
 final ticketStripProvider = Provider((ref) => ticketStrip(ref.watch(quotaProvider)));
 
 class AccountNotifier extends Notifier<Account> {
+  final _restored = Completer<void>();
+
   @override
   Account build() {
-    unawaited(_restore());
+    unawaited(_restore().whenComplete(() => _restored.isCompleted ? null : _restored.complete()));
     return const Account();
   }
+
+  /// Completes once the saved key and sign-in are back in the client — a film opened from the
+  /// command line or "Open with" waits for this, or its search would run keyless.
+  Future<void> get restored => _restored.future;
 
   FlutterSecureStorage get _store => ref.read(secureStorageProvider);
   OpenSubtitlesClient get _client => ref.read(openSubtitlesProvider);
@@ -120,6 +127,14 @@ class AccountNotifier extends Notifier<Account> {
 
   /// The JWT goes to secure storage; the password is never kept anywhere.
   Future<void> signIn(String username, String password) async {
+    if (!_client.hasKey) {
+      state = Account(
+        status: AccountStatus.error,
+        username: username,
+        sentence: 'Signing in needs an OpenSubtitles API key — add yours first (it is free).',
+      );
+      return;
+    }
     state = Account(status: AccountStatus.signingIn, username: username);
     try {
       final r = await _client.login(username, password);
@@ -153,10 +168,27 @@ class AccountNotifier extends Notifier<Account> {
     state = const Account();
   }
 
-  void markExpired() => state = const Account(
-    status: AccountStatus.expired,
-    sentence: 'Ticket expired — sign in again.',
-  );
+  /// A 401: the JWT is dead. Drop it from the client AND storage (a restart must not restore
+  /// it), fall back to anonymous tickets, and say so.
+  void markExpired() {
+    _client.jwt = null;
+    _client.host = kDefaultHost;
+    unawaited(_forgetJwt());
+    ref.read(quotaProvider.notifier).set(Quota.anonymous);
+    state = const Account(
+      status: AccountStatus.expired,
+      sentence: 'Ticket expired — sign in again.',
+    );
+  }
+
+  Future<void> _forgetJwt() async {
+    try {
+      await _store.delete(key: _jwtKey);
+      await _store.delete(key: _hostKey);
+    } on Object {
+      // A locked keyring: the client already forgot it for this run.
+    }
+  }
 
   /// The user's own OpenSubtitles consumer key — only asked for when the build has none.
   Future<void> setApiKey(String key) async {
@@ -215,11 +247,32 @@ class ToggleNotifier extends Notifier<bool> {
 final cueSheetProvider = NotifierProvider<ToggleNotifier, bool>(ToggleNotifier.new);
 final boothOpenProvider = NotifierProvider<ToggleNotifier, bool>(ToggleNotifier.new);
 
+/// Windows: the borderless fullscreen window. Android: immersive mode (always on while a
+/// film plays). Reset whenever a film closes, so the Lobby never opens fullscreen.
+class FullscreenNotifier extends Notifier<bool> {
+  @override
+  bool build() => false;
+  void toggle() => state = !state;
+  void set(bool v) => state = v;
+}
+
+final fullscreenProvider = NotifierProvider<FullscreenNotifier, bool>(FullscreenNotifier.new);
+
 /// Library effects for widgets (they never touch lib/db themselves).
 class LibraryActions {
   final Ref ref;
   const LibraryActions(this.ref);
-  Future<void> remove(int id) => ref.read(databaseProvider).removeMedia(id);
+  Future<void> remove(int id) async {
+    await ref.read(databaseProvider).removeMedia(id);
+    await deleteThumbnail(ref, id);
+  }
+
+  /// Removes the card for [locator] (a file that has moved or been deleted), if there is one.
+  Future<void> removeLocator(String locator) async {
+    final id = await ref.read(databaseProvider).mediaIdFor(locator);
+    if (id != null) await remove(id);
+  }
+
   Future<Map<String, Object?>> export(String platform) =>
       ref.read(databaseProvider).exportLibrary(version: appVersion, platform: platform);
   Future<void> import(Map<String, Object?> json) async {

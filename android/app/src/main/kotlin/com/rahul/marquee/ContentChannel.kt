@@ -1,6 +1,9 @@
 package com.rahul.marquee
 
+import android.app.Activity
+import android.content.ActivityNotFoundException
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -26,6 +29,10 @@ import java.util.concurrent.Executors
  *   initialUri                          -> String?  (the launching URI, then cleared)
  *   stat  {uri}                         -> {name: String, size: Long}   (size -1 if unknown)
  *   read  {uri, offset: Long, length: Int} -> ByteArray of exactly `length` bytes, fewer only at EOF
+ *   pickVideo                           -> {uri, name, size}? (ACTION_OPEN_DOCUMENT; null if cancelled)
+ *
+ * pickVideo never copies the film: it returns the document's content:// URI and takes a
+ * PERSISTABLE read grant, so a Lobby card can reopen the same URI after a restart.
  *
  * Dart -> is also told `uriChanged` (String) when a new file arrives while the app is running.
  */
@@ -37,6 +44,12 @@ class ContentChannel(
     private val channel = MethodChannel(messenger, NAME)
     private val io: ExecutorService = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
+
+    /** Set by MainActivity: the picker needs an Activity to start from. */
+    var activity: Activity? = null
+
+    /** The Dart call waiting for the picker's answer (one picker at a time). */
+    private var pickResult: MethodChannel.Result? = null
 
     @Volatile
     private var pending: String? = null
@@ -56,7 +69,65 @@ class ContentChannel(
 
     fun dispose() {
         channel.setMethodCallHandler(null)
+        try {
+            pickResult?.success(null)
+        } catch (e: RuntimeException) {
+            // The engine is already gone: nobody is waiting any more.
+        }
+        pickResult = null
+        activity = null
         io.shutdown()
+    }
+
+    private fun pickVideo(result: MethodChannel.Result) {
+        val host = activity ?: return result.error("no-activity", "no activity to pick from", null)
+        if (pickResult != null) return result.error("busy", "a picker is already open", null)
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "video/*"
+            // Matroska is often typed outside video/* by file managers and cloud providers.
+            putExtra(
+                Intent.EXTRA_MIME_TYPES,
+                arrayOf("video/*", "application/x-matroska", "video/x-matroska"),
+            )
+            addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION,
+            )
+        }
+        pickResult = result
+        try {
+            host.startActivityForResult(intent, PICK_VIDEO)
+        } catch (e: ActivityNotFoundException) {
+            pickResult = null
+            result.error("no-picker", "this device has no document picker", null)
+        }
+    }
+
+    /** From MainActivity.onActivityResult; true when the result was ours. */
+    fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?): Boolean {
+        if (requestCode != PICK_VIDEO) return false
+        val result = pickResult ?: return true
+        pickResult = null
+        val uri = data?.data
+        if (resultCode != Activity.RESULT_OK || uri == null) {
+            result.success(null)
+            return true
+        }
+        try {
+            // Survives a restart; without it a Lobby card could never reopen this URI.
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION,
+            )
+        } catch (e: SecurityException) {
+            // A provider that grants no persistable access: it plays now, the card may not.
+        }
+        background(result) {
+            val info = stat(uri)
+            mapOf("uri" to uri.toString(), "name" to info["name"], "size" to info["size"])
+        }
+        return true
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
@@ -86,6 +157,7 @@ class ContentChannel(
                 }
                 background(result) { read(Uri.parse(uri), offset, length) }
             }
+            "pickVideo" -> pickVideo(result)
             else -> result.notImplemented()
         }
     }
@@ -187,5 +259,6 @@ class ContentChannel(
     private companion object {
         const val NAME = "marquee/content"
         const val MAX_READ = 16 * 1024 * 1024
+        const val PICK_VIDEO = 0x4D51
     }
 }

@@ -28,11 +28,15 @@ final cueSheetDataProvider = FutureProvider<List<Cue>>(
   (ref) async => parseCueSheet(await rootBundle.loadString('design/cue-sheet.json')),
 );
 
+// Words, not arrow glyphs: Geist Mono has no arrows (they rendered as boxes).
 String prettyKey(String k) => k
-    .replaceAll('ArrowLeft', '←')
-    .replaceAll('ArrowRight', '→')
-    .replaceAll('ArrowUp', '↑')
-    .replaceAll('ArrowDown', '↓')
+    .replaceAll('ArrowLeft', 'Left')
+    .replaceAll('ArrowRight', 'Right')
+    .replaceAll('ArrowUp', 'Up')
+    .replaceAll('ArrowDown', 'Down')
+    .replaceAll('MediaPlayPause', 'Media Play')
+    .replaceAll('MediaTrackNext', 'Media Next')
+    .replaceAll('MediaTrackPrevious', 'Media Prev')
     .replaceAll('Escape', 'Esc');
 
 class CueSheet extends ConsumerWidget {
@@ -73,11 +77,11 @@ class CueSheet extends ConsumerWidget {
                     children: [
                       for (final c in cues)
                         SizedBox(
-                          width: 290,
+                          width: 300,
                           child: Row(
                             children: [
                               SizedBox(
-                                width: 110,
+                                width: 124,
                                 child: Text(
                                   c.keys.map(prettyKey).join(' / '),
                                   style: Txt.mono(Tokens.textSm, p.accent),

@@ -38,6 +38,10 @@ final _alpha = RegExp(r'[A-Za-z]');
 bool isSubtitleFile(String filename) =>
     _subtitleExtensions.contains(_extensionOf(filename).toLowerCase());
 
+/// True for the containers Marquee lists as films (the folder's next / previous file).
+bool isVideoFile(String filename) =>
+    _videoExtensions.contains(_extensionOf(filename).toLowerCase());
+
 String _extensionOf(String filename) {
   final dot = filename.lastIndexOf('.');
   return dot <= 0 ? '' : filename.substring(dot + 1);

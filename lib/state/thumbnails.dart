@@ -45,6 +45,17 @@ Future<void> saveThumbnail(Ref ref, int mediaId, Uint8List jpeg) async {
   ref.read(thumbnailEpochProvider.notifier).bump();
 }
 
+/// Where mpv should write the frame for [mediaId] (`screenshot-to-file`, no Dart encoding).
+Future<String> thumbnailTarget(Ref ref, int mediaId) async =>
+    thumbnailPath(await ref.read(thumbnailDirProvider.future), mediaId);
+
+/// After mpv wrote [mediaId]'s file: drop the cached image so Lobby cards show the new frame.
+Future<void> thumbnailWritten(Ref ref, int mediaId) async {
+  final dir = await ref.read(thumbnailDirProvider.future);
+  await FileImage(File(thumbnailPath(dir, mediaId))).evict();
+  ref.read(thumbnailEpochProvider.notifier).bump();
+}
+
 /// Deletes the thumbnail when a film leaves the library.
 Future<void> deleteThumbnail(Ref ref, int mediaId) async {
   try {

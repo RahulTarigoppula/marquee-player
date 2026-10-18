@@ -27,6 +27,16 @@ class House extends InheritedWidget {
 
   static HousePalette paletteOf(BuildContext context) => of(context).palette;
 
+  /// Menus and dialogs are pushed on the app's Navigator, above every room's [House]: wrap
+  /// their content with this so they keep the room's light.
+  Widget carry(Widget child) => House(
+    palette: palette,
+    matinee: matinee,
+    house: house,
+    reducedMotion: reducedMotion,
+    child: child,
+  );
+
   @override
   bool updateShouldNotify(House old) =>
       palette != old.palette ||
@@ -82,10 +92,52 @@ ThemeData marqueeTheme(HousePalette p, {required bool matinee}) => ThemeData(
   scaffoldBackgroundColor: p.bg,
   canvasColor: p.bg,
   fontFamily: Tokens.fontBody,
+  // Light, not ripples: no splash, but a quiet lift on hover and a deeper one while pressed.
   splashFactory: NoSplash.splashFactory,
-  highlightColor: Colors.transparent,
+  highlightColor: p.ink.withValues(alpha: 0.08),
   focusColor: p.focus.withValues(alpha: 0.12),
-  hoverColor: p.surface2,
+  hoverColor: p.ink.withValues(alpha: 0.05),
+  popupMenuTheme: PopupMenuThemeData(
+    color: p.bgElevated,
+    surfaceTintColor: Colors.transparent,
+    elevation: 8,
+    shadowColor: const Color(0xCC000000),
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(Tokens.radiusMd),
+      side: BorderSide(color: p.border),
+    ),
+    textStyle: Txt.body(Tokens.textBase, p.ink),
+  ),
+  dialogTheme: DialogThemeData(
+    backgroundColor: p.bgElevated,
+    surfaceTintColor: Colors.transparent,
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(Tokens.radiusLg),
+      side: BorderSide(color: p.border),
+    ),
+  ),
+  tooltipTheme: TooltipThemeData(
+    decoration: BoxDecoration(
+      color: p.surface2,
+      borderRadius: BorderRadius.circular(Tokens.radiusSm),
+      border: Border.all(color: p.borderStrong),
+    ),
+    textStyle: Txt.body(Tokens.textSm, p.ink),
+    waitDuration: const Duration(milliseconds: 500),
+  ),
+  scrollbarTheme: ScrollbarThemeData(
+    thumbColor: WidgetStatePropertyAll(p.ink.withValues(alpha: 0.18)),
+    radius: const Radius.circular(Tokens.radiusFull),
+    thickness: const WidgetStatePropertyAll(6),
+  ),
+  sliderTheme: SliderThemeData(
+    activeTrackColor: p.accent,
+    inactiveTrackColor: p.surface2,
+    thumbColor: p.accent,
+    overlayColor: p.accent.withValues(alpha: 0.14),
+    trackHeight: 4,
+    showValueIndicator: ShowValueIndicator.never,
+  ),
   colorScheme: ColorScheme(
     brightness: matinee ? Brightness.light : Brightness.dark,
     primary: p.accent,

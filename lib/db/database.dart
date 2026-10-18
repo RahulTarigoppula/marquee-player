@@ -103,6 +103,9 @@ class MarqueeDatabase extends _$MarqueeDatabase {
 
   Future<void> removeMedia(int id) => (delete(mediaFiles)..where((t) => t.id.equals(id))).go();
 
+  Future<int?> mediaIdFor(String locator) async =>
+      (await (select(mediaFiles)..where((t) => t.locator.equals(locator))).getSingleOrNull())?.id;
+
   /// Reactive Lobby rail: media ⋈ resume ⋈ offsets ⋈ cached subtitle language.
   Stream<List<LobbyCard>> watchLobby({int limit = 200}) {
     final q =
@@ -133,8 +136,8 @@ class MarqueeDatabase extends _$MarqueeDatabase {
               container: m.container,
               durationMs: m.durationMs,
               hash: m.moviehash == null ? null : MovieHash(m.moviehash!),
-              resumeFraction: rp == null || dur == 0 ? 0 : rp.positionMs / dur,
-              finished: rp != null && rp.positionMs == 0 && rp.durationMs > 0,
+              resumeFraction: rp == null || dur == 0 ? 0 : (rp.positionMs / dur).clamp(0.0, 1.0),
+              finished: rp != null && isFinished(rp.positionMs, rp.durationMs),
               delayMs: so?.delayMs,
               subtitleLanguage: m.moviehash == null ? null : langs[m.moviehash],
               lastPlayedAt: m.lastPlayedAt,
@@ -196,12 +199,16 @@ class MarqueeDatabase extends _$MarqueeDatabase {
 
   // ───────────────────────────── resume + sync ─────────────────────────────
 
+  /// A film within [kFinishedWithinMs] of its end counts as watched. Stored as position =
+  /// duration (not 0, which used to mean both "finished" and "opened and closed at once").
+  static bool isFinished(int positionMs, int durationMs) =>
+      durationMs > 0 && positionMs > 0 && durationMs - positionMs <= kFinishedWithinMs;
+
   Future<void> saveResume(MovieHash hash, int positionMs, int durationMs) {
-    final nearEnd = durationMs > 0 && durationMs - positionMs <= kFinishedWithinMs;
     return into(resumePoints).insertOnConflictUpdate(
       ResumePointsCompanion.insert(
         moviehash: hash.value,
-        positionMs: nearEnd ? 0 : positionMs,
+        positionMs: isFinished(positionMs, durationMs) ? durationMs : positionMs,
         durationMs: durationMs,
         at: clock.now(),
       ),

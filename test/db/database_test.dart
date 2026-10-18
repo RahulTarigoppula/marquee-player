@@ -48,9 +48,25 @@ void main() {
 
     test('stores a position near the end as finished', () async {
       await db.saveResume(hash, 9650000, 9663000);
-      expect((await db.resumeFor(hash))!.positionMs, 0);
+      final done = (await db.resumeFor(hash))!;
+      expect(done.positionMs, 9663000);
+      expect(done.finished, isTrue);
       await db.saveResume(hash, 4364400, 9663000);
       expect((await db.resumeFor(hash))!.positionMs, 4364400);
+      expect((await db.resumeFor(hash))!.finished, isFalse);
+    });
+
+    test('never reads a film closed at the very start as finished', () async {
+      expect(MarqueeDatabase.isFinished(0, 9663000), isFalse);
+      expect(MarqueeDatabase.isFinished(0, 12000), isFalse);
+      expect(MarqueeDatabase.isFinished(9650000, 9663000), isTrue);
+      final row = 'film.mkv';
+      final id = await db.upsertMedia(locator: row, displayName: row, sizeBytes: 1, hash: hash);
+      await db.saveResume(hash, 0, 9663000);
+      final card = (await db.watchLobby().first).single;
+      expect(card.finished, isFalse);
+      expect(await db.mediaIdFor(row), id);
+      expect(await db.mediaIdFor('elsewhere.mkv'), isNull);
     });
 
     test('remembers the sync offset per moviehash', () async {

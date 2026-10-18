@@ -60,7 +60,10 @@
       "announces each phase once": "TS emits announce effects from the reducer; Dart announces from the widget layer.",
       "runs a manual search with the typed query and repeats it on retry": "DISAGREES: see the Dart entry 'runs a manual search from the stall…'.",
       "ignores fallback choices and results that do not belong to the current phase": "TS reducer event guards; Dart drops stale results with a generation counter (covered by the tap-override test).",
-      "re-runs the filename rung when another print is requested after playback began": "TS-only 'research' event."
+      "re-runs the filename rung when another print is requested after playback began": "TS-only 'research' event.",
+      "lists other prints for a pick instead of downloading one when another is requested": "TS-only 'research' event: the booth lists the results (attached file excluded) instead of spending a ticket.",
+      "downloads a print picked from the booth while the film plays": "TS-only: the web booth's pick in phase done; the native booth downloads outside the threading machine.",
+      "finds another print again after that search stalled": "TS-only 'research' event, as above."
     }
   },
   "filename": {

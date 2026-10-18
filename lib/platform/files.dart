@@ -9,11 +9,13 @@ import 'package:path_provider/path_provider.dart';
 
 import '../engine/filename.dart';
 import '../engine/hash.dart';
+import '../engine/playback.dart';
 
 const _videoExtensions = [
   'mkv', 'mp4', 'm4v', 'avi', 'webm', 'mov', 'ts', 'm2ts', 'mts', 'wmv', 'flv', 'mpg', //
   'mpeg', '3gp', 'ogv', 'vob',
 ];
+const _subtitleExtensions = ['srt', 'ass', 'ssa', 'vtt', 'sub'];
 
 /// A film the user handed us. [locator] is a filesystem path or an Android content:// URI.
 class OpenedFile {
@@ -50,10 +52,29 @@ OpenedFile? openedFromUrl(String input) {
 
 const _content = MethodChannel('marquee/content');
 
+/// The system picker. On Android this is ACTION_OPEN_DOCUMENT through `marquee/content`: the
+/// film stays where it is (file_picker would COPY the whole file into the cache) and the
+/// persisted read grant lets a Lobby card reopen the same content:// URI after a restart.
 Future<OpenedFile?> pickVideo() async {
+  if (Platform.isAndroid) {
+    try {
+      final r = await _content.invokeMapMethod<String, Object?>('pickVideo');
+      final uri = r?['uri'];
+      if (r == null || uri is! String) return null;
+      return OpenedFile(
+        locator: uri,
+        displayName: r['name'] as String? ?? 'video',
+        sizeBytes: (r['size'] as num?)?.toInt() ?? 0,
+      );
+    } on PlatformException {
+      return null;
+    } on MissingPluginException {
+      return null;
+    }
+  }
   final res = await FilePicker.platform.pickFiles(
-    type: Platform.isAndroid ? FileType.video : FileType.custom,
-    allowedExtensions: Platform.isAndroid ? null : _videoExtensions,
+    type: FileType.custom,
+    allowedExtensions: _videoExtensions,
     withData: false,
   );
   final f = res?.files.singleOrNull;
@@ -62,11 +83,71 @@ Future<OpenedFile?> pickVideo() async {
   return OpenedFile(locator: path, displayName: f.name, sizeBytes: f.size);
 }
 
-Future<OpenedFile?> fileFromPath(String path) async {
-  if (path.startsWith('content://')) return contentFile(path);
+/// "Load subtitle file…": a path mpv can `sub-add` (on Android the picker copies the small
+/// file into the cache, which is exactly what mpv needs — it cannot read content:// itself).
+Future<String?> pickSubtitleFile() async {
+  final res = await FilePicker.platform.pickFiles(
+    type: Platform.isAndroid ? FileType.any : FileType.custom,
+    allowedExtensions: Platform.isAndroid ? null : _subtitleExtensions,
+  );
+  final path = res?.files.singleOrNull?.path;
+  return path != null && isSubtitleFile(path) ? path : null;
+}
+
+/// A `file:///D:/films/x.mkv` URI ("Open with" from some file managers) as a plain path.
+String locatorToPath(String locator) {
+  if (!locator.toLowerCase().startsWith('file:')) return locator;
+  try {
+    return Uri.parse(locator).toFilePath(windows: Platform.isWindows);
+  } on Object {
+    return locator;
+  }
+}
+
+/// A path, a file:// or content:// URI, or a stream URL → something the session can open.
+/// Null when the file has moved, been deleted, or its grant was revoked.
+Future<OpenedFile?> fileFromPath(String locator) async {
+  if (locator.startsWith('content://')) return contentFile(locator);
+  final remote = openedFromUrl(locator);
+  if (remote != null) return remote;
+  final path = locatorToPath(locator);
   final f = File(path);
   if (!f.existsSync() || isSubtitleFile(path)) return null;
   return OpenedFile(locator: path, displayName: p.basename(path), sizeBytes: f.lengthSync());
+}
+
+/// The video files either side of [f] in its folder, in natural order (desktop paths only;
+/// a content:// URI has no folder Marquee may list).
+Future<({String? previous, String? next})> siblingsOf(OpenedFile f) async {
+  if (f.isContentUri || f.isRemote) return (previous: null, next: null);
+  try {
+    final dir = Directory(p.dirname(f.locator));
+    final names = <String>[
+      await for (final e in dir.list(followLinks: false))
+        if (e is File && isVideoFile(e.path)) p.basename(e.path),
+    ];
+    final n = neighboursOf(names, p.basename(f.locator));
+    String? full(String? name) => name == null ? null : p.join(dir.path, name);
+    return (previous: full(n.previous), next: full(n.next));
+  } on FileSystemException {
+    return (previous: null, next: null);
+  }
+}
+
+/// Where screenshots go: Pictures\Marquee on Windows, the app's Pictures folder on Android.
+Future<Directory> screenshotDir() async {
+  Directory? base;
+  if (Platform.isWindows) {
+    final home = Platform.environment['USERPROFILE'];
+    if (home != null) base = Directory(p.join(home, 'Pictures'));
+  } else if (Platform.isAndroid) {
+    final dirs = await getExternalStorageDirectories(type: StorageDirectory.pictures);
+    base = dirs?.firstOrNull;
+  }
+  base ??= await getApplicationDocumentsDirectory();
+  final dir = Directory(p.join(base.path, 'Marquee'));
+  await dir.create(recursive: true);
+  return dir;
 }
 
 /// Android "Open with" / share: the URI the activity was launched with, if any.
@@ -124,7 +205,7 @@ Future<ChunkReader> chunkReaderFor(OpenedFile f) async {
 
 /// `<video>.<lang>.srt` / `.ass` beside the file — rung 0a, zero requests.
 String? findSidecar(OpenedFile f, List<String> languages) {
-  if (f.isContentUri) return null;
+  if (f.isContentUri || f.isRemote) return null;
   final dir = p.dirname(f.locator);
   final stem = p.basenameWithoutExtension(f.locator);
   for (final lang in languages) {
@@ -164,7 +245,7 @@ Future<WrittenSidecar> writeSidecar(
   required bool besideFile,
   String extension = 'srt',
 }) async {
-  if (besideFile && !f.isContentUri) {
+  if (besideFile && !f.isContentUri && !f.isRemote) {
     final target = _unused(
       p.join(p.dirname(f.locator), '${p.basenameWithoutExtension(f.locator)}.$language.$extension'),
     );

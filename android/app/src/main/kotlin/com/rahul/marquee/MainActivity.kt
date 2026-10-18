@@ -16,8 +16,15 @@ class MainActivity : FlutterActivity() {
         val messenger = flutterEngine.dartExecutor.binaryMessenger
         content = ContentChannel(applicationContext, messenger).also {
             it.setPendingUri(uriFrom(intent))
+            it.activity = this
         }
         pip = PipChannel(this, messenger)
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        // The document picker (ContentChannel.pickVideo) answers here.
+        if (content?.onActivityResult(requestCode, resultCode, data) == true) return
+        super.onActivityResult(requestCode, resultCode, data)
     }
 
     override fun onNewIntent(intent: Intent) {

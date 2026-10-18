@@ -47,8 +47,9 @@ class DownloadOutcome {
 class ThreadingPorts {
   final Future<MovieHash> Function() hash;
 
-  /// Rung 0: sidecar beside the file, then the hash_cache row. Costs 0 requests.
-  final Future<ExternalSubtitle?> Function(MovieHash? hash) findExisting;
+  /// Rung 0: sidecar beside the file, then the hash_cache row, then (when preferred) an
+  /// embedded track in a wanted language. Costs 0 requests.
+  final Future<SubtitleTrackRef?> Function(MovieHash? hash) findExisting;
   final Future<List<SubtitleCandidate>> Function(SearchRequest request) search;
   final Future<List<SubtitleCandidate>> Function(SearchRequest request)? subdl;
 

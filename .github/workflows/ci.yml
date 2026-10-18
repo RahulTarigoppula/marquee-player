@@ -49,7 +49,7 @@ jobs:
       - run: npm test -- --run --coverage
       - run: npm run build
         env:
-          VITE_BASE_PATH: /marquee/
+          VITE_BASE_PATH: /marquee-player/
           VITE_API_BASE: ${{ vars.WORKER_URL }}
       - run: npx size-limit          # N12 / N13
 

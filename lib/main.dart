@@ -28,17 +28,19 @@ Future<void> main(List<String> args) async {
   // Diagnostics are local only: a plain sentence, never a report sent anywhere.
   FlutterError.onError = (d) => FlutterError.presentError(d);
 
+  // Restore a saved sign-in and API key FIRST: the session waits for it before searching.
+  container.read(accountProvider);
+
   runApp(UncontrolledProviderScope(container: container, child: const MarqueeApp()));
 
+  final session = container.read(sessionProvider.notifier);
   // `marquee.exe "D:\films\x.mkv"` or Android "Open with" plays without passing the Lobby.
   final initial = args.where((a) => !a.startsWith('-')).firstOrNull ?? await initialIntentUri();
-  if (initial != null) {
-    final f = await fileFromPath(initial);
-    if (f != null) unawaited(container.read(sessionProvider.notifier).open(f));
-  }
-  onNewIntentUri((uri) async {
-    final f = await fileFromPath(uri);
-    if (f != null) await container.read(sessionProvider.notifier).open(f);
+  if (initial != null) unawaited(session.openLocator(initial));
+  onNewIntentUri((uri) => unawaited(session.openLocator(uri)));
+  // A second launch on Windows hands its file to this window (windows/runner single instance).
+  onSecondInstance((path) {
+    unawaited(focusWindow());
+    unawaited(session.openLocator(path));
   });
-  container.read(accountProvider); // restores a saved sign-in
 }

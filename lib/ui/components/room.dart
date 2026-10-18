@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:clock/clock.dart';
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
@@ -29,13 +30,16 @@ Color skyColor(HousePalette p, SkyPhase s) => switch (s) {
 };
 
 class SkyBand extends StatelessWidget {
-  const SkyBand({super.key});
+  /// The local time the sky shows; the Lobby passes its minute tick so the sky moves while the
+  /// app stays open. Defaults to now.
+  final DateTime? now;
+  const SkyBand({super.key, this.now});
 
   @override
   Widget build(BuildContext context) {
     final h = House.of(context);
     final p = h.palette;
-    final phase = skyPhaseAt(clock.now());
+    final phase = skyPhaseAt(now ?? clock.now());
     final next = SkyPhase.values[(phase.index + 1) % SkyPhase.values.length];
     return IgnorePointer(
       child: AnimatedBuilder(
@@ -143,20 +147,23 @@ class _BeamState extends State<Beam> with TickerProviderStateMixin {
     final h = House.of(context);
     if (h.matinee) return const SizedBox.shrink(); // daylight: no beam, no dust
     final tint = widget.tint ?? h.palette.accent;
-    return IgnorePointer(
-      child: ExcludeSemantics(
-        child: AnimatedBuilder(
-          animation: h.house,
-          builder: (context, _) => CustomPaint(
-            size: Size.infinite,
-            painter: _BeamPainter(
-              shader: _shader,
-              time: _t,
-              width: widget.width + (1 - h.house.value) * 0.46,
-              house: h.house.value,
-              tint: tint,
-              dust: !h.reducedMotion && widget.animate,
-              dprCap: Theme.of(context).platform == TargetPlatform.android ? 1.0 : 1.5,
+    // Its own layer: the 30 fps haze must not repaint the grain, the sky or the cards.
+    return RepaintBoundary(
+      child: IgnorePointer(
+        child: ExcludeSemantics(
+          child: AnimatedBuilder(
+            animation: h.house,
+            builder: (context, _) => CustomPaint(
+              size: Size.infinite,
+              painter: _BeamPainter(
+                shader: _shader,
+                time: _t,
+                width: widget.width + (1 - h.house.value) * 0.46,
+                house: h.house.value,
+                tint: tint,
+                dust: !h.reducedMotion && widget.animate,
+                dprCap: Theme.of(context).platform == TargetPlatform.android ? 1.0 : 1.5,
+              ),
             ),
           ),
         ),
@@ -246,11 +253,14 @@ class Grain extends StatelessWidget {
   Widget build(BuildContext context) {
     final h = House.of(context);
     if (h.reducedMotion) return const SizedBox.shrink();
-    return IgnorePointer(
-      child: ExcludeSemantics(
-        child: Opacity(
-          opacity: h.matinee ? Tokens.grainMatinee : Tokens.grainAuditorium,
-          child: const CustomPaint(size: Size.infinite, painter: _GrainPainter()),
+    // Its own layer, so nothing animating nearby (the beam, a hovered card) repaints it.
+    return RepaintBoundary(
+      child: IgnorePointer(
+        child: ExcludeSemantics(
+          child: Opacity(
+            opacity: h.matinee ? Tokens.grainMatinee : Tokens.grainAuditorium,
+            child: const CustomPaint(size: Size.infinite, painter: _GrainPainter()),
+          ),
         ),
       ),
     );
@@ -260,8 +270,12 @@ class Grain extends StatelessWidget {
 class _GrainPainter extends CustomPainter {
   const _GrainPainter();
 
-  @override
-  void paint(Canvas canvas, Size size) {
+  static const _tileSize = 256;
+  static ui.Image? _tile;
+  static bool _tileFailed = false;
+
+  /// Scatters seeded 1 px specks (one per 90 px², as before) over [size].
+  static void _speckle(Canvas canvas, Size size) {
     final rnd = math.Random(8); // seeded: goldens stay stable
     final light = Paint()..color = const Color(0xFFFFFFFF);
     final dark = Paint()..color = const Color(0xFF000000);
@@ -274,70 +288,150 @@ class _GrainPainter extends CustomPainter {
     }
   }
 
+  /// One 256 px tile, recorded once per process and repeated by an image shader: a single
+  /// draw call instead of up to 40 000 rects per paint.
+  static ui.Image? _grainTile() {
+    if (_tile != null || _tileFailed) return _tile;
+    try {
+      final recorder = ui.PictureRecorder();
+      _speckle(Canvas(recorder), const Size(_tileSize + 0.0, _tileSize + 0.0));
+      final picture = recorder.endRecording();
+      _tile = picture.toImageSync(_tileSize, _tileSize);
+      picture.dispose();
+    } on Object {
+      _tileFailed = true;
+    }
+    return _tile;
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final tile = _grainTile();
+    if (tile == null) {
+      _speckle(canvas, size);
+      return;
+    }
+    canvas.drawRect(
+      Offset.zero & size,
+      Paint()
+        ..shader = ImageShader(
+          tile,
+          TileMode.repeated,
+          TileMode.repeated,
+          Matrix4.identity().storage,
+        ),
+    );
+  }
+
   @override
   bool shouldRepaint(_GrainPainter old) => false;
 }
 
 /// Wall glow from the five bias-light stops: left, right and top radials around the picture.
-class Walls extends StatelessWidget {
+///
+/// The lerp restarts only when the colours really change (a new bias sample), never because the
+/// parent rebuilt; at rest the three gradients sit in their own layer and are not repainted.
+class Walls extends StatefulWidget {
   final List<Color>? stops;
   const Walls({super.key, this.stops});
 
   static const _alphas = [0.14, 0.08, 0.04, 0.02, 0.0];
 
   @override
-  Widget build(BuildContext context) {
-    final p = House.paletteOf(context);
-    final base = stops ?? List.filled(5, p.focus);
-    final boost = stops == null ? 6 / 14 : 1.0; // fallback: --focus at 6 %
-    List<Color> ramp() => [
-      for (var i = 0; i < 5; i++) base[i].withValues(alpha: _alphas[i] * boost),
-    ];
-    Widget glow(Alignment at, AlignmentGeometry align, double wf, double hf) => Align(
-      alignment: align,
-      child: FractionallySizedBox(
-        widthFactor: wf,
-        heightFactor: hf,
-        child: TweenAnimationBuilder<List<Color>>(
-          tween: _StopsTween(end: ramp()),
-          duration: House.of(context).reducedMotion
-              ? const Duration(milliseconds: 1200)
-              : const Duration(milliseconds: 600),
-          builder: (context, colors, _) => DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: RadialGradient(
-                center: at,
-                radius: 1.1,
-                colors: colors,
-                stops: const [0, 0.25, 0.5, 0.72, 1],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-    return IgnorePointer(
-      child: ExcludeSemantics(
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            glow(Alignment.centerRight, Alignment.centerLeft, 0.38, 1),
-            glow(Alignment.centerLeft, Alignment.centerRight, 0.38, 1),
-            glow(Alignment.bottomCenter, Alignment.topCenter, 1, 0.34),
-          ],
-        ),
-      ),
-    );
-  }
+  State<Walls> createState() => _WallsState();
 }
 
-class _StopsTween extends Tween<List<Color>> {
-  _StopsTween({required super.end}) : super(begin: end);
+class _WallsState extends State<Walls> with SingleTickerProviderStateMixin {
+  late final AnimationController _lerp = AnimationController(vsync: this, value: 1);
+  List<Color>? _from;
+  List<Color>? _to;
+
+  List<Color> _ramp() {
+    final p = House.paletteOf(context);
+    final stops = widget.stops;
+    final base = stops != null && stops.length >= 5 ? stops : List.filled(5, p.focus);
+    final boost = identical(base, stops) ? 1.0 : 6 / 14; // fallback: --focus at 6 %
+    return [for (var i = 0; i < 5; i++) base[i].withValues(alpha: Walls._alphas[i] * boost)];
+  }
+
+  List<Color> get _current {
+    final to = _to!;
+    final from = _from ?? to;
+    final t = _lerp.value;
+    if (t >= 1) return to;
+    return [for (var i = 0; i < to.length; i++) Color.lerp(from[i], to[i], t)!];
+  }
+
+  void _sync() {
+    final target = _ramp();
+    final to = _to;
+    if (to == null) {
+      _from = _to = target;
+      return;
+    }
+    if (listEquals(to, target)) return;
+    _from = _current;
+    _to = target;
+    _lerp.duration = House.of(context).reducedMotion
+        ? const Duration(milliseconds: 1200)
+        : const Duration(milliseconds: 600);
+    _lerp.forward(from: 0);
+  }
 
   @override
-  List<Color> lerp(double t) {
-    final a = begin ?? end!;
-    final b = end!;
-    return [for (var i = 0; i < b.length; i++) Color.lerp(a[i], b[i], t)!];
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _sync();
   }
+
+  @override
+  void didUpdateWidget(Walls old) {
+    super.didUpdateWidget(old);
+    _sync();
+  }
+
+  @override
+  void dispose() {
+    _lerp.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => RepaintBoundary(
+    child: IgnorePointer(
+      child: ExcludeSemantics(
+        child: CustomPaint(size: Size.infinite, painter: _WallsPainter(this)),
+      ),
+    ),
+  );
+}
+
+class _WallsPainter extends CustomPainter {
+  final _WallsState state;
+  _WallsPainter(this.state) : super(repaint: state._lerp);
+
+  static const _stops = [0.0, 0.25, 0.5, 0.72, 1.0];
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final colors = state._current;
+    void glow(Rect rect, Alignment at) => canvas.drawRect(
+      rect,
+      Paint()
+        ..shader = RadialGradient(
+          center: at,
+          radius: 1.1,
+          colors: colors,
+          stops: _stops,
+        ).createShader(rect),
+    );
+    final w = size.width;
+    final h = size.height;
+    glow(Rect.fromLTWH(0, 0, w * 0.38, h), Alignment.centerRight);
+    glow(Rect.fromLTWH(w * 0.62, 0, w * 0.38, h), Alignment.centerLeft);
+    glow(Rect.fromLTWH(0, 0, w, h * 0.34), Alignment.bottomCenter);
+  }
+
+  @override
+  bool shouldRepaint(_WallsPainter old) => old.state != state;
 }

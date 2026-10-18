@@ -41,6 +41,41 @@ Future<void> initWindow(MarqueeDatabase db) async {
     await windowManager.focus();
   });
   windowManager.addListener(_BoundsSaver(db));
+  // Closing the window saves the resume point first (see [onWindowClosing]).
+  await windowManager.setPreventClose(true);
+  windowManager.addListener(_CloseGuard());
+}
+
+/// Runs before the window closes (the resume point, the session); the window is destroyed
+/// when it completes, or after two seconds whatever happens.
+Future<void> Function()? onWindowClosing;
+
+class _CloseGuard with WindowListener {
+  bool _closing = false;
+
+  @override
+  void onWindowClose() async {
+    if (_closing) return;
+    _closing = true;
+    try {
+      await onWindowClosing?.call().timeout(const Duration(seconds: 2));
+    } on Object {
+      // Never keep a window the user closed.
+    }
+    await windowManager.destroy();
+  }
+}
+
+/// Brings the window forward (after a drop, or a file forwarded by a second launch).
+Future<void> focusWindow() async {
+  if (!_desktop) return;
+  try {
+    if (await windowManager.isMinimized()) await windowManager.restore();
+    await windowManager.show();
+    await windowManager.focus();
+  } on Object {
+    // Not worth a word.
+  }
 }
 
 class _BoundsSaver with WindowListener {
@@ -51,6 +86,8 @@ class _BoundsSaver with WindowListener {
   void _save() {
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 400), () async {
+      // Fullscreen bounds are the monitor's: restoring them would trap the next launch.
+      if (await windowManager.isFullScreen()) return;
       final r = await windowManager.getBounds();
       await db.writeState('window_bounds', {
         'x': r.left,

@@ -70,8 +70,8 @@ class _ThreadingOverlayState extends ConsumerState<ThreadingOverlay> {
         Leader(state: t, size: wide ? 300 : 220),
         const SizedBox(height: Tokens.space3),
         Text(switch (t.phase) {
-          LeaderPhase.hashing => 'READING THE PRINT',
-          LeaderPhase.searching => 'SEARCHING SUBTITLES',
+          LeaderPhase.hashing => 'READING THE FILE',
+          LeaderPhase.searching => 'LOOKING FOR SUBTITLES',
           LeaderPhase.downloading =>
             'DOWNLOADING ${languageName(t.picked?.candidate.language ?? 'en').toUpperCase()} SUBTITLES',
           _ => 'THREADING',
@@ -118,20 +118,39 @@ class _ThreadingOverlayState extends ConsumerState<ThreadingOverlay> {
       ],
     );
 
+    // The film waits, paused, behind this overlay. There is ALWAYS a way to just watch it.
     return ColoredBox(
-      color: p.bg.withValues(alpha: 0.92),
+      color: p.bg.withValues(alpha: 0.94),
       child: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.all(Tokens.space5),
+          padding: EdgeInsets.fromLTRB(
+            Tokens.space5,
+            Tokens.space5,
+            Tokens.space5,
+            Tokens.space5 + MediaQuery.viewInsetsOf(context).bottom,
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Row(
                 children: [
-                  Text(kThreadingFolio, style: Txt.mono(Tokens.textSm, p.inkMuted)),
+                  IconMark(
+                    icon: 'arrow-left',
+                    label: 'Back to the lobby',
+                    onTap: () => unawaited(ref.read(sessionProvider.notifier).close()),
+                  ),
+                  const SizedBox(width: Tokens.space2),
+                  Flexible(
+                    child: Text(
+                      kThreadingFolio,
+                      overflow: TextOverflow.ellipsis,
+                      style: Txt.mono(Tokens.textSm, p.inkMuted),
+                    ),
+                  ),
                   const Spacer(),
                   TextAction(
-                    'Skip subtitles',
+                    'Play without subtitles',
+                    primary: stalled != null,
                     onTap: () => ref.read(sessionProvider.notifier).skipSubtitles(),
                   ),
                 ],
@@ -174,7 +193,11 @@ class _ThreadingOverlayState extends ConsumerState<ThreadingOverlay> {
       for (final a in s.next)
         switch (a) {
           FallbackAction.signIn => TextAction(
-            'Sign in at the ticket office (free, more tickets)',
+            switch (s.failure) {
+              ThreadingFailure.noApiKey => 'Add your free API key…',
+              ThreadingFailure.unauthorized => 'Sign in again…',
+              _ => 'Sign in for more downloads (free)…',
+            },
             primary: true,
             onTap: () => ref.read(roomProvider.notifier).go(Room.ticketOffice),
           ),
@@ -192,8 +215,10 @@ class _ThreadingOverlayState extends ConsumerState<ThreadingOverlay> {
             child: TextField(
               controller: _manual,
               style: Txt.body(Tokens.textBase, p.ink),
+              scrollPadding: const EdgeInsets.only(bottom: 120),
+              textInputAction: TextInputAction.search,
               decoration: InputDecoration(
-                hintText: 'Type a title and press Enter',
+                hintText: 'Or type the film’s title and press Enter',
                 hintStyle: Txt.body(Tokens.textBase, p.inkFaint),
                 enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: p.borderStrong)),
                 focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: p.accent)),
@@ -201,11 +226,8 @@ class _ThreadingOverlayState extends ConsumerState<ThreadingOverlay> {
               onSubmitted: (q) => unawaited(n.findAnother(q)),
             ),
           ),
-          FallbackAction.skip => TextAction(
-            'Play without subtitles',
-            primary: s.failure == ThreadingFailure.offline,
-            onTap: n.skipSubtitles,
-          ),
+          // Always at the top of the overlay already — never twice.
+          FallbackAction.skip => const SizedBox.shrink(),
         },
     ];
   }
@@ -288,7 +310,7 @@ class _CandidateRow extends StatelessWidget {
                     ],
                   ),
                 ),
-                if (downloading) Text('↓', style: Txt.mono(Tokens.textSm, p.accent)),
+                if (downloading) LucideIcon('download', size: 16, color: p.accent),
               ],
             ),
           ),

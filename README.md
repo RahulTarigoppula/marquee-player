@@ -115,26 +115,32 @@ The same map drives the `?` cue-sheet overlay; both come from `design/cue-sheet.
 | Key | Action |
 |---|---|
 | `Space` | Play / pause |
-| `←` | Back 5 s |
-| `→` | Forward 5 s |
+| `←` | Back 5 s (hold to keep going) |
+| `→` | Forward 5 s (hold to keep going) |
 | `Shift+←` | Back 30 s |
 | `Shift+→` | Forward 30 s |
-| `↑` | Volume up |
+| `0-9` | Jump to 0 %–90 % of the film |
+| `↑` | Volume up (to 150 %) |
 | `↓` | Volume down |
+| `M` | Mute / unmute |
+| `N` | Next film in the folder |
+| `P` | Previous film in the folder |
 | `J` | Subtitles 50 ms earlier |
 | `K` | Subtitles 50 ms later |
 | `Shift+J` | Subtitles 500 ms earlier |
 | `Shift+K` | Subtitles 500 ms later |
 | `,` | Previous frame |
 | `.` | Next frame |
-| `L` | A–B loop |
+| `L` | A–B loop: set A, set B, clear |
 | `[` | Slower (pitch-corrected) |
 | `]` | Faster (pitch-corrected) |
-| `F` | Fullscreen |
+| `F` | Fullscreen (or double-click the picture) |
 | `S` | Subtitle booth |
 | `A` | Next audio track |
+| `Ctrl+O` | Open a film |
+| `MediaPlayPause` / `MediaTrackNext` / `MediaTrackPrevious` | Media keys: play / pause, next, previous film |
 | `?` | This cue sheet |
-| `Esc` | Back one lighting state |
+| `Esc` | Back one lighting state (fullscreen first) |
 
 <!-- cue-sheet:end -->
 
