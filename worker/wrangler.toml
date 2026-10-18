@@ -3,9 +3,9 @@ main = "src/index.ts"
 compatibility_date = "2026-09-01"
 
 # Workers Logs OFF. Leaving this on would retain request metadata server-side, which
-# contradicts "the Worker logs nothing and stores nothing" (GOAL Â§9, ARCHITECTURE Â§9.4/Â§13,
-# IMPLEMENTATION-PROMPT Â§2.5). Never add [[kv_namespaces]], [[d1_databases]] or
-# [[analytics_engine_datasets]] either â€” TESTING P17 greps this file for all four.
+# contradicts "the Worker logs nothing and stores nothing" (GOAL §9, ARCHITECTURE §9.4/§13,
+# IMPLEMENTATION-PROMPT §2.5). Never add [[kv_namespaces]], [[d1_databases]] or
+# [[analytics_engine_datasets]] either — TESTING P17 greps this file for all four.
 [observability]
 enabled = false
 

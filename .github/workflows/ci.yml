@@ -25,9 +25,11 @@ jobs:
         with: { flutter-version: '${{ env.FLUTTER_VERSION }}', channel: stable, cache: true }
       - run: flutter pub get
       - run: dart run build_runner build --delete-conflicting-outputs   # drift: *.g.dart is gitignored
-      - run: dart format --output=none --set-exit-if-changed .
+      # Tracked sources only: build_runner's *.g.dart output is not ours to format.
+      - name: dart format (tracked files)
+        run: git ls-files -z '*.dart' | xargs -0 dart format --output=none --set-exit-if-changed
       - run: flutter analyze --fatal-infos
-      - run: flutter test --coverage
+      - run: flutter test --coverage --reporter github
       - name: Coverage gates
         run: dart run tool/check_coverage.dart coverage/lcov.info
       - uses: actions/upload-artifact@v4
@@ -62,7 +64,7 @@ jobs:
       - run: npm ci
       - run: npx biome ci .          # includes the noConsole rule scoped to worker/
       - run: npx tsc --noEmit
-      - run: npm test                # every Â§7.6 invariant
+      - run: npm test                # every §7.6 invariant
 
   e2e:
     name: playwright
@@ -89,6 +91,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       # Media fixtures (scripts/make-fixtures.sh) join this job once the ffmpeg-built corpus exists.
+      - run: flutter pub get                       # dart format needs the package config
       - name: Design tokens in sync (G9)
         run: node scripts/tokens.mjs && git diff --exit-code web/src/styles/tokens.css lib/theme/tokens.dart
       - name: Engine test parity between Dart and TS
@@ -99,7 +102,6 @@ jobs:
         run: bash tool/check_no_secrets.sh
       - name: Licence allow-list (G1)
         run: |
-          flutter pub get
           dart run build_runner build --delete-conflicting-outputs
           dart run tool/check_licences.dart
 

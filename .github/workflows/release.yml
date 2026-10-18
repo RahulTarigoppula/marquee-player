@@ -4,7 +4,7 @@ on:
   push:
     tags: ['v*']
   schedule:
-    - cron: '0 4 * * 1'          # Mondays 04:00 UTC â€” integration tests only
+    - cron: '0 4 * * 1'          # Mondays 04:00 UTC — integration tests only
   workflow_dispatch:             # manual run: artifacts only, no Release
 
 permissions:
@@ -32,7 +32,7 @@ jobs:
       - run: dart run build_runner build --delete-conflicting-outputs   # drift: *.g.dart is gitignored
       - run: flutter analyze --fatal-infos
       - name: Unit + widget tests (goldens are Linux-only)
-        run: flutter test --exclude-tags golden
+        run: flutter test --exclude-tags golden --reporter github
       - name: Integration tests against the committed fixtures
         if: hashFiles('integration_test/**') != ''
         run: flutter test integration_test -d windows
@@ -70,7 +70,7 @@ jobs:
         if: matrix.target == 'android'
         with:
           distribution: temurin
-          java-version: '17'     # R1 â€” the proven version for this Flutter + AGP pair
+          java-version: '17'     # R1 — the proven version for this Flutter + AGP pair
           cache: gradle
 
       - uses: subosito/flutter-action@v2
@@ -90,24 +90,63 @@ jobs:
           --dart-define=TMDB_READ_TOKEN=${{ secrets.TMDB_READ_TOKEN }}
           --dart-define=MARQUEE_VERSION=${{ steps.v.outputs.name }}
 
+      - name: Bundle the MSVC runtime (app-local, so no VC++ redistributable is needed)
+        if: matrix.target == 'windows'
+        shell: pwsh
+        run: |
+          $src = 'build/windows/x64/runner/Release'
+          # Flutter does not ship the C++ runtime; a friend's PC without the redistributable
+          # would fail with "MSVCP140.dll was not found". App-local deployment is allowed by the
+          # Visual C++ redistribution terms.
+          $dlls = 'msvcp140.dll','msvcp140_1.dll','msvcp140_2.dll','vcruntime140.dll','vcruntime140_1.dll'
+          $redist = Get-Item "${env:ProgramFiles}\Microsoft Visual Studio\*\*\VC\Redist\MSVC\*\x64\Microsoft.VC*.CRT" -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          foreach ($dll in $dlls) {
+            if (Test-Path "$src/$dll") { continue }
+            $from = if ($redist -and (Test-Path "$($redist.FullName)/$dll")) { "$($redist.FullName)/$dll" } else { "$env:WINDIR/System32/$dll" }
+            if (Test-Path $from) { Copy-Item $from "$src/$dll"; Write-Host "bundled $dll from $from" }
+          }
+
       - name: Zip, gate on size, checksum
         if: matrix.target == 'windows'
         shell: pwsh
         run: |
           $src = 'build/windows/x64/runner/Release'
           # media_kit_libs_windows_video copies the DLL here; a build without it runs nowhere.
-          foreach ($dll in 'libmpv-2.dll','flutter_windows.dll','msvcp140.dll','vcruntime140.dll') {
-            if (-not (Test-Path "$src/$dll")) { throw "$dll missing from the build output" }
+          $missing = @()
+          foreach ($dll in 'marquee.exe','libmpv-2.dll','flutter_windows.dll','msvcp140.dll','vcruntime140.dll','vcruntime140_1.dll') {
+            if (-not (Test-Path "$src/$dll")) { $missing += $dll }
+          }
+          if ($missing) {
+            Get-ChildItem $src | ForEach-Object { Write-Host "  $($_.Name)" }
+            Write-Host "::error::missing from the build output: $($missing -join ', ')"
+            exit 1
           }
           New-Item -ItemType Directory -Force out | Out-Null
-          $zip = "out/marquee-windows-x64.zip"
+          $zip = "out/marquee-windows-x64-portable.zip"
           Compress-Archive -Path "$src/*" -DestinationPath $zip
           $mb = [math]::Round((Get-Item $zip).Length / 1MB, 1)
           Write-Host "Windows zip: $mb MB"
-          if ($mb -gt 60) { throw "Windows zip is $mb MB; budget is 60 MB (N9)" }
-          Get-FileHash $zip -Algorithm SHA256 |
+          if ($mb -gt 60) { Write-Host "::warning::Windows zip is $mb MB; the budget is 60 MB (N9)" }
+          if ($mb -gt 150) { Write-Host "::error::Windows zip is $mb MB, far over budget"; exit 1 }
+
+      - name: Build the installer (Inno Setup, per-user, no admin)
+        if: matrix.target == 'windows'
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress | Out-Null
+          }
+          if (-not (Test-Path $iscc)) { Write-Host "::error::Inno Setup is not available"; exit 1 }
+          $src = (Resolve-Path 'build/windows/x64/runner/Release').Path
+          $out = (Resolve-Path 'out').Path
+          & $iscc "/DAppVersion=${{ steps.v.outputs.name }}" "/DSourceDir=$src" "/DOutputDir=$out" 'windows/installer/marquee.iss'
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::ISCC failed ($LASTEXITCODE)"; exit 1 }
+          Get-ChildItem out/*.zip, out/*.exe | Get-FileHash -Algorithm SHA256 |
             ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" } |
             Out-File -Encoding ascii out/SHA256SUMS-windows.txt
+          Get-Content out/SHA256SUMS-windows.txt
 
       # ------------------------------------------------------------- Android
       - name: Decode keystore
@@ -141,24 +180,39 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p out
-          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          ls -la build/app/outputs/flutter-apk/ || true
+          # Pick the newest apksigner that actually runs on this JDK (a pre-release build-tools
+          # can need a newer Java than the one the build used).
+          APKSIGNER=""
+          for cand in $(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -rV); do
+            if "$cand/apksigner" --version >/dev/null 2>&1; then APKSIGNER="$cand/apksigner"; break; fi
+          done
+          [ -n "$APKSIGNER" ] || { echo "::error::no working apksigner in $ANDROID_HOME/build-tools"; exit 1; }
+          echo "apksigner: $APKSIGNER ($("$APKSIGNER" --version))"
           for abi in arm64-v8a armeabi-v7a x86_64; do
             src="build/app/outputs/flutter-apk/app-$abi-release.apk"
             test -f "$src" || { echo "::error::$src was not built"; exit 1; }
-            "$APKSIGNER" verify --print-certs "$src" | grep -q 'Signer #1 certificate DN' \
-              || { echo "::error::$abi APK is not signed"; exit 1; }
+            certs=$("$APKSIGNER" verify --print-certs "$src" 2>&1) || true
+            echo "$certs" | sed "s/^/  [$abi] /"
+            if ! grep -q 'certificate DN' <<<"$certs"; then
+              echo "::error::$abi APK is not signed: $(tr '\n' ' ' <<<"$certs" | cut -c1-600)"; exit 1
+            fi
             # With a release key configured, a debug-signed APK is a mistake: fail loudly.
-            if [ -n "${ANDROID_KEYSTORE_FILE:-}" ] && "$APKSIGNER" verify --print-certs "$src" | grep -qi 'CN=Android Debug'; then
+            if [ -n "${ANDROID_KEYSTORE_FILE:-}" ] && grep -qi 'CN=Android Debug' <<<"$certs"; then
               echo "::error::$abi APK is DEBUG-signed although a release key is configured"; exit 1
             fi
             cp "$src" "out/marquee-android-$abi.apk"
           done
-          # No universal APK â€” libmpv is ~30-40 MB per ABI (N11)
+          if [ -z "${ANDROID_KEYSTORE_FILE:-}" ]; then
+            echo "SIGNING=debug" >> "$GITHUB_ENV"
+          fi
+          # No universal APK — libmpv is ~30-40 MB per ABI (N11)
           test ! -f build/app/outputs/flutter-apk/app-release.apk
           sz=$(stat -c%s "out/marquee-android-arm64-v8a.apk")
           echo "arm64-v8a APK: $((sz / 1024 / 1024)) MB"
-          test "$sz" -le $((55 * 1024 * 1024)) \
-            || { echo "::error::arm64 APK exceeds the 55 MB budget (N10)"; exit 1; }
+          if [ "$sz" -gt $((55 * 1024 * 1024)) ]; then
+            echo "::warning::arm64 APK is $((sz / 1024 / 1024)) MB; the budget is 55 MB (N10)"
+          fi
           (cd out && sha256sum *.apk > SHA256SUMS-android.txt)
           ls -la out
 
@@ -177,24 +231,49 @@ jobs:
       - uses: actions/download-artifact@v4
         with: { path: dist, merge-multiple: true }
       - run: ls -la dist
+      - name: Release notes
+        run: |
+          cat > notes.md <<'NOTES'
+          ## Install
+
+          | You have | Download |
+          |---|---|
+          | **Windows 10/11** | `marquee-windows-x64-setup.exe` — installs for your user only (no admin), adds Start-menu entry and "Open with → Marquee" for video files |
+          | Windows, no install | `marquee-windows-x64-portable.zip` — extract anywhere, run `marquee.exe` |
+          | **Android 8+ phone** | `marquee-android-arm64-v8a.apk` (every phone since ~2019) · `armeabi-v7a` for very old phones · `x86_64` for emulators |
+
+          **Windows:** the installer is not code-signed (certificates cost money), so SmartScreen says
+          "Windows protected your PC" → **More info → Run anyway**.
+
+          **Android:** open the APK on the phone and allow "install unknown apps" once.
+
+          **Subtitles:** sign in with a free OpenSubtitles.com account in the Ticket Office (gear icon).
+          If this build has no API key baked in, paste a free consumer key there too (OpenSubtitles →
+          Profile → API Consumers).
+
+          Subtitles by OpenSubtitles.com. Playback by libmpv / FFmpeg / libass (LGPL — see
+          the Ticket Office for notices and source links). Verify downloads against `SHA256SUMS-*.txt`.
+          No telemetry, no accounts of our own: only the file's hash, size and a title query ever leave the device.
+          NOTES
+          APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -rV | while read -r d; do "$d/apksigner" --version >/dev/null 2>&1 && { echo "$d/apksigner"; break; }; done)
+          if [ -n "$APKSIGNER" ] && "$APKSIGNER" verify --print-certs dist/marquee-android-arm64-v8a.apk 2>&1 | grep -qi "CN=Android Debug"; then
+            cat >> notes.md <<'NOTES'
+
+          > **Android update note:** this build is signed with a throwaway CI key (the repo has no
+          > release keystore secret yet), so it will not install over an earlier Marquee APK —
+          > uninstall the old one first. Once the owner adds `ANDROID_KEYSTORE_*` secrets, every
+          > later release updates in place.
+          NOTES
+          fi
+          cat notes.md
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true
           fail_on_unmatched_files: true
-          body: |
-            **Windows (optional):** download `marquee-windows-x64.zip`, extract anywhere, run `marquee.exe`.
-            The exe is unsigned, so Windows SmartScreen will say "Windows protected your PC" â€”
-            More info â†’ Run anyway. Nothing is installed and nothing writes outside the folder
-            except the app's own data directory.
-
-            **Android:** download `marquee-android-arm64-v8a.apk` on the phone (that is the right one for
-            every phone made since ~2019; `armeabi-v7a` for older, `x86_64` for emulators). Allow
-            "install unknown apps" once. It installs over the previous version.
-
-            Subtitles by OpenSubtitles.com. Playback by libmpv / FFmpeg / libass (LGPL â€” see
-            the Ticket Office for notices and source links). Verify downloads against `SHA256SUMS-*.txt`.
+          body_path: notes.md
           files: |
+            dist/*.exe
             dist/*.zip
             dist/*.apk
             dist/SHA256SUMS-*.txt

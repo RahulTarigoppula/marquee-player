@@ -1,8 +1,8 @@
-// Marquee Lite â€” wiring. One AppState, DOM updates by CSS custom properties and textContent,
+// Marquee Lite — wiring. One AppState, DOM updates by CSS custom properties and textContent,
 // three overlays toggled with `hidden`. The ritual:
-//   drop â†’ capability probe â†’ moviehash â†’ IndexedDB (a hit costs ZERO requests) â†’ search â†’
-//   score â†’ auto-pick â†’ download (signed in, via the Worker) â†’ subtitle-file â†’ SRTâ†’VTT â†’
-//   <track> via a Blob URL â†’ play.
+//   drop → capability probe → moviehash → IndexedDB (a hit costs ZERO requests) → search →
+//   score → auto-pick → download (signed in, via the Worker) → subtitle-file → SRT→VTT →
+//   <track> via a Blob URL → play.
 import './styles/tokens.css'
 import './styles/app.css'
 import { API_BASE, releasesUrl } from './config'
@@ -53,7 +53,7 @@ const RESYNC_DEBOUNCE_MS = 120
 const root = document.documentElement
 const now = () => performance.now()
 
-// â”€â”€ state â”€â”€
+// ── state ──
 const app = {
   session: {
     jwt: null,
@@ -100,7 +100,7 @@ const api = createApi({
   jwt: () => app.session.jwt,
 })
 
-// â”€â”€ views â”€â”€
+// ── views ──
 const openOffice = () => office.open(app.user)
 const strips = [ticketStrip(openOffice), ticketStrip(openOffice), ticketStrip()]
 const [landingStrip, leaderStrip, officeStrip] = strips as [
@@ -163,7 +163,7 @@ document.body.append(
   office.el,
 )
 
-// â”€â”€ rendering â”€â”€
+// ── rendering ──
 function renderStrips(): void {
   const strip = stripModel(app.session.quota, { now: new Date(), pendingTear: app.pendingTear })
   const q = app.session.quota
@@ -180,7 +180,7 @@ function render(): void {
   renderStrips()
 }
 
-// â”€â”€ the machine driver â”€â”€
+// ── the machine driver ──
 function dispatch(e: ThreadingEvent): void {
   const wasPending = isPending()
   const step = reduce(app.machine, e)
@@ -238,11 +238,11 @@ function perform(effect: Effect): void {
   }
 }
 
-// â”€â”€ effects â”€â”€
+// ── effects ──
 async function openFile(file: File): Promise<void> {
   if (isSubtitleName(file.name)) {
     if (app.file && !aud.el.hidden) await attachSidecar(file)
-    else lite.setSentence("That's a subtitle file â€” open the film first, then drop its subtitles.")
+    else lite.setSentence("That's a subtitle file — open the film first, then drop its subtitles.")
     return
   }
   teardown()
@@ -251,7 +251,7 @@ async function openFile(file: File): Promise<void> {
   app.parsed = parsePath(file.name)
   app.hash = null
   app.printOk = null
-  root.dataset.house = 'down' // the ONE tween: --house 1 â†’ 0 over 900 ms
+  root.dataset.house = 'down' // the ONE tween: --house 1 → 0 over 900 ms
   lead.setMeta(file.size)
   lead.el.hidden = false
   app.videoUrl = URL.createObjectURL(file)
@@ -288,7 +288,7 @@ async function doHash(): Promise<void> {
   try {
     hash = await osHash(file)
   } catch (e) {
-    // < 128 KiB or unreadable: SILENT â€” "3" completes and "2" searches by name.
+    // < 128 KiB or unreadable: SILENT — "3" completes and "2" searches by name.
     if (!isFileTooSmall(e) && !(e instanceof HashUnavailable)) throw e
   }
   if (app.file !== file) return
@@ -297,7 +297,7 @@ async function doHash(): Promise<void> {
   const lang = app.session.languages[0] ?? 'en'
   const cached = hash ? await idb.subtitles.get(hash, lang).catch(() => undefined) : undefined
   if (cached) {
-    // Rung 0b: re-attach from IndexedDB â€” zero requests, zero tickets, works offline.
+    // Rung 0b: re-attach from IndexedDB — zero requests, zero tickets, works offline.
     app.cues = parseSrt(cached.vttText)
     app.inSync = cached.syncedByHash
     applyTrack()
@@ -355,7 +355,7 @@ async function doDownload(sc: ScoredCandidate): Promise<void> {
   }
   const cues = parseSrt(file.value)
   if (cues.length === 0) {
-    app.sentence = 'That print was empty â€” pick another.'
+    app.sentence = 'That print was empty — pick another.'
     dispatch({ type: 'failed', at: now(), failure: 'no-results' })
     return
   }
@@ -390,7 +390,7 @@ async function doDownload(sc: ScoredCandidate): Promise<void> {
   })
 }
 
-// â”€â”€ subtitles on the picture â”€â”€
+// ── subtitles on the picture ──
 function applyTrack(): void {
   const video = aud.video
   for (const t of video.querySelectorAll('track')) t.remove()
@@ -415,7 +415,7 @@ function applyTrack(): void {
     [
       {
         id: 'marquee',
-        label: `${lang.toUpperCase()} Â· Marquee`,
+        label: `${lang.toUpperCase()} · Marquee`,
         status: app.inSync ? 'synced' : 'by-name',
       },
     ],
@@ -462,7 +462,7 @@ function setDelay(v: number, remember = true): void {
     void idb.offsets.put(offsets.remember(app.hash, app.delay)).catch(() => undefined)
 }
 
-// â”€â”€ lighting states â”€â”€
+// ── lighting states ──
 function enterAuditorium(withSubtitles: boolean): void {
   if (app.printOk === false || !app.file) return
   lead.el.hidden = true
@@ -531,7 +531,7 @@ async function showNoPrint(file: File): Promise<void> {
       const note = card.querySelector('[data-webcodecs-note]')
       if (note)
         note.textContent =
-          "This build's WebCodecs path can't demux this container yet â€” the native builds can."
+          "This build's WebCodecs path can't demux this container yet — the native builds can."
     },
     onOpenAnother: () => {
       leaveAuditorium()
@@ -543,7 +543,7 @@ async function showNoPrint(file: File): Promise<void> {
   card.querySelector<HTMLElement>('.btn')?.focus()
 }
 
-// â”€â”€ the ticket office â”€â”€
+// ── the ticket office ──
 async function login(
   username: string,
   password: string,
@@ -573,7 +573,7 @@ async function signOut(): Promise<void> {
 const persistSession = () =>
   idb.saveSession(app.session, app.user, app.sessionOnly).catch(() => undefined)
 
-// â”€â”€ startup â”€â”€
+// ── startup ──
 async function probe(): Promise<Capability> {
   const v = document.createElement('video')
   app.capability = await probeCapability({
