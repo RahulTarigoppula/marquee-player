@@ -23,8 +23,8 @@ jobs:
     runs-on: ubuntu-24.04
     defaults: { run: { working-directory: worker } }
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with: { node-version: 22, cache: npm, cache-dependency-path: worker/package-lock.json }
       - run: npm ci
       - name: Live contract test (search-only unless the probe is requested)
@@ -35,7 +35,7 @@ jobs:
         env:
           OS_API_KEY: ${{ secrets.OS_API_KEY }}
           RUN_DOWNLOAD_PROBE: ${{ inputs.download_probe && '1' || '' }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: observed-limits
