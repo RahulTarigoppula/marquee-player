@@ -20,7 +20,7 @@ jobs:
     name: analyze + dart tests + goldens
     runs-on: ubuntu-24.04        # goldens are generated on Linux ONLY
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: subosito/flutter-action@v2
         with: { flutter-version: '${{ env.FLUTTER_VERSION }}', channel: stable, cache: true }
       - run: flutter pub get
@@ -32,7 +32,7 @@ jobs:
       - run: flutter test --coverage --reporter github --exclude-tags screenshot
       - name: Coverage gates
         run: dart run tool/check_coverage.dart coverage/lcov.info
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with: { name: golden-failures, path: test/**/failures/, retention-days: 7, if-no-files-found: ignore }
 
@@ -41,8 +41,8 @@ jobs:
     runs-on: ubuntu-24.04
     defaults: { run: { working-directory: web } }
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with: { node-version: 22, cache: npm, cache-dependency-path: web/package-lock.json }
       - run: npm ci
       - run: npx biome ci .
@@ -58,8 +58,8 @@ jobs:
     runs-on: ubuntu-24.04
     defaults: { run: { working-directory: worker } }
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with: { node-version: 22, cache: npm, cache-dependency-path: worker/package-lock.json }
       - run: npm ci
       - run: npx biome ci .          # includes the noConsole rule scoped to worker/
@@ -71,13 +71,13 @@ jobs:
     runs-on: ubuntu-24.04
     defaults: { run: { working-directory: web } }
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with: { node-version: 22, cache: npm, cache-dependency-path: web/package-lock.json }
       - run: npm ci
       - run: npx playwright install --with-deps chromium firefox
       - run: npx playwright test
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with: { name: playwright-report, path: web/playwright-report/, retention-days: 7, if-no-files-found: ignore }
 
@@ -85,10 +85,10 @@ jobs:
     name: tokens, parity, cue sheet, licences, secrets
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: subosito/flutter-action@v2
         with: { flutter-version: '${{ env.FLUTTER_VERSION }}', channel: stable, cache: true }
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with: { node-version: 22 }
       # Media fixtures (scripts/make-fixtures.sh) join this job once the ffmpeg-built corpus exists.
       - run: flutter pub get                       # dart format needs the package config
@@ -111,8 +111,8 @@ jobs:
     continue-on-error: true      # advisory until the budgets have a baseline
     defaults: { run: { working-directory: web } }
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with: { node-version: 22, cache: npm, cache-dependency-path: web/package-lock.json }
       - run: npm ci
       - run: npm run build
