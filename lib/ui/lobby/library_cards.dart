@@ -143,7 +143,9 @@ class _DeviceFrameState extends ConsumerState<_DeviceFrame> {
     final item = widget.item;
     scheduleMicrotask(() {
       if (!mounted) return;
-      _queue = ref.read(libraryThumbQueueProvider)..request(item);
+      final queue = ref.read(libraryThumbQueueProvider);
+      _queue = queue;
+      queue.request(item);
     });
   }
 

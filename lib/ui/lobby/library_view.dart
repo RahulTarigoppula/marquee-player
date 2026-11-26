@@ -101,7 +101,23 @@ class _LibraryPaneState extends ConsumerState<LibraryPane> {
     return false;
   }
 
-  void _refresh() => unawaited(ref.read(deviceLibraryProvider.notifier).refresh());
+  void _refresh() => unawaited(_lookAgain());
+
+  /// F5, the refresh button, "Look again". There is no spinner, so the answer is said: one
+  /// quiet sentence when the scan is back.
+  Future<void> _lookAgain() async {
+    final library = ref.read(deviceLibraryProvider.notifier);
+    final notice = ref.read(noticeProvider.notifier);
+    final before = ref.read(deviceLibraryProvider).value?.items.length ?? 0;
+    await library.refresh();
+    if (!mounted) return;
+    final found = (ref.read(deviceLibraryProvider).value?.items.length ?? 0) - before;
+    notice.show(
+      found > 0
+          ? (found == 1 ? 'Found 1 new video.' : 'Found $found new videos.')
+          : 'Your library is up to date.',
+    );
+  }
 
   Future<void> _sortMenu(Offset at) async {
     final current = ref.read(settingsValueProvider).librarySort;
@@ -271,15 +287,25 @@ class _LibraryPaneState extends ConsumerState<LibraryPane> {
     );
   }
 
-  /// A note that fills what is left of the screen under the header, centred.
-  Widget _fill(Widget child) => SliverFillRemaining(
-    hasScrollBody: false,
-    child: Padding(
-      padding: EdgeInsets.symmetric(horizontal: widget.margin, vertical: Tokens.space6),
-      child: Center(
-        child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 520), child: child),
-      ),
-    ),
+  /// A note centred in what is left of the screen under the header (and simply as tall as it
+  /// needs to be when that is not enough: the page scrolls). Sized from the sliver's own
+  /// constraints rather than SliverFillRemaining, which would measure the note's intrinsic
+  /// height on every layout.
+  Widget _fill(Widget child) => SliverLayoutBuilder(
+    builder: (context, constraints) {
+      final rest = constraints.viewportMainAxisExtent - constraints.precedingScrollExtent;
+      return SliverToBoxAdapter(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: rest > 0 ? rest : 0),
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: widget.margin, vertical: Tokens.space6),
+            child: Center(
+              child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 520), child: child),
+            ),
+          ),
+        ),
+      );
+    },
   );
 
   /// Folders or videos, as lazy list rows or a lazy grid of as many columns as fit.

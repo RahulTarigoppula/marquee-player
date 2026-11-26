@@ -118,6 +118,19 @@ class DeviceLibraryNotifier extends AsyncNotifier<DeviceLibrary> {
       _first?.cancel();
       _probeFlush?.cancel();
     });
+    // Listeners first, before anything is awaited.
+    if (source == LibrarySource.folders) {
+      // A folder added or removed (here or in Settings) rescans. The first load is not a
+      // change: the start-up scan below covers it.
+      ref.listen(libraryFoldersProvider, (prev, next) {
+        if (prev?.value != null && next.value != null && !_same(prev!.value!, next.value!)) {
+          unawaited(refresh());
+        }
+      });
+    }
+    ref.listen(sessionProvider.select((s) => s != null), (_, playing) {
+      if (!playing && _stale) unawaited(refresh());
+    });
     List<LibraryItem>? cached;
     var asked = false;
     try {
@@ -136,18 +149,6 @@ class DeviceLibraryNotifier extends AsyncNotifier<DeviceLibrary> {
       }
     }
 
-    if (source == LibrarySource.folders) {
-      // A folder added or removed (here or in Settings) rescans. The first load is not a
-      // change: the start-up scan below covers it.
-      ref.listen(libraryFoldersProvider, (prev, next) {
-        if (prev?.value != null && next.value != null && !_same(prev!.value!, next.value!)) {
-          unawaited(refresh());
-        }
-      });
-    }
-    ref.listen(sessionProvider.select((s) => s != null), (_, playing) {
-      if (!playing && _stale) unawaited(refresh());
-    });
     // After the frame that shows the cache, never before it.
     _first = Timer(const Duration(milliseconds: 250), () => unawaited(refresh()));
     return DeviceLibrary(
