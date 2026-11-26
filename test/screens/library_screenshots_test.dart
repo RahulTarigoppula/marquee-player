@@ -57,7 +57,11 @@ Future<void> _library(
       libraryFolders: android ? const [] : _windowsFolders,
       lobbyView: LobbyView(tab: LobbyTab.library, allVideos: allVideos),
     ),
-    act: act,
+    // Two more frames than the Home tab needs: the tab, then the library, then its frames.
+    act: (t) async {
+      await _settle(t);
+      await act?.call(t);
+    },
   );
 }
 
@@ -83,6 +87,8 @@ Future<void> _empty(
     librarySuggestions: suggestions,
     lobbyView: const LobbyView(tab: LobbyTab.library),
   ),
+  // The folder list and the suggestions arrive a frame after the library itself.
+  act: _settle,
 );
 
 Future<void> _settle(WidgetTester t) async {
@@ -91,8 +97,9 @@ Future<void> _settle(WidgetTester t) async {
 }
 
 Future<void> _openFolder(WidgetTester t, String path) async {
-  final folder = find.byKey(ValueKey('folder-$path'));
-  // On a short screen the card can be built but below the fold: a tap there would miss.
+  // On a short screen the card can be built but below the fold, which finders skip by default
+  // (and a tap there would miss): find it anyway and bring it into view.
+  final folder = find.byKey(ValueKey('folder-$path'), skipOffstage: false);
   await t.ensureVisible(folder);
   await t.pump(const Duration(milliseconds: 300));
   await t.tap(folder);

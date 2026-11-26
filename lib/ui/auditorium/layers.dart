@@ -1,7 +1,8 @@
 // The Auditorium's layers that are not the gesture surface: the picture, the controls (the
-// only part the 10 Hz playback stream rebuilds), the "Skip intro" pill, the video details
-// overlay and the "can't be projected" card. Each one watches exactly what it draws, so the
-// screen itself (auditorium_screen.dart: state, keys, gestures) never rebuilds on a clock tick.
+// only part the 10 Hz playback stream rebuilds), the seek bar's preview picture, the "Skip
+// intro" pill, the video details overlay and the "can't be projected" card. Each one watches
+// exactly what it draws, so the screen itself (auditorium_screen.dart: state, keys, gestures)
+// never rebuilds on a clock tick.
 import 'dart:async';
 import 'dart:io' show Platform;
 
@@ -14,6 +15,7 @@ import '../../engine/models/models.dart';
 import '../../engine/playback.dart';
 import '../../platform/window.dart';
 import '../../player/engine.dart';
+import '../../player/preview.dart';
 import '../../state/providers.dart';
 import '../../state/session.dart';
 import '../../theme/house.dart';
@@ -104,6 +106,7 @@ class ControlsLayer extends ConsumerStatefulWidget {
   final FilmSession session;
   final bool desktop, fullscreen, syncOpen;
   final AuditoriumMenu? menu;
+  final FilmOrientation orientation;
   final ControlsActions actions;
   const ControlsLayer({
     super.key,
@@ -113,6 +116,7 @@ class ControlsLayer extends ConsumerStatefulWidget {
     required this.syncOpen,
     required this.menu,
     required this.actions,
+    this.orientation = FilmOrientation.auto,
   });
 
   @override
@@ -121,6 +125,47 @@ class ControlsLayer extends ConsumerStatefulWidget {
 
 class _ControlsLayerState extends ConsumerState<ControlsLayer> {
   double? _scrub;
+
+  // The seek bar's preview frames (see lib/player/preview.dart): asked of the session on the
+  // first hover, and only ever rebuilt here when a frame becomes (or stops being) available.
+  SeekPreview? _preview;
+  StreamSubscription<bool>? _previewReady;
+
+  @override
+  void didUpdateWidget(ControlsLayer old) {
+    super.didUpdateWidget(old);
+    if (old.session.engine != widget.session.engine) _dropPreview(); // it went with its film
+  }
+
+  @override
+  void dispose() {
+    _dropPreview();
+    super.dispose();
+  }
+
+  void _dropPreview() {
+    unawaited(_previewReady?.cancel());
+    _previewReady = null;
+    _preview = null;
+  }
+
+  /// The pointer is over the seek bar at [seconds]: aim the preview there. Nothing is
+  /// rebuilt: the frame arrives on the preview's own texture.
+  void _aimPreview(double seconds) {
+    // Asked every time: the session knows when this film has none (a stream, a phone, a
+    // preview that failed, the setting switched off a moment ago).
+    final preview = ref.read(sessionProvider.notifier).seekPreview();
+    if (!identical(preview, _preview)) {
+      final shown = _preview?.ready.value ?? false;
+      _dropPreview();
+      _preview = preview;
+      _previewReady = preview?.ready.changes.listen((_) {
+        if (mounted) setState(() {});
+      });
+      if (shown && mounted) setState(() {}); // the frame that was showing is gone
+    }
+    preview?.show(Duration(milliseconds: (seconds * 1000).round()));
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -132,7 +177,12 @@ class _ControlsLayerState extends ConsumerState<ControlsLayer> {
     final dur = pb.duration.inMilliseconds / 1000;
     final a = widget.actions;
     final attached = s.threading.attached;
+    final preview = _preview;
+    final frames = preview != null && preview.usable && preview.ready.value
+        ? preview.controller
+        : null;
     return AuditoriumControls(
+      seekPreview: frames == null ? null : PreviewPicture(controller: frames),
       data: ControlsData(
         title: s.displayTitle,
         position: _scrub ?? pb.position.inMilliseconds / 1000,
@@ -164,6 +214,7 @@ class _ControlsLayerState extends ConsumerState<ControlsLayer> {
         pinned: ref.watch(pinnedProvider),
         seekStep: prefs.step,
         showRemaining: prefs.remaining,
+        orientation: widget.orientation,
         openMenu: widget.menu,
         syncOpen: widget.syncOpen,
       ),
@@ -193,6 +244,9 @@ class _ControlsLayerState extends ConsumerState<ControlsLayer> {
         onPip: a.onPip,
         onCueSheet: a.onCueSheet,
         onToggleClock: a.onToggleClock,
+        onLock: a.onLock,
+        onRotate: a.onRotate,
+        onSeekHover: _aimPreview,
       ),
       syncRule: widget.syncOpen
           ? Padding(
@@ -205,6 +259,25 @@ class _ControlsLayerState extends ConsumerState<ControlsLayer> {
           : null,
     );
   }
+}
+
+/// The preview player's picture, for the bubble above the seek bar. It never holds the
+/// screen awake and never follows the app to the background: it is a still, not a film.
+class PreviewPicture extends StatelessWidget {
+  final VideoController controller;
+  const PreviewPicture({super.key, required this.controller});
+
+  @override
+  Widget build(BuildContext context) => RepaintBoundary(
+    child: Video(
+      controller: controller,
+      controls: NoVideoControls,
+      fill: Tokens.pictureBg,
+      wakelock: false,
+      pauseUponEnteringBackgroundMode: false,
+      subtitleViewConfiguration: const SubtitleViewConfiguration(visible: false),
+    ),
+  );
 }
 
 /// "Skip intro" / "Skip recap" / "Skip credits" / "Next episode", while the film is inside
@@ -258,7 +331,17 @@ class SkipChapterButton extends ConsumerWidget {
 class LiveVideoDetails extends StatefulWidget {
   final PlayerEngine engine;
   final VoidCallback onClose;
-  const LiveVideoDetails({super.key, required this.engine, required this.onClose});
+
+  /// Two columns in [maxWidth] (see [VideoDetailsPanel.wide]).
+  final bool wide;
+  final double maxWidth;
+  const LiveVideoDetails({
+    super.key,
+    required this.engine,
+    required this.onClose,
+    this.wide = false,
+    this.maxWidth = 400,
+  });
 
   @override
   State<LiveVideoDetails> createState() => _LiveVideoDetailsState();
@@ -296,7 +379,12 @@ class _LiveVideoDetailsState extends State<LiveVideoDetails> {
   }
 
   @override
-  Widget build(BuildContext context) => VideoDetailsPanel(lines: _lines, onClose: widget.onClose);
+  Widget build(BuildContext context) => VideoDetailsPanel(
+    lines: _lines,
+    onClose: widget.onClose,
+    wide: widget.wide,
+    maxWidth: widget.maxWidth,
+  );
 }
 
 /// A film libmpv could not open: one sentence and the way out.

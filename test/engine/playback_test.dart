@@ -128,6 +128,169 @@ void main() {
     });
   });
 
+  group('touch gestures', () {
+    test('a full-width swipe covers 90 s of an episode and up to 5 min of a long film', () {
+      expect(swipeSeekSpan(24 * 60), 90);
+      expect(swipeSeekSpan(60 * 60), 180);
+      expect(swipeSeekSpan(100 * 60), 300);
+      expect(swipeSeekSpan(4 * 3600), 300);
+    });
+
+    test('never covers more than the film itself, and guesses for a live stream', () {
+      expect(swipeSeekSpan(20), 20);
+      expect(swipeSeekSpan(0), 90);
+      expect(swipeSeekSpan(-1), 90);
+      expect(swipeSeekSpan(double.nan), 90);
+    });
+
+    test('turns a swipe into a target time', () {
+      // An episode: half the width is 45 s.
+      expect(
+        swipeSeekTarget(startSeconds: 600, dragPx: 180, widthPx: 360, durationSeconds: 1440),
+        closeTo(645, 0.001),
+      );
+      expect(
+        swipeSeekTarget(startSeconds: 600, dragPx: -360, widthPx: 360, durationSeconds: 1440),
+        closeTo(510, 0.001),
+      );
+    });
+
+    test('stops a swipe at the start and one second short of the end', () {
+      expect(
+        swipeSeekTarget(startSeconds: 20, dragPx: -900, widthPx: 360, durationSeconds: 1440),
+        0,
+      );
+      expect(
+        swipeSeekTarget(startSeconds: 1400, dragPx: 900, widthPx: 360, durationSeconds: 1440),
+        1439,
+      );
+      expect(swipeSeekTarget(startSeconds: 0.2, dragPx: 50, widthPx: 100, durationSeconds: 0.8), 0);
+    });
+
+    test('lets a swipe run on while the length is unknown, and ignores a room with no width', () {
+      expect(
+        swipeSeekTarget(startSeconds: 50, dragPx: 360, widthPx: 360, durationSeconds: 0),
+        closeTo(140, 0.001),
+      );
+      expect(swipeSeekTarget(startSeconds: 50, dragPx: 99, widthPx: 0, durationSeconds: 600), 50);
+      expect(
+        swipeSeekTarget(startSeconds: 50, dragPx: double.nan, widthPx: 360, durationSeconds: 600),
+        50,
+      );
+    });
+
+    test('prints how far a swipe has moved the film', () {
+      expect(signedClock(42), '+0:42');
+      expect(signedClock(-65.4), '-1:05');
+      expect(signedClock(0), '+0:00');
+      expect(signedClock(-0.2), '+0:00');
+      expect(signedClock(3725), '+1:02:05');
+      expect(signedClock(double.nan), '+0:00');
+    });
+
+    test('reads no direction into a drag until it has gone far enough', () {
+      expect(swipeAxis(10, 5), isNull);
+      expect(swipeAxis(0, -23), isNull);
+    });
+
+    test('needs clear intent for a sideways swipe', () {
+      expect(swipeAxis(40, 6), SwipeAxis.horizontal);
+      expect(swipeAxis(-40, -20), SwipeAxis.horizontal);
+      expect(swipeAxis(6, 40), SwipeAxis.vertical);
+      expect(swipeAxis(-20, -30), SwipeAxis.vertical);
+      // A diagonal is nobody's: it must not seek and must not change the volume.
+      expect(swipeAxis(30, 24), SwipeAxis.neither);
+      expect(swipeAxis(-28, 26), SwipeAxis.neither);
+    });
+
+    test('splits the picture into thirds for taps', () {
+      expect(tapZone(10, 360), -1);
+      expect(tapZone(180, 360), 0);
+      expect(tapZone(350, 360), 1);
+      expect(tapZone(120, 360), 0);
+      expect(tapZone(240, 360), 0);
+      expect(tapZone(5, 0), 0);
+    });
+
+    test('a pinch out fills the screen, a pinch in fits the picture', () {
+      expect(pinchFit(PictureFit.fit, 1.3), PictureFit.fill);
+      expect(pinchFit(PictureFit.fill, 0.7), PictureFit.fit);
+      expect(pinchFit(PictureFit.stretch, 1.25), PictureFit.fill);
+      expect(pinchFit(PictureFit.wide, 0.8), PictureFit.fit);
+    });
+
+    test('a pinch that has not gone far, or has nowhere to go, changes nothing', () {
+      expect(pinchFit(PictureFit.fit, 1.1), isNull);
+      expect(pinchFit(PictureFit.fill, 0.9), isNull);
+      expect(pinchFit(PictureFit.fill, 1.6), isNull);
+      expect(pinchFit(PictureFit.fit, 0.5), isNull);
+      expect(pinchFit(PictureFit.fit, double.nan), isNull);
+      expect(pinchFit(PictureFit.fit, 0), isNull);
+    });
+  });
+
+  group('which way up', () {
+    test('a wide picture lies down, a tall one stands up', () {
+      expect(
+        orientationFor(FilmOrientation.auto, width: 1920, height: 1080),
+        FilmOrientation.landscape,
+      );
+      expect(
+        orientationFor(FilmOrientation.auto, width: 1080, height: 1920),
+        FilmOrientation.portrait,
+      );
+      expect(
+        orientationFor(FilmOrientation.auto, width: 1440, height: 1080),
+        FilmOrientation.landscape,
+      );
+    });
+
+    test('leaves a square picture to the system, and waits for an unknown size', () {
+      expect(orientationFor(FilmOrientation.auto, width: 1080, height: 1080), FilmOrientation.auto);
+      expect(orientationFor(FilmOrientation.auto, width: 0, height: 0), isNull);
+      expect(orientationFor(FilmOrientation.auto, width: 1920, height: 0), isNull);
+    });
+
+    test('a choice made with the rotate button wins, size known or not', () {
+      expect(
+        orientationFor(FilmOrientation.portrait, width: 1920, height: 1080),
+        FilmOrientation.portrait,
+      );
+      expect(
+        orientationFor(FilmOrientation.landscape, width: 0, height: 0),
+        FilmOrientation.landscape,
+      );
+    });
+
+    test('the rotate button cycles auto, landscape, portrait', () {
+      expect(FilmOrientation.auto.next, FilmOrientation.landscape);
+      expect(FilmOrientation.landscape.next, FilmOrientation.portrait);
+      expect(FilmOrientation.portrait.next, FilmOrientation.auto);
+      expect(FilmOrientation.landscape.label, 'Landscape');
+    });
+  });
+
+  group('seek preview', () {
+    test('is for a file on disk, on desktop, when Settings allow it', () {
+      bool allowed({
+        bool enabled = true,
+        bool desktop = true,
+        bool remote = false,
+        bool contentUri = false,
+      }) => seekPreviewAllowed(
+        enabled: enabled,
+        desktop: desktop,
+        remote: remote,
+        contentUri: contentUri,
+      );
+      expect(allowed(), isTrue);
+      expect(allowed(enabled: false), isFalse);
+      expect(allowed(desktop: false), isFalse);
+      expect(allowed(remote: true), isFalse);
+      expect(allowed(contentUri: true), isFalse);
+    });
+  });
+
   group('fill and the subtitle line', () {
     test('knows how much "Fill" cuts off the top and bottom', () {
       expect(fillCropPercent(videoAspect: 16 / 9, viewAspect: 20 / 9), closeTo(10, 0.001));

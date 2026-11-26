@@ -66,9 +66,12 @@ class LibraryTitleCard extends StatelessWidget {
   }
 }
 
-/// A folder with no frame to show: a quiet folder mark.
-class _FolderGround extends StatelessWidget {
-  const _FolderGround();
+/// No frame to show and no room for a title (a folder, or a list row whose title is right
+/// beside it): a quiet mark on the same warm ground.
+class _MarkGround extends StatelessWidget {
+  final String icon;
+  final double size;
+  const _MarkGround(this.icon, {this.size = 32});
 
   @override
   Widget build(BuildContext context) {
@@ -81,7 +84,9 @@ class _FolderGround extends StatelessWidget {
           colors: [p.surface2, p.bgElevated],
         ),
       ),
-      child: Center(child: LucideIcon('folder', color: p.inkFaint, size: 32)),
+      child: Center(
+        child: LucideIcon(icon, color: p.inkFaint, size: size),
+      ),
     );
   }
 }
@@ -99,7 +104,17 @@ class LibraryThumb extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final device = _DeviceFrame(item: item, fallback: fallback);
     final c = card;
-    return c == null ? device : FilmFrame(card: c, fallback: device);
+    if (c == null) return device;
+    // The floor shadow belongs under a real picture only: over a title card it is mud.
+    final played = ref.watch(thumbnailIndexProvider.select((ids) => ids.contains(c.id)));
+    if (!played) return device;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        FilmFrame(card: c, fallback: device),
+        _floor,
+      ],
+    );
   }
 }
 
@@ -163,8 +178,9 @@ class _DeviceFrameState extends ConsumerState<_DeviceFrame> {
       fit: BoxFit.cover,
       gaplessPlayback: true,
       excludeFromSemantics: true,
-      frameBuilder: (context, child, frame, sync) =>
-          frame == null && !sync ? widget.fallback : child,
+      frameBuilder: (context, child, frame, sync) => frame == null && !sync
+          ? widget.fallback
+          : Stack(fit: StackFit.expand, children: [child, _floor]),
       errorBuilder: (context, error, stack) => widget.fallback,
     );
   }
@@ -200,7 +216,8 @@ class _Frame extends StatelessWidget {
   }
 }
 
-/// A floor shadow so the marks on a frame read on a bright picture.
+/// A floor shadow so the marks on a frame read on a bright picture. Laid by [LibraryThumb]
+/// over real frames only.
 const _floor = DecoratedBox(
   decoration: BoxDecoration(
     gradient: LinearGradient(
@@ -267,12 +284,13 @@ String itemSpoken(LibraryItem item, LobbyCard? card, {required bool fresh}) => [
   ?resolutionBadge(item.width, item.height),
 ].join(', ');
 
-/// `42m left · 1.4 GB`, or `1.4 GB · Holiday clips` in a list across folders.
+/// `42m left · 1.4 GB`, or `1.4 GB · Holiday clips` in a list across folders. [showBadge]
+/// adds the picture size (`1080p`) for rows, whose small frame has no room for the badge.
 String itemMeta(
   LibraryItem item,
   LobbyCard? card, {
   bool showFolder = false,
-  bool showFacts = false,
+  bool showBadge = false,
 }) {
   final duration = item.durationMs ?? card?.durationMs;
   final left = card == null || duration == null || !card.inProgress
@@ -280,8 +298,7 @@ String itemMeta(
       : (duration * (1 - card.resumeFraction)).round();
   return [
     if (left != null) '${runtimeText(left)} left',
-    if (showFacts && left == null && duration != null && duration > 0) clockText(duration),
-    if (showFacts) ?resolutionBadge(item.width, item.height),
+    if (showBadge) ?resolutionBadge(item.width, item.height),
     if (item.sizeBytes > 0) sizeText(item.sizeBytes),
     if (showFolder && item.folderName.isNotEmpty) item.folderName,
   ].join(' · ');
@@ -418,7 +435,6 @@ class _VideoCard extends StatelessWidget {
                                 fontSize: width >= 240 ? Tokens.textXl : Tokens.textLg,
                               ),
                             ),
-                            _floor,
                             if (fresh)
                               const Positioned(
                                 left: Tokens.space2,
@@ -554,9 +570,8 @@ class _VideoRow extends StatelessWidget {
                         LibraryThumb(
                           item: item,
                           card: c,
-                          fallback: LibraryTitleCard(title: title, fontSize: Tokens.textSm),
+                          fallback: const _MarkGround('film', size: 24),
                         ),
-                        _floor,
                         if (fresh) const Positioned(left: 6, top: 6, child: _NewChip()),
                         Positioned(
                           left: 6,
@@ -607,7 +622,7 @@ class _VideoRow extends StatelessWidget {
                             ],
                             Expanded(
                               child: Text(
-                                itemMeta(item, c, showFolder: showFolder, showFacts: true),
+                                itemMeta(item, c, showFolder: showFolder, showBadge: true),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: Txt.mono(Tokens.textXs, p.inkMuted),
@@ -668,8 +683,7 @@ class LibraryFolderTile extends StatelessWidget {
     final name = folder.name.isEmpty ? 'Videos' : folder.name;
     final spoken = 'Folder $name, ${folderMeta(folder)}';
     List<Widget> picture() => [
-      LibraryThumb(item: folder.newest, fallback: const _FolderGround()),
-      _floor,
+      LibraryThumb(item: folder.newest, fallback: const _MarkGround('folder')),
       Positioned(
         left: Tokens.space2,
         bottom: Tokens.space2,

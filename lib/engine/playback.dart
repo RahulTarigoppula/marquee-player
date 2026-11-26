@@ -186,6 +186,118 @@ enum SleepTimer {
   };
 }
 
+// ───────────────────────────── swipes, taps, pinches ─────────────────────────────
+
+/// Seconds one full-width swipe covers: a twentieth of the film, never under a minute and a
+/// half (an episode still moves usefully), never over five minutes (a long film stays
+/// steerable), and never more than the film itself. An unknown length (a live stream) gets
+/// the minimum.
+double swipeSeekSpan(double durationSeconds) {
+  if (durationSeconds.isNaN || durationSeconds <= 0) return 90;
+  final span = (durationSeconds * 0.05).clamp(90.0, 300.0);
+  return span < durationSeconds ? span : durationSeconds;
+}
+
+/// Where a horizontal swipe of [dragPx] (right is forward) across a picture [widthPx] wide
+/// lands, starting from [startSeconds]: never before the start, never in the film's last
+/// second (see [clampSeek]).
+double swipeSeekTarget({
+  required double startSeconds,
+  required double dragPx,
+  required double widthPx,
+  required double durationSeconds,
+}) {
+  if (widthPx <= 0 || dragPx.isNaN) return startSeconds;
+  final target = startSeconds + dragPx / widthPx * swipeSeekSpan(durationSeconds);
+  if (target <= 0) return 0;
+  if (durationSeconds <= 0) return target;
+  final last = durationSeconds > 1 ? durationSeconds - 1 : 0.0;
+  return target > last ? last : target;
+}
+
+/// `+0:42`, `-1:05`, `+0:00`: how far a swipe has moved the film.
+String signedClock(double deltaSeconds) {
+  final s = deltaSeconds.isNaN ? 0 : deltaSeconds.round();
+  return '${s < 0 ? '-' : '+'}${shortClock(Duration(seconds: s.abs()))}';
+}
+
+enum SwipeAxis { horizontal, vertical, neither }
+
+/// A finger must travel this far (logical pixels) before its drag is read at all.
+const double kSwipeDecideAt = 24;
+
+/// Which way a one-finger drag is going, once it has gone far enough to tell (null until
+/// then). Sideways needs CLEAR intent, within about 30° of level, so a seek never starts from
+/// a sloppy brightness or volume swipe; a diagonal is neither and does nothing.
+SwipeAxis? swipeAxis(double dx, double dy) {
+  final x = dx.abs(), y = dy.abs();
+  if (x * x + y * y < kSwipeDecideAt * kSwipeDecideAt) return null;
+  if (x >= y * 1.7) return SwipeAxis.horizontal;
+  if (y >= x * 1.2) return SwipeAxis.vertical;
+  return SwipeAxis.neither;
+}
+
+/// The third of the picture a tap landed in: -1 (seek back), 0 (play / pause), 1 (forward).
+int tapZone(double x, double width) {
+  if (width <= 0) return 0;
+  if (x < width / 3) return -1;
+  return x > width * 2 / 3 ? 1 : 0;
+}
+
+/// Two fingers must move this far apart (as a ratio of where they started) to switch the fit.
+const double kPinchOut = 1.2;
+
+/// What a pinch at [scale] (1 = where the fingers started) switches the picture to: spread
+/// out for "Fill (crop)", pinched in for "Fit". Null while it has not gone far enough, or
+/// the picture is already there.
+PictureFit? pinchFit(PictureFit current, double scale) {
+  if (scale.isNaN || scale <= 0) return null;
+  if (scale >= kPinchOut) return current == PictureFit.fill ? null : PictureFit.fill;
+  if (scale <= 1 / kPinchOut) return current == PictureFit.fit ? null : PictureFit.fit;
+  return null;
+}
+
+// ───────────────────────────── which way up (phones) ─────────────────────────────
+
+/// How the screen is turned while ONE film plays. The rotate button cycles these.
+enum FilmOrientation {
+  auto('Rotation follows the video'),
+  landscape('Landscape'),
+  portrait('Portrait');
+
+  final String label;
+  const FilmOrientation(this.label);
+
+  FilmOrientation get next => values[(index + 1) % values.length];
+}
+
+/// The way the screen should be held for a [width] × [height] picture under [mode]: a wide
+/// picture lies down, a tall one (shot on a phone) stands up. [FilmOrientation.auto] back
+/// means "as the system likes" (a square picture); null means the size is not known yet, so
+/// nothing should change.
+FilmOrientation? orientationFor(FilmOrientation mode, {required int width, required int height}) {
+  if (mode != FilmOrientation.auto) return mode;
+  if (width <= 0 || height <= 0) return null;
+  if (width * 10 >= height * 11) return FilmOrientation.landscape;
+  if (height * 10 >= width * 11) return FilmOrientation.portrait;
+  return FilmOrientation.auto;
+}
+
+// ───────────────────────────── seek preview ─────────────────────────────
+
+/// Whether the seek bar may show frames of the film under the pointer. They come from a
+/// second, tiny player reading the same file, so: only a file on disk (a stream would be
+/// fetched twice, and a content:// grant is not ours to open twice), and only on desktop. On
+/// a phone that second decoder has to be a software one (a second hardware session is not
+/// something every chipset gives) and a 4K HEVC keyframe in software costs the heat, battery
+/// and memory the film itself needs: Android shows the time alone.
+bool seekPreviewAllowed({
+  required bool enabled,
+  required bool desktop,
+  required bool remote,
+  required bool contentUri,
+}) => enabled && desktop && !remote && !contentUri;
+
 // ───────────────────────────── when a film ends ─────────────────────────────
 
 enum EndAction {

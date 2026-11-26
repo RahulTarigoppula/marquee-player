@@ -20,6 +20,7 @@ import '../platform/files.dart';
 import '../platform/pip.dart';
 import '../platform/window.dart';
 import '../player/engine.dart';
+import '../player/preview.dart';
 import 'film_session.dart';
 import 'library.dart';
 import 'notice.dart';
@@ -68,6 +69,15 @@ class SessionNotifier extends Notifier<FilmSession?> {
   bool _prefsTouched = false;
   bool _attachSettled = false;
   bool _subtitlesRestored = false;
+
+  /// Subtitles were switched off for this film last time: the automatic search may attach
+  /// what is already on disk, but asks nobody online (and so can never spend a ticket). Any
+  /// search made by hand clears it.
+  bool _searchDeclined = false;
+
+  /// The seek bar's preview frames for the open film, made on the first hover (see
+  /// [seekPreview]); it goes when the film does.
+  SeekPreview? _preview;
 
   /// libmpv has the file (and its audio output): sound effects can be applied and checked.
   bool _loaded = false;
@@ -154,6 +164,7 @@ class SessionNotifier extends Notifier<FilmSession?> {
     ref.onDispose(() {
       _cancelTimers();
       _prefsSave?.cancel();
+      _dropPreview();
       _machine?.dispose();
       unawaited(_focus.dispose());
     });
@@ -258,6 +269,7 @@ class SessionNotifier extends Notifier<FilmSession?> {
       _prefsTouched = false;
       _attachSettled = false;
       _subtitlesRestored = false;
+      _searchDeclined = false;
       _loaded = false;
       _neighboursKnown = false;
       _mediaIdReady = Completer<int>();
@@ -315,6 +327,9 @@ class SessionNotifier extends Notifier<FilmSession?> {
     await _loadResume(hash ?? _locatorKey!);
     if (!_isCurrent(engine)) return;
     unawaited(_startPlayback(engine, file, start: _resumeAt));
+    // Known before the machine starts, so it is in place by the time the search would begin.
+    _searchDeclined = await _subtitlesWereOff(hash ?? _locatorKey!);
+    if (!_isCurrent(engine)) return;
     final machine = _machineFor(file, settings, engine, () => hashing);
     _machine = machine;
     await machine.open(displayName: file.displayName, sizeBytes: file.sizeBytes, parsed: parsed);
@@ -359,23 +374,54 @@ class SessionNotifier extends Notifier<FilmSession?> {
     Settings settings,
     PlayerEngine engine,
     Future<MovieHash> Function() hash,
-  ) => ThreadingMachine(
-    ports: SubtitlePorts(
+  ) {
+    final ports = SubtitlePorts(
       ref: ref,
       file: file,
       settings: settings,
       engine: engine,
       onHashKnown: (h) => _recordMedia(file, engine, h),
       onFeatureTitle: (title, year) => _retitle(engine, title, year),
-    ).build(hash),
-    config: ThreadingConfig(
-      languages: settings.languages,
-      preferHearingImpaired: settings.preferHearingImpaired,
-      subdlEnabled: settings.subdlEnabled,
-    ),
-    quota: ref.read(quotaProvider),
-    onChange: (t) => _onThreading(engine, t),
-  );
+    ).build(hash);
+    late final ThreadingMachine machine;
+    return machine = ThreadingMachine(
+      ports: ThreadingPorts(
+        hash: ports.hash,
+        findExisting: ports.findExisting,
+        // The automatic search of a film whose subtitles were switched off stops HERE, before
+        // any request: the leader ends as "no subtitles" (the sidecar and the cache had their
+        // turn in findExisting). The Booth's searches clear the flag first, so they go through.
+        search: (request) async {
+          if (_searchDeclined && _isCurrent(engine)) {
+            _searchDeclined = false;
+            machine.skip();
+            throw const ThreadingException(ThreadingFailure.noResults);
+          }
+          return ports.search(request);
+        },
+        subdl: ports.subdl,
+        download: ports.download,
+      ),
+      config: ThreadingConfig(
+        languages: settings.languages,
+        preferHearingImpaired: settings.preferHearingImpaired,
+        subdlEnabled: settings.subdlEnabled,
+      ),
+      quota: ref.read(quotaProvider),
+      onChange: (t) => _onThreading(engine, t),
+    );
+  }
+
+  /// True when the stored choices for the film under [key] say "subtitles off". Unreadable
+  /// means no: the search runs as it always did.
+  Future<bool> _subtitlesWereOff(MovieHash key) async {
+    try {
+      final stored = FilmPrefs.fromJson(await ref.read(databaseProvider).filePrefsFor(key));
+      return stored.subtitle == FilmPrefs.off;
+    } on Object {
+      return false;
+    }
+  }
 
   /// The one resume rule ([ResumePoint.resumable]), the same one the Lobby shows.
   Future<void> _loadResume(MovieHash key) async {
@@ -865,12 +911,14 @@ class SessionNotifier extends Notifier<FilmSession?> {
   /// A print picked by hand is a new choice: a remembered "off" or embedded track gives way.
   Future<void> pick(ScoredCandidate c) async {
     _attachedOnce = false;
+    _searchDeclined = false;
     _remember(_prefs.copyWith(clearSubtitle: true));
     await _machine?.pick(c);
   }
 
   Future<void> findAnother(String query) async {
     _attachedOnce = false;
+    _searchDeclined = false;
     _remember(_prefs.copyWith(clearSubtitle: true));
     final m = _machine;
     final cur = state;
@@ -890,16 +938,19 @@ class SessionNotifier extends Notifier<FilmSession?> {
   /// each one re-arms the attach (like [pick] and [findAnother]).
   Future<void> retrySubtitles() async {
     _attachedOnce = false;
+    _searchDeclined = false;
     await _machine?.retry();
   }
 
   Future<void> searchByFilename() async {
     _attachedOnce = false;
+    _searchDeclined = false;
     await _machine?.filenameSearch();
   }
 
   Future<void> searchSubdl() async {
     _attachedOnce = false;
+    _searchDeclined = false;
     await _machine?.subdlSearch();
   }
 
@@ -1046,6 +1097,33 @@ class SessionNotifier extends Notifier<FilmSession?> {
     await openLocator(path);
   }
 
+  /// The seek bar's preview frames for the open film, made the first time they are asked for.
+  /// Null when this film gets none ([seekPreviewAllowed]) or its preview has failed: the seek
+  /// bar then shows the time alone.
+  SeekPreview? seekPreview() {
+    final cur = state;
+    if (cur == null || cur.engine.isDisposed || cur.error != null) return null;
+    final allowed = seekPreviewAllowed(
+      enabled: ref.read(settingsValueProvider).seekPreview,
+      desktop: PlayerEngine.isDesktop,
+      remote: cur.file.isRemote,
+      contentUri: cur.file.isContentUri,
+    );
+    if (!allowed) {
+      _dropPreview(); // switched off in Settings while the film plays
+      return null;
+    }
+    final existing = _preview;
+    // One that failed is not made again: this film has no preview.
+    if (existing != null) return existing.usable ? existing : null;
+    return _preview = SeekPreview(cur.file.locator);
+  }
+
+  void _dropPreview() {
+    _preview?.dispose();
+    _preview = null;
+  }
+
   /// Saves where you are (every 5 s, on close, when the app goes to the background), and any
   /// choice for this film still waiting to be written.
   Future<void> saveResumeNow() async {
@@ -1083,6 +1161,7 @@ class SessionNotifier extends Notifier<FilmSession?> {
   Future<void> close({bool toLobby = true}) async {
     final cur = state;
     _cancelTimers();
+    _dropPreview();
     _machine?.dispose();
     _machine = null;
     if (cur == null) return;

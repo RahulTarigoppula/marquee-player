@@ -55,13 +55,16 @@ class LibraryPane extends ConsumerStatefulWidget {
 }
 
 class _LibraryPaneState extends ConsumerState<LibraryPane> {
-  late final _search = TextEditingController(text: ref.read(libraryBrowseProvider).query);
+  // Created in initState, not lazily: a pane that never showed its toolbar would first touch a
+  // lazy field in dispose, where `ref` may no longer be used.
+  late final TextEditingController _search;
   final _searchFocus = FocusNode(debugLabel: 'library search');
   final _scroll = ScrollController();
 
   @override
   void initState() {
     super.initState();
+    _search = TextEditingController(text: ref.read(libraryBrowseProvider).query);
     HardwareKeyboard.instance.addHandler(_keys);
   }
 
@@ -542,6 +545,9 @@ class _Toolbar extends StatelessWidget {
 }
 
 /// The search box: one quiet line, a glass on the left and a clear button once there is text.
+/// The box is drawn here, not by the text field's own decoration: that one changes height with
+/// the platform's density (shorter on desktop), and this must line up with the controls beside
+/// it everywhere.
 class _SearchField extends StatelessWidget {
   final TextEditingController controller;
   final FocusNode focusNode;
@@ -551,38 +557,56 @@ class _SearchField extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = House.paletteOf(context);
-    OutlineInputBorder edge(Color c, [double w = 1]) => OutlineInputBorder(
-      borderRadius: BorderRadius.circular(Tokens.radiusMd),
-      borderSide: BorderSide(color: c, width: w),
-    );
-    return Semantics(
-      label: 'Search your videos',
-      child: TextField(
-        key: const ValueKey('library-search'),
-        controller: controller,
-        focusNode: focusNode,
-        onChanged: onChanged,
-        autocorrect: false,
-        enableSuggestions: false,
-        maxLines: 1,
-        textInputAction: TextInputAction.search,
-        textAlignVertical: TextAlignVertical.center,
-        style: Txt.body(Tokens.textBase, p.ink),
-        cursorColor: p.accent,
-        decoration: InputDecoration(
-          isDense: true,
-          filled: true,
-          fillColor: p.surface.withValues(alpha: 0.85),
-          hintText: 'Search videos',
-          hintStyle: Txt.body(Tokens.textBase, p.inkFaint),
-          contentPadding: const EdgeInsets.symmetric(vertical: Tokens.space2),
-          constraints: const BoxConstraints.tightFor(height: 44),
-          prefixIcon: Padding(
-            padding: const EdgeInsets.only(left: Tokens.space3, right: Tokens.space2),
-            child: LucideIcon('search', color: p.inkMuted, size: 18),
+    return ListenableBuilder(
+      listenable: focusNode,
+      // The whole box takes the click, not only the line of text inside it.
+      builder: (context, field) => GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        excludeFromSemantics: true,
+        onTap: focusNode.requestFocus,
+        child: AnimatedContainer(
+          duration: Tokens.durFast,
+          height: 44,
+          decoration: BoxDecoration(
+            color: p.surface.withValues(alpha: 0.85),
+            borderRadius: BorderRadius.circular(Tokens.radiusMd),
+            border: Border.all(
+              color: focusNode.hasFocus ? p.accent : p.border,
+              width: focusNode.hasFocus ? 1.5 : 1,
+            ),
           ),
-          prefixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
-          suffixIcon: ValueListenableBuilder<TextEditingValue>(
+          child: field,
+        ),
+      ),
+      child: Row(
+        children: [
+          const SizedBox(width: Tokens.space3),
+          LucideIcon('search', color: p.inkMuted, size: 18),
+          const SizedBox(width: Tokens.space2),
+          Expanded(
+            child: Semantics(
+              label: 'Search your videos',
+              child: TextField(
+                key: const ValueKey('library-search'),
+                controller: controller,
+                focusNode: focusNode,
+                onChanged: onChanged,
+                autocorrect: false,
+                enableSuggestions: false,
+                maxLines: 1,
+                textInputAction: TextInputAction.search,
+                style: Txt.body(Tokens.textBase, p.ink),
+                cursorColor: p.accent,
+                decoration: InputDecoration(
+                  isCollapsed: true,
+                  border: InputBorder.none,
+                  hintText: 'Search videos',
+                  hintStyle: Txt.body(Tokens.textBase, p.inkFaint),
+                ),
+              ),
+            ),
+          ),
+          ValueListenableBuilder<TextEditingValue>(
             valueListenable: controller,
             builder: (context, value, _) => value.text.isEmpty
                 ? const SizedBox(width: Tokens.space3)
@@ -602,11 +626,7 @@ class _SearchField extends StatelessWidget {
                     ),
                   ),
           ),
-          suffixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
-          border: edge(p.border),
-          enabledBorder: edge(p.border),
-          focusedBorder: edge(p.accent, 1.5),
-        ),
+        ],
       ),
     );
   }

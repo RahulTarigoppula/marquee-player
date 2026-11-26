@@ -40,7 +40,8 @@ class MainActivity : FlutterActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        // singleTop: a second "Open with" while running arrives here instead of a new Activity.
+        // singleTask: an "Open with" from any app while Marquee is running arrives here, in the
+        // one running instance, instead of starting a second engine in the caller's task.
         uriFrom(intent)?.let { content?.deliverNewUri(it) }
     }
 
@@ -74,7 +75,23 @@ class MainActivity : FlutterActivity() {
             Intent.ACTION_SEND -> streamExtra(intent)
             else -> null
         } ?: return null
-        return if (uri.scheme == "content" || uri.scheme == "file") uri else null
+        if (uri.scheme != "content" && uri.scheme != "file") return null
+        if (uri.scheme == "content" &&
+            intent.action == Intent.ACTION_VIEW &&
+            (intent.flags and Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION) != 0
+        ) {
+            try {
+                // The sender offered a grant that outlives this launch: keep it, so the Lobby
+                // card can reopen the film after a restart.
+                contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            } catch (e: SecurityException) {
+                // Offered but not persistable after all: it plays now, the card may not.
+            }
+        }
+        return uri
     }
 
     private fun streamExtra(intent: Intent): Uri? =

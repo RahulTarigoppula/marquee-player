@@ -17,6 +17,7 @@ import 'state/library.dart';
 import 'state/notice.dart';
 import 'state/providers.dart';
 import 'state/session.dart';
+import 'state/updates.dart';
 import 'theme/house.dart';
 import 'theme/tokens.dart';
 import 'ui/auditorium/auditorium_screen.dart';
@@ -104,6 +105,8 @@ class _HouseLightsState extends ConsumerState<HouseLights> with SingleTickerProv
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) ref.read(deviceLibraryProvider);
     });
+    // The once-a-day update check (opt-in, off by default) only exists once this is read.
+    ref.read(autoUpdateCheckProvider);
   }
 
   void _away() => ref.read(deviceLibraryProvider.notifier).wentAway();

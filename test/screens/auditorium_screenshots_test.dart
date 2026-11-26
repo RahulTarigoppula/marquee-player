@@ -4,12 +4,16 @@
 @Tags(['screenshot'])
 library;
 
+import 'dart:math' as math;
+
+import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:marquee/engine/playback.dart';
 import 'package:marquee/theme/tokens.dart';
 import 'package:marquee/ui/auditorium/controls/controls_bar.dart';
 import 'package:marquee/ui/auditorium/controls/widgets.dart';
+import 'package:marquee/ui/components/film_gate.dart';
 import 'package:marquee/ui/components/kit.dart';
 
 import 'harness.dart';
@@ -161,7 +165,197 @@ final _details = videoDetailLines(const {
   'demuxer-cache-duration': '12.44',
 });
 
+/// The video details where the Auditorium puts them: under the title and, where the play
+/// button is in the middle of the picture, above it (two columns when the room is short,
+/// scaled down when even that does not fit).
+Widget _detailsAt(Size room, {required bool desktop}) {
+  const top = 56.0;
+  final band = !desktop || room.width < 720
+      ? math.max(room.height / 2 - 34 - Tokens.space2 - top, 48.0)
+      : null;
+  final wide = band != null && band < VideoDetailsPanel.tallHeight && room.width >= 560;
+  final width = room.width - Tokens.space4 * 2;
+  return Positioned(
+    left: Tokens.space4,
+    right: Tokens.space4,
+    top: top,
+    height: band,
+    child: Align(
+      alignment: Alignment.topLeft,
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: Alignment.topLeft,
+        child: VideoDetailsPanel(
+          lines: _details,
+          onClose: () {},
+          wide: wide,
+          maxWidth: wide ? width : math.min(400.0, width),
+        ),
+      ),
+    ),
+  );
+}
+
+/// A phone's actions: everything the touch layout draws, the lock and rotate buttons included.
+ControlsActions _phoneActions() => ControlsActions(
+  onBack: () {},
+  onPlayPause: () {},
+  onMute: () {},
+  onFullscreen: () {},
+  onToggleSync: () {},
+  onSeekBy: (_) {},
+  onSeek: (_) {},
+  onScrub: (_) {},
+  onScrubEnd: () {},
+  onVolume: (_) {},
+  onMenu: (_) {},
+  onPrevious: () {},
+  onNext: () {},
+  onPip: () {},
+  onToggleClock: () {},
+  onLock: () {},
+  onRotate: () {},
+);
+
+/// A stand-in for the preview player's frame: a night street, one lamp.
+const _previewFrame = DecoratedBox(
+  decoration: BoxDecoration(
+    gradient: RadialGradient(
+      center: Alignment(0.4, -0.3),
+      radius: 0.9,
+      colors: [Color(0xFFE8C88A), Color(0xFF1C2230), Color(0xFF0B0B0F)],
+      stops: [0, 0.35, 1],
+    ),
+  ),
+);
+
 void main() {
+  testWidgets('auditorium seek preview above the pointer, desktop', (t) async {
+    await shoot(
+      t,
+      'auditorium_seek_preview_desktop',
+      picture(
+        AuditoriumControls(
+          data: _film,
+          actions: ControlsActions.none(),
+          seekPreview: _previewFrame,
+        ),
+      ),
+      act: (t) async {
+        // A mouse over the seek bar, in the "Ferris Wheel" chapter.
+        final gate = t.getRect(find.byType(FilmGate));
+        final mouse = await t.createGesture(kind: PointerDeviceKind.mouse);
+        await mouse.addPointer(location: Offset.zero);
+        addTearDown(mouse.removePointer);
+        await mouse.moveTo(Offset(gate.left + gate.width * 0.47, gate.bottom - 8));
+        await t.pump();
+      },
+    );
+  });
+
+  testWidgets('auditorium seek preview bubble and the time-only label', (t) async {
+    await shoot(
+      t,
+      'auditorium_seek_preview_bubble',
+      picture(
+        const Center(
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              SeekPreviewBubble(
+                picture: _previewFrame,
+                time: '00:48:53',
+                chapter: 'The Ferris Wheel',
+              ),
+              SizedBox(width: Tokens.space6),
+              SeekPreviewBubble(picture: _previewFrame, time: '00:03:10'),
+            ],
+          ),
+        ),
+      ),
+      size: const Size(520, 260),
+    );
+  });
+
+  testWidgets('auditorium locked: only the unlock pill, phone landscape', (t) async {
+    await shoot(
+      t,
+      'auditorium_locked_phone_landscape',
+      picture(
+        Stack(
+          children: [
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: Tokens.space9,
+              child: Center(child: UnlockPill(onUnlock: () {})),
+            ),
+          ],
+        ),
+      ),
+      size: _phoneLandscape,
+    );
+  });
+
+  testWidgets('auditorium swipe to seek readout, phone landscape', (t) async {
+    await shoot(
+      t,
+      'auditorium_swipe_seek_phone_landscape',
+      picture(
+        Align(
+          alignment: const Alignment(0, -0.45),
+          child: SeekReadout(time: clockOf(62 + 42), delta: signedClock(42)),
+        ),
+      ),
+      size: _phoneLandscape,
+    );
+  });
+
+  testWidgets('auditorium video details above the play button, phone landscape', (t) async {
+    await shoot(
+      t,
+      'auditorium_details_phone_landscape',
+      picture(
+        Stack(
+          children: [
+            AuditoriumControls(data: _phoneFilm, actions: _phoneActions()),
+            _detailsAt(_phoneLandscape, desktop: false),
+          ],
+        ),
+      ),
+      size: _phoneLandscape,
+    );
+  });
+
+  testWidgets('auditorium top bar with rotate and lock, narrow phone', (t) async {
+    await shoot(
+      t,
+      'auditorium_controls_phone_portrait',
+      picture(
+        AuditoriumControls(
+          data: const ControlsData(
+            title: 'Frieren S01E05 - Phantoms of the Dead',
+            position: 62,
+            duration: 1440,
+            buffered: 300,
+            playing: true,
+            hasSubtitle: true,
+            matched: true,
+            sleeping: true,
+            hasPrevious: true,
+            hasNext: true,
+            desktop: false,
+            showPip: true,
+            orientation: FilmOrientation.landscape,
+          ),
+          actions: _phoneActions(),
+        ),
+      ),
+      size: _phonePortrait,
+    );
+  });
+
   testWidgets('auditorium picture adjust panel', (t) async {
     await shoot(
       t,
@@ -256,15 +450,7 @@ void main() {
                 onToggleClock: () {},
               ),
             ),
-            Positioned(
-              left: Tokens.space4,
-              right: Tokens.space4,
-              top: 60,
-              child: Align(
-                alignment: Alignment.topLeft,
-                child: VideoDetailsPanel(lines: _details, onClose: () {}),
-              ),
-            ),
+            _detailsAt(kDesktop, desktop: true),
             Positioned(
               right: Tokens.space4,
               bottom: 104,
@@ -283,35 +469,8 @@ void main() {
       picture(
         Stack(
           children: [
-            AuditoriumControls(
-              data: _phoneFilm,
-              actions: ControlsActions(
-                onBack: () {},
-                onPlayPause: () {},
-                onMute: () {},
-                onFullscreen: () {},
-                onToggleSync: () {},
-                onSeekBy: (_) {},
-                onSeek: (_) {},
-                onScrub: (_) {},
-                onScrubEnd: () {},
-                onVolume: (_) {},
-                onMenu: (_) {},
-                onPrevious: () {},
-                onNext: () {},
-                onPip: () {},
-                onToggleClock: () {},
-              ),
-            ),
-            Positioned(
-              left: Tokens.space4,
-              right: Tokens.space4,
-              top: 60,
-              child: Align(
-                alignment: Alignment.topLeft,
-                child: VideoDetailsPanel(lines: _details, onClose: () {}),
-              ),
-            ),
+            AuditoriumControls(data: _phoneFilm, actions: _phoneActions()),
+            _detailsAt(_phonePortrait, desktop: false),
             Positioned(
               right: Tokens.space4,
               bottom: 132,

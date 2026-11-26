@@ -4,14 +4,27 @@
 //
 // Layers, bottom to top: bias-light walls · the picture · Flutter subtitles (Android, other
 // scripts) · the gesture surface · the controls · video details, "Skip intro" · menus,
-// readouts, "Up next" · the Booth, the threading overlay and the cue sheet. Overlays are
-// SIBLINGS of the gesture surface, never its children, so a tap on the threading overlay can
-// never pause or seek the hidden film.
+// readouts, "Up next", the "Unlock" pill · the Booth, the threading overlay and the cue
+// sheet. Overlays are SIBLINGS of the gesture surface, never its children, so a tap on the
+// threading overlay can never pause or seek the hidden film.
 //
 // This file holds the room's state, its keys and its gestures. The layers themselves live in
 // layers.dart, the menus in menu_panel.dart, the pure widgets in controls/.
+//
+// Touch (phones), all on ONE gesture detector, so the arena has one answer for every touch:
+//   tap            controls on / off (after the double-tap window, so a double tap is not both)
+//   tap tap (tap)  left third back, right third forward, one step per tap after the first;
+//                  the middle plays / pauses
+//   hold           2x while held
+//   one finger     up / down on the left 40 %: brightness; on the right 40 %: volume;
+//                  sideways anywhere but the screen edges: scrub, ONE seek when it lifts
+//   two fingers    spread: Fill (crop); pinch: Fit
+// Drags and pinches share Flutter's scale recogniser (a detector cannot have both a pan and a
+// scale): a one-finger "scale" is the drag. A finger added or lifted mid-gesture ends it and
+// the rest of that touch does nothing, so a pinch never turns into a seek.
 import 'dart:async';
 import 'dart:io' show Platform;
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart';
@@ -27,6 +40,7 @@ import '../../engine/sync_rule.dart';
 import '../../platform/pip.dart';
 import '../../platform/window.dart';
 import '../../player/engine.dart';
+import '../../state/library.dart';
 import '../../state/providers.dart';
 import '../../state/session.dart';
 import '../../theme/tokens.dart';
@@ -40,7 +54,14 @@ import 'cue_sheet.dart';
 import 'layers.dart';
 import 'menu_panel.dart';
 
-enum _Drag { brightness, volume }
+/// What the touch in progress has turned out to be (see the table at the top of the file).
+enum _Gesture { none, undecided, brightness, volume, seek, pinch, dead }
+
+/// After a double tap, further taps keep adding steps while they come this fast.
+const _kTapStreak = Duration(milliseconds: 600);
+
+/// The "Unlock" pill stays this long after a tap on a locked screen.
+const _kUnlockShown = Duration(seconds: 3);
 
 class AuditoriumScreen extends ConsumerStatefulWidget {
   const AuditoriumScreen({super.key});
@@ -65,10 +86,31 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
   bool _holding = false;
   double? _brightness;
   bool _brightnessTouched = false;
-  _Drag? _drag;
   double _dragVolume = 100;
-  ({String icon, String text, double? level})? _readout;
-  Offset? _doubleTapAt;
+
+  // Readouts follow the finger, so they are their own small rebuilds, never the screen's.
+  final _readout = ValueNotifier<({String icon, String text, double? level})?>(null);
+  final _swipe = ValueNotifier<({double target, double delta})?>(null);
+
+  // One touch, from the first finger down to the last one up.
+  int _touches = 0;
+  Offset? _downAt;
+  bool _touchCancelled = false;
+  _Gesture _gesture = _Gesture.none;
+  double _seekFrom = 0;
+  double _seekOriginX = 0;
+  double _pinchBase = 1;
+
+  // A run of taps in one place: the first waits on [_tapTimer] for a second.
+  ({int zone, int count, Offset at})? _taps;
+  Timer? _tapTimer;
+
+  // Android: the screen locked against touches, and the way this film is held.
+  bool _locked = false;
+  bool _unlockShown = false;
+  Timer? _unlockTimer;
+  FilmOrientation _orient = FilmOrientation.auto;
+  FilmOrientation? _orientSent;
   bool _playing = false;
   bool _completed = false;
   bool _upNextCancelled = false;
@@ -80,7 +122,10 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
   void initState() {
     super.initState();
     // Take the keyboard from whatever the Lobby had focused (autofocus alone loses to it).
-    WidgetsBinding.instance.addPostFrameCallback((_) => _refocus());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _refocus();
+      _applyOrientation(); // back from the Ticket Office: the film's size is already known
+    });
     _poke();
     _startBias();
     if (Platform.isAndroid) {
@@ -100,9 +145,18 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
     if (_brightnessTouched) {
       unawaited(ScreenBrightness.instance.resetApplicationScreenBrightness());
     }
+    // The rooms outside turn as the phone does again. All four ways is Android's "full user",
+    // which is what the manifest asks for (an empty list would be "unspecified" instead).
+    if (_orientSent != null) {
+      unawaited(SystemChrome.setPreferredOrientations(DeviceOrientation.values));
+    }
     _idle?.cancel();
     _bias?.cancel();
     _readoutTimer?.cancel();
+    _tapTimer?.cancel();
+    _unlockTimer?.cancel();
+    _readout.dispose();
+    _swipe.dispose();
     _focus.dispose();
     super.dispose();
   }
@@ -138,11 +192,109 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
   }
 
   void _showReadout(String icon, String text, [double? level]) {
+    if (!mounted) return; // a skip or a seek that finished after the room was left
     _readoutTimer?.cancel();
-    setState(() => _readout = (icon: icon, text: text, level: level));
-    _readoutTimer = Timer(const Duration(milliseconds: 900), () {
-      if (mounted) setState(() => _readout = null);
+    _readout.value = (icon: icon, text: text, level: level);
+    _readoutTimer = Timer(const Duration(milliseconds: 900), () => _readout.value = null);
+  }
+
+  // ───────────────────────── which way up, and the lock (Android) ─────────────────────────
+
+  /// Asks Android to hold the screen the way this film wants. With the phone's rotation lock
+  /// on, nothing else would turn it: a film opened in portrait stayed there. Each pair below
+  /// is Android's "user" kind: that way up, either way round by the sensor where the phone
+  /// allows it. A picture whose size is not known yet changes nothing.
+  /// Never while the film is in picture in picture: the little window has no way up, and
+  /// asking for one there fights the system. It is asked again when the window grows back.
+  void _applyOrientation({int? width, int? height}) {
+    if (!Platform.isAndroid || !mounted || ref.read(pipProvider)) return;
+    final s = _session;
+    if (s == null) return;
+    final pb = width == null || height == null ? s.engine.snapshot : null;
+    final want = orientationFor(
+      _orient,
+      width: width ?? pb?.width ?? 0,
+      height: height ?? pb?.height ?? 0,
+    );
+    if (want == null || want == _orientSent) return;
+    _orientSent = want;
+    unawaited(
+      SystemChrome.setPreferredOrientations(switch (want) {
+        FilmOrientation.landscape => const [
+          DeviceOrientation.landscapeLeft,
+          DeviceOrientation.landscapeRight,
+        ],
+        FilmOrientation.portrait => const [
+          DeviceOrientation.portraitUp,
+          DeviceOrientation.portraitDown,
+        ],
+        FilmOrientation.auto => DeviceOrientation.values, // a square picture: as the phone turns
+      }),
+    );
+  }
+
+  /// The rotate button: follow the video, landscape, portrait, for this film.
+  void _cycleOrientation() {
+    setState(() => _orient = _orient.next);
+    _applyOrientation();
+    _showReadout('rotate-ccw-square', _orient.label);
+    _poke();
+  }
+
+  /// Everything goes inert and out of sight; the pill shows once, to say where the way out is.
+  void _lock() {
+    _idle?.cancel();
+    _tapTimer?.cancel();
+    _taps = null;
+    // The recognisers go with the lock: a swipe another finger still holds will never end.
+    _gesture = _Gesture.dead;
+    _swipe.value = null;
+    setState(() {
+      _locked = true;
+      _menu = null;
+      _menuTrail.clear();
+      _syncOpen = false;
     });
+    _showUnlock();
+  }
+
+  void _unlock() {
+    _unlockTimer?.cancel();
+    setState(() {
+      _locked = false;
+      _unlockShown = false;
+    });
+    _poke();
+    _showReadout('lock-open', 'Unlocked');
+  }
+
+  /// A tap (or Back) on a locked screen: the way out, for a moment.
+  void _showUnlock() {
+    _unlockTimer?.cancel();
+    if (!_unlockShown) setState(() => _unlockShown = true);
+    _unlockTimer = Timer(_kUnlockShown, () {
+      if (mounted) setState(() => _unlockShown = false);
+    });
+  }
+
+  /// A new film (or none): the lock, the chosen rotation and any touch in progress were the
+  /// last film's.
+  void _resetForFilm() {
+    _tapTimer?.cancel();
+    _unlockTimer?.cancel();
+    _taps = null;
+    _touches = 0;
+    _gesture = _Gesture.none;
+    _holding = false;
+    _swipe.value = null;
+    _pipKey = null; // the next tick sends this film's shape (and its way up) afresh
+    if (_locked || _unlockShown || _orient != FilmOrientation.auto) {
+      setState(() {
+        _locked = false;
+        _unlockShown = false;
+        _orient = FilmOrientation.auto;
+      });
+    }
   }
 
   // ───────────────────────────── bias light ─────────────────────────────
@@ -266,6 +418,10 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
   /// Esc / Back, one lighting state at a time: fullscreen, then a menu or overlay, then the
   /// threading overlay ("Play without subtitles"), then the film itself.
   Future<void> _back() async {
+    if (_locked) {
+      _showUnlock(); // Back is swallowed: it only shows the way out
+      return;
+    }
     if (_desktop && ref.read(fullscreenProvider)) {
       ref.read(fullscreenProvider.notifier).set(false);
       return;
@@ -301,6 +457,13 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
   KeyEventResult _onKey(FocusNode node, KeyEvent e) {
     if (e is! KeyDownEvent && e is! KeyRepeatEvent) return KeyEventResult.ignored;
     final k = e.logicalKey;
+    if (_locked) {
+      // Nothing acts on the film. The keys are not swallowed either: the phone's own volume
+      // buttons arrive here too, and they must keep working.
+      if (k != LogicalKeyboardKey.escape) return KeyEventResult.ignored;
+      _showUnlock();
+      return KeyEventResult.handled;
+    }
     final focused = FocusManager.instance.primaryFocus;
     final inField = focused?.context?.findAncestorWidgetOfExactType<EditableText>() != null;
     if (k == LogicalKeyboardKey.escape) {
@@ -449,12 +612,42 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
 
   // ───────────────────────────── gestures ─────────────────────────────
 
-  void _onTap() {
+  /// A tap that lands. The first of a run waits for the double-tap window before it counts
+  /// as a single tap: so a double click goes fullscreen without also pausing and resuming
+  /// the film, and a double tap seeks without flashing the controls.
+  void _onTapUp(TapUpDetails d) {
     if (_menu != null) {
       _closeMenu();
       return;
     }
-    if (_desktop) {
+    final at = d.localPosition;
+    final run = _taps;
+    if (run != null && (at - run.at).distance <= kDoubleTapSlop) {
+      _tapTimer?.cancel();
+      final count = run.count + 1;
+      _taps = (zone: run.zone, count: count, at: at);
+      _tapTimer = Timer(_kTapStreak, () => _taps = null);
+      _onTapAgain(run.zone, count);
+      return;
+    }
+    _tapTimer?.cancel();
+    // A tap somewhere else while the first still waited: that first one was a single tap.
+    if (run != null && run.count == 1) _onSingleTap();
+    _taps = (
+      zone: _desktop ? 0 : tapZone(at.dx, MediaQuery.sizeOf(context).width),
+      count: 1,
+      at: at,
+    );
+    _tapTimer = Timer(kDoubleTapTimeout, () {
+      _taps = null;
+      if (mounted) _onSingleTap();
+    });
+  }
+
+  void _onSingleTap() {
+    if (_menu != null) {
+      _closeMenu();
+    } else if (_desktop) {
       // Desktop: a click plays / pauses (a double click goes fullscreen).
       unawaited(_playPause());
       _poke();
@@ -463,24 +656,25 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
     }
   }
 
-  void _onDoubleTap() {
+  /// The second tap of a run, or one more ([count] taps so far, all in [zone]).
+  void _onTapAgain(int zone, int count) {
     if (_desktop) {
-      _toggleFullscreen();
+      if (count.isEven) _toggleFullscreen();
       return;
     }
-    final at = _doubleTapAt;
-    final w = MediaQuery.sizeOf(context).width;
-    if (at == null) return;
-    final step = _seekStep;
-    if (at.dx < w / 3) {
-      unawaited(_seekBy(Duration(seconds: -step)));
-      _showReadout('rotate-ccw', '$step s back');
-    } else if (at.dx > w * 2 / 3) {
-      unawaited(_seekBy(Duration(seconds: step)));
-      _showReadout('rotate-cw', '$step s forward');
-    } else {
-      unawaited(_playPause());
+    if (zone == 0) {
+      if (count.isEven) unawaited(_playPause());
+      return;
     }
+    // One step per tap after the first; mpv adds queued relative seeks up, and the readout
+    // shows the running total.
+    final step = _seekStep;
+    unawaited(_seekBy(Duration(seconds: zone * step)));
+    final total = (count - 1) * step;
+    _showReadout(
+      zone < 0 ? 'rotate-ccw' : 'rotate-cw',
+      zone < 0 ? '$total s back' : '$total s forward',
+    );
   }
 
   void _onWheel(PointerSignalEvent e) {
@@ -491,46 +685,181 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
     _poke();
   }
 
-  /// Phone edge dimmers: a vertical swipe on the left 40 % sets brightness, on the right 40 %
-  /// the volume. The system gesture insets (Android back swipes) and the status / nav bars
-  /// are left alone.
-  void _onDragStart(DragStartDetails d) {
+  // Fingers are counted by a Listener around the detector: it hears every pointer BEFORE the
+  // recognisers do (they are fed last, by the gesture binding), so the handlers below can
+  // trust the count, the place the first finger landed and whether the system took the touch.
+
+  void _onPointerDown(PointerDownEvent e) {
+    _touches++;
+    if (_touches != 1) return;
+    _downAt = e.localPosition;
+    _gesture = _Gesture.none;
+    _touchCancelled = false;
+  }
+
+  void _onPointerUp(PointerUpEvent e) {
+    if (_touches > 0) _touches--;
+  }
+
+  /// Android took the touch for itself (a back swipe, the notification shade).
+  void _onPointerCancel(PointerCancelEvent e) {
+    _touchCancelled = true;
+    if (_touches > 0) _touches--;
+  }
+
+  void _onHoldStart(LongPressStartDetails d) {
+    final s = _session;
+    // Two fingers resting on the glass are the start of a pinch, not a hold.
+    if (s == null || s.threadingVisible || _touches > 1) return;
+    _holding = true;
+    _rateBeforeHold = s.engine.player.state.rate;
+    unawaited(s.engine.setRate(2));
+    _showReadout('gauge', '2× while held');
+  }
+
+  void _onHoldEnd(LongPressEndDetails d) {
+    if (!_holding) return;
+    _holding = false;
+    unawaited(_session?.engine.setRate(_rateBeforeHold));
+  }
+
+  /// A drag (one finger) or a pinch (two) has begun. Flutter ends the gesture and starts a
+  /// new one whenever a finger is added or lifted; only the first of a touch may act, except
+  /// that a drag which had not yet shown its direction may still become a pinch.
+  void _onScaleStart(ScaleStartDetails d) {
+    final s = _session;
+    final free = _gesture == _Gesture.none && !_holding && _menu == null && !_touchCancelled;
+    if (!free || s == null || s.threadingVisible || s.error != null) {
+      _gesture = _Gesture.dead;
+      return;
+    }
+    if (d.pointerCount > 1) {
+      _gesture = _Gesture.pinch;
+      _pinchBase = 1;
+      return;
+    }
+    // The status bar's pull-down and the home swipe own the top and bottom edges.
     final size = MediaQuery.sizeOf(context);
     final insets = MediaQuery.systemGestureInsetsOf(context);
     final pad = MediaQuery.paddingOf(context);
-    final x = d.localPosition.dx;
-    final y = d.localPosition.dy;
-    _drag = null;
-    if (y < pad.top + 24 || y > size.height - pad.bottom - insets.bottom - 24) return;
-    if (x > insets.left + 8 && x < size.width * 0.4) {
-      _drag = Platform.isAndroid ? _Drag.brightness : null;
-    } else if (x > size.width * 0.6 && x < size.width - insets.right - 8) {
-      _drag = _Drag.volume;
-      _dragVolume = _session?.engine.player.state.volume ?? 100;
+    final y = (_downAt ?? d.localFocalPoint).dy;
+    if (y < pad.top + 24 || y > size.height - pad.bottom - insets.bottom - 24) {
+      _gesture = _Gesture.dead;
+      return;
+    }
+    _gesture = _Gesture.undecided;
+    _decide(s, d.localFocalPoint);
+  }
+
+  /// Reads the drag's direction once the finger has travelled far enough from where it
+  /// landed. Up / down on the left 40 % is brightness, on the right 40 % volume; sideways is
+  /// a scrub, unless it began at a screen edge (Android's back swipe lives there).
+  void _decide(FilmSession s, Offset now) {
+    final from = _downAt ?? now;
+    final axis = swipeAxis(now.dx - from.dx, now.dy - from.dy);
+    if (axis == null) return;
+    final width = MediaQuery.sizeOf(context).width;
+    final insets = MediaQuery.systemGestureInsetsOf(context);
+    final x = from.dx;
+    switch (axis) {
+      case SwipeAxis.neither:
+        _gesture = _Gesture.dead;
+      case SwipeAxis.vertical:
+        if (x > insets.left + 8 && x < width * 0.4) {
+          _gesture = Platform.isAndroid ? _Gesture.brightness : _Gesture.dead;
+        } else if (x > width * 0.6 && x < width - insets.right - 8) {
+          _gesture = _Gesture.volume;
+          _dragVolume = s.engine.player.state.volume;
+        } else {
+          _gesture = _Gesture.dead;
+        }
+      case SwipeAxis.horizontal:
+        final edge =
+            x < math.max(insets.left, 16.0) + 8 || x > width - math.max(insets.right, 16.0) - 8;
+        if (edge || !ref.read(settingsValueProvider).swipeToSeek) {
+          _gesture = _Gesture.dead;
+        } else {
+          _gesture = _Gesture.seek;
+          _seekFrom = s.engine.player.state.position.inMilliseconds / 1000;
+          // Measured from here, not from where the finger landed: the readout opens at +0:00.
+          _seekOriginX = now.dx;
+        }
     }
   }
 
-  void _onDragUpdate(DragUpdateDetails d) {
-    final drag = _drag;
-    if (drag == null) return;
-    final h = MediaQuery.sizeOf(context).height;
-    final delta = -d.delta.dy / (h * 0.6);
-    switch (drag) {
-      case _Drag.brightness:
-        final next = ((_brightness ?? 0.5) + delta).clamp(0.02, 1.0);
+  void _onScaleUpdate(ScaleUpdateDetails d) {
+    final s = _session;
+    if (s == null) return;
+    if (_gesture == _Gesture.undecided) _decide(s, d.localFocalPoint);
+    switch (_gesture) {
+      case _Gesture.brightness:
+        final next = ((_brightness ?? 0.5) + _levelDelta(d)).clamp(0.02, 1.0);
         _brightness = next;
         _brightnessTouched = true;
         unawaited(ScreenBrightness.instance.setApplicationScreenBrightness(next));
         _showReadout('sun', 'Brightness ${(next * 100).round()} %', next);
-      case _Drag.volume:
-        _dragVolume = (_dragVolume + delta * 100).clamp(0.0, 150.0);
+      case _Gesture.volume:
+        _dragVolume = (_dragVolume + _levelDelta(d) * 100).clamp(0.0, 150.0);
         unawaited(_notifier.setVolume(_dragVolume));
         _showReadout(
           VolumeControl.iconFor(_dragVolume, muted: false),
           'Volume ${_dragVolume.round()} %',
           _dragVolume / 150,
         );
+      case _Gesture.seek:
+        // Only the readout moves: the film is sought once, when the finger lifts.
+        final target = swipeSeekTarget(
+          startSeconds: _seekFrom,
+          dragPx: d.localFocalPoint.dx - _seekOriginX,
+          widthPx: MediaQuery.sizeOf(context).width,
+          durationSeconds: s.engine.player.state.duration.inMilliseconds / 1000,
+        );
+        _swipe.value = (target: target, delta: target - _seekFrom);
+      case _Gesture.pinch:
+        if (d.pointerCount < 2) return;
+        // Measured from the last switch, so the same pinch can go out and come back in.
+        final fit = pinchFit(s.fit, d.scale / _pinchBase);
+        if (fit == null) return;
+        _pinchBase = d.scale;
+        _notifier.setFit(fit);
+        _showReadout('scan', fit.label);
+      case _Gesture.none || _Gesture.undecided || _Gesture.dead:
+        break;
     }
+  }
+
+  /// A full swipe up or down the middle 60 % of the screen is the whole range.
+  double _levelDelta(ScaleUpdateDetails d) =>
+      -d.focalPointDelta.dy / (MediaQuery.sizeOf(context).height * 0.6);
+
+  void _onScaleEnd(ScaleEndDetails d) {
+    final was = _gesture;
+    // A second finger landing on a drag that had not shown its direction starts a pinch;
+    // anything else spends the touch.
+    _gesture = was == _Gesture.undecided && d.pointerCount > 1 ? _Gesture.none : _Gesture.dead;
+    if (was != _Gesture.seek) return;
+    final swipe = _swipe.value;
+    _swipe.value = null;
+    // Lifted is a seek. Taken by the system, or joined by a second finger, is a change of mind.
+    if (swipe == null || _touchCancelled || d.pointerCount > 0 || swipe.delta.abs() < 1) return;
+    final known = (_session?.engine.player.state.duration ?? Duration.zero) > Duration.zero;
+    if (known) {
+      unawaited(_seekTo(Duration(milliseconds: (swipe.target * 1000).round())));
+    } else {
+      unawaited(_seekBy(Duration(milliseconds: (swipe.delta * 1000).round())));
+    }
+    _showReadout(swipe.delta < 0 ? 'rotate-ccw' : 'rotate-cw', signedClock(swipe.delta));
+  }
+
+  /// "Up next" says the file's name. A phone's library film is a content:// URI: its name is
+  /// the device library's to give.
+  String _upNextName(String locator) {
+    if (!locator.startsWith('content://')) return p.basename(locator);
+    final items = ref.read(deviceLibraryProvider).value?.items ?? const <LibraryItem>[];
+    for (final item in items) {
+      if (item.locator == locator) return item.name;
+    }
+    return 'The next video';
   }
 
   // ───────────────────────────── build ─────────────────────────────
@@ -567,8 +896,18 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
                 .read(pipProvider.notifier)
                 .setAutoEnter(enabled: true, w: pb.width, h: pb.height, playing: pb.playing),
           );
+          _applyOrientation(width: pb.width, height: pb.height);
         }
       }
+    });
+    ref.listen(sessionProvider.select((s) => s?.engine), (_, _) => _resetForFilm());
+    // Back from picture in picture: the way up asked for while it was small was not sent.
+    ref.listen(pipProvider, (_, inPip) {
+      // The gesture surface is not built in the little window: no touch survives the trip.
+      _touches = 0;
+      _gesture = _Gesture.none;
+      _swipe.value = null;
+      if (!inPip) _applyOrientation();
     });
     // Overlays that took the keyboard give it back when they go.
     ref.listen(boothOpenProvider, (_, open) {
@@ -595,6 +934,18 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
     final showUpNext =
         _completed && !_upNextCancelled && upNext != null && !session.threadingVisible;
     final pad = MediaQuery.paddingOf(context);
+    final size = MediaQuery.sizeOf(context);
+    final shown = _controls && !_locked;
+    final touch = !_desktop && !_locked;
+    // Video details sit under the title. Where the play button is in the middle of the
+    // picture (phones, narrow windows) they must end above it: a room too short for the
+    // column gets the two-column panel, and whatever still does not fit is scaled down.
+    final detailsTop = pad.top + 56;
+    final detailsRoom = !_desktop || size.width < 720
+        ? math.max(size.height / 2 - 34 - Tokens.space2 - detailsTop, 48.0)
+        : null;
+    final detailsWide =
+        detailsRoom != null && detailsRoom < VideoDetailsPanel.tallHeight && size.width >= 560;
     final hideCursor = _desktop && !_controls && _playing && _menu == null;
     final actions = ControlsActions(
       onBack: () => unawaited(_back()),
@@ -618,6 +969,8 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
             .read(settingsProvider.notifier)
             .edit((s) => s.copyWith(showRemaining: !s.showRemaining)),
       ),
+      onLock: Platform.isAndroid ? _lock : null,
+      onRotate: Platform.isAndroid ? _cycleOrientation : null,
     );
 
     return PopScope(
@@ -644,38 +997,27 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
                 SystemFontSubtitles(
                   engine: engine,
                   settings: settings,
-                  lifted: _controls && !session.threadingVisible,
+                  lifted: shown && !session.threadingVisible,
                 ),
               // The gesture surface: below the controls, beside (never around) the overlays.
+              // Locked, it hears one thing: a tap, which shows the way out.
               Listener(
                 onPointerSignal: _onWheel,
+                onPointerDown: _desktop ? null : _onPointerDown,
+                onPointerUp: _desktop ? null : _onPointerUp,
+                onPointerCancel: _desktop ? null : _onPointerCancel,
                 child: MouseRegion(
                   cursor: hideCursor ? SystemMouseCursors.none : MouseCursor.defer,
                   onHover: (_) => _poke(),
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
-                    onTap: _onTap,
-                    onDoubleTapDown: (d) => _doubleTapAt = d.localPosition,
-                    onDoubleTap: _onDoubleTap,
+                    onTapUp: _locked ? (_) => _showUnlock() : _onTapUp,
                     onSecondaryTap: _desktop ? () => _openMenu(AuditoriumMenu.more) : null,
-                    onLongPressStart: _desktop
-                        ? null
-                        : (_) {
-                            _holding = true;
-                            _rateBeforeHold = engine.player.state.rate;
-                            unawaited(engine.setRate(2));
-                            _showReadout('gauge', '2× while held');
-                          },
-                    onLongPressEnd: _desktop
-                        ? null
-                        : (_) {
-                            if (!_holding) return;
-                            _holding = false;
-                            unawaited(engine.setRate(_rateBeforeHold));
-                          },
-                    onVerticalDragStart: _desktop ? null : _onDragStart,
-                    onVerticalDragUpdate: _desktop ? null : _onDragUpdate,
-                    onVerticalDragEnd: _desktop ? null : (_) => _drag = null,
+                    onLongPressStart: touch ? _onHoldStart : null,
+                    onLongPressEnd: touch ? _onHoldEnd : null,
+                    onScaleStart: touch ? _onScaleStart : null,
+                    onScaleUpdate: touch ? _onScaleUpdate : null,
+                    onScaleEnd: touch ? _onScaleEnd : null,
                   ),
                 ),
               ),
@@ -683,11 +1025,11 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
                 Undecodable(sentence: session.error!, onBack: () => unawaited(_back())),
               RepaintBoundary(
                 child: IgnorePointer(
-                  ignoring: !_controls,
+                  ignoring: !shown,
                   child: AnimatedOpacity(
-                    opacity: _controls ? 1 : 0,
-                    duration: _controls ? Tokens.durFast : Tokens.durSlow,
-                    curve: _controls ? Tokens.easeOut : Tokens.easeInOut,
+                    opacity: shown ? 1 : 0,
+                    duration: shown ? Tokens.durFast : Tokens.durSlow,
+                    curve: shown ? Tokens.easeOut : Tokens.easeInOut,
                     child: MouseRegion(
                       onHover: (_) => _idle?.cancel(),
                       onExit: (_) => _poke(),
@@ -698,30 +1040,45 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
                         fullscreen: fullscreen,
                         menu: _menu,
                         syncOpen: _syncOpen,
+                        orientation: _orient,
                         actions: actions,
                       ),
                     ),
                   ),
                 ),
               ),
-              // Under the title, clear of the bottom bar; it stays while the controls hide.
+              // Under the title, clear of the bottom bar and of the play button in the middle;
+              // it stays while the controls hide.
               if (_details && !session.threadingVisible)
                 Positioned(
                   left: Tokens.space4,
                   right: Tokens.space4,
-                  top: pad.top + 60,
-                  child: Align(
-                    alignment: Alignment.topLeft,
-                    child: LiveVideoDetails(
-                      key: ValueKey(engine),
-                      engine: engine,
-                      onClose: _toggleDetails,
+                  top: detailsTop,
+                  height: detailsRoom,
+                  child: IgnorePointer(
+                    ignoring: _locked,
+                    child: Align(
+                      alignment: Alignment.topLeft,
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.topLeft,
+                        child: LiveVideoDetails(
+                          key: ValueKey(engine),
+                          engine: engine,
+                          onClose: _toggleDetails,
+                          wide: detailsWide,
+                          // Unconstrained inside the FittedBox: the room's width is told.
+                          maxWidth: detailsWide
+                              ? size.width - Tokens.space4 * 2
+                              : math.min(400.0, size.width - Tokens.space4 * 2),
+                        ),
+                      ),
                     ),
                   ),
                 ),
               // "Skip intro": there even when the controls are not. A menu or the "Up next"
               // card takes the same corner, so it steps aside for them.
-              if (_menu == null && !showUpNext && !booth)
+              if (_menu == null && !showUpNext && !booth && !_locked)
                 Positioned(
                   right: Tokens.space4,
                   bottom: pad.bottom + (_desktop ? 104 : 132),
@@ -762,27 +1119,64 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
                   ),
                 ),
               ],
-              if (_readout != null)
-                Align(
-                  alignment: const Alignment(0, -0.45),
-                  child: IgnorePointer(
-                    child: LevelReadout(
-                      icon: _readout!.icon,
-                      text: _readout!.text,
-                      level: _readout!.level,
-                    ),
-                  ),
+              // The readouts rebuild alone: a swipe moves them sixty times a second.
+              IgnorePointer(
+                child: ValueListenableBuilder(
+                  valueListenable: _readout,
+                  builder: (context, readout, _) => readout == null
+                      ? const SizedBox.shrink()
+                      : Align(
+                          alignment: const Alignment(0, -0.45),
+                          child: LevelReadout(
+                            icon: readout.icon,
+                            text: readout.text,
+                            level: readout.level,
+                          ),
+                        ),
                 ),
+              ),
+              IgnorePointer(
+                child: ValueListenableBuilder(
+                  valueListenable: _swipe,
+                  builder: (context, swipe, _) => swipe == null
+                      ? const SizedBox.shrink()
+                      : Align(
+                          alignment: const Alignment(0, -0.45),
+                          child: SeekReadout(
+                            time: clockOf(swipe.target),
+                            delta: signedClock(swipe.delta),
+                          ),
+                        ),
+                ),
+              ),
               if (showUpNext)
                 Positioned(
                   right: Tokens.space5,
                   bottom: pad.bottom + 120,
-                  child: UpNextCard(
-                    key: ValueKey(upNext),
-                    // A phone's library film is a content:// URI: it has no name to show.
-                    name: upNext.startsWith('content://') ? 'The next video' : p.basename(upNext),
-                    onPlay: () => unawaited(_notifier.playUpNext()),
-                    onCancel: () => setState(() => _upNextCancelled = true),
+                  child: IgnorePointer(
+                    ignoring: _locked,
+                    child: UpNextCard(
+                      key: ValueKey(upNext),
+                      name: _upNextName(upNext),
+                      onPlay: () => unawaited(_notifier.playUpNext()),
+                      onCancel: () => setState(() => _upNextCancelled = true),
+                    ),
+                  ),
+                ),
+              if (_locked)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: pad.bottom + Tokens.space9,
+                  child: Center(
+                    child: IgnorePointer(
+                      ignoring: !_unlockShown,
+                      child: AnimatedOpacity(
+                        opacity: _unlockShown ? 1 : 0,
+                        duration: _unlockShown ? Tokens.durFast : Tokens.durSlow,
+                        child: UnlockPill(onUnlock: _unlock),
+                      ),
+                    ),
                   ),
                 ),
               if (booth) const BoothSheet(),

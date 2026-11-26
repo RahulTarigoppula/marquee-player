@@ -206,6 +206,22 @@ Future<Uint8List?> videoThumbnail(String uri, {int width = 320}) async {
   }
 }
 
+/// Copies a JPEG the app wrote (a screenshot at [path]) into the shared Pictures/Marquee album
+/// as [name], so the Gallery shows it. False when it was not saved: before Android 10 (where
+/// that would need a storage permission Marquee does not ask for), on other platforms, or
+/// when the copy failed.
+Future<bool> saveImageToGallery(String path, String name) async {
+  if (!Platform.isAndroid) return false;
+  try {
+    return await _content.invokeMethod<bool>('saveImageToGallery', {'path': path, 'name': name}) ??
+        false;
+  } on PlatformException {
+    return false;
+  } on MissingPluginException {
+    return false;
+  }
+}
+
 /// Opens Android's share sheet for a library video. False when it could not open.
 Future<bool> shareVideo(String uri, String name) async {
   try {

@@ -1,7 +1,13 @@
 // The film gate: a strip of 35 mm film as the seek bar. The playhead is the frame in the gate;
 // release snaps to a chapter within 6 px; dragging UP switches to FINE (1/8 gain).
 // Played, buffered and still-to-come read as three clearly different tones; hovering (or
-// dragging) shows the time under the pointer above the strip.
+// dragging) shows the time under the pointer above the strip, with the chapter it falls in and,
+// when the owner supplies one, a frame of the film there.
+//
+// The hover and drag state live HERE: a pointer moving over the strip rebuilds this widget
+// and nothing above it.
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -29,6 +35,18 @@ class FilmGate extends StatefulWidget {
   /// Chapter titles by start second, for the hover label.
   final Map<double, String> chapterTitles;
 
+  /// The height that takes touches. The strip is drawn at its bottom, so a strip thinner than
+  /// a fingertip is still a comfortable target on a phone. Null: the strip's own height.
+  final double? hitHeight;
+
+  /// The second under the pointer while it hovers or drags (never null: the owner aims its
+  /// preview frame at it, and a pointer that has left needs no frame).
+  final ValueChanged<double>? onPreview;
+
+  /// A frame of the film at that second, drawn above the pointer with the time. Null shows
+  /// the time alone.
+  final Widget? preview;
+
   const FilmGate({
     super.key,
     required this.position,
@@ -43,6 +61,9 @@ class FilmGate extends StatefulWidget {
     this.loopA,
     this.loopB,
     this.chapterTitles = const {},
+    this.hitHeight,
+    this.onPreview,
+    this.preview,
   });
 
   @override
@@ -88,6 +109,7 @@ class _FilmGateState extends State<FilmGate> with SingleTickerProviderStateMixin
       _detentFlash = crossed;
     });
     widget.onScrub?.call(target);
+    widget.onPreview?.call(target);
   }
 
   String? _chapterAt(double seconds) {
@@ -97,6 +119,9 @@ class _FilmGateState extends State<FilmGate> with SingleTickerProviderStateMixin
     }
     return title == null || title.trim().isEmpty ? null : title;
   }
+
+  String _labelText(double seconds) =>
+      _fine ? 'FINE ${fmtTimecode(seconds.floor())}' : fmtTimecode(seconds.floor());
 
   @override
   Widget build(BuildContext context) {
@@ -114,12 +139,18 @@ class _FilmGateState extends State<FilmGate> with SingleTickerProviderStateMixin
       child: LayoutBuilder(
         builder: (context, c) {
           final w = c.maxWidth;
+          final hit = math.max(widget.hitHeight ?? widget.height, widget.height);
+          final picture = widget.preview;
+          final labelWidth = picture == null ? 160.0 : SeekPreviewBubble.width;
           // The label follows the drag, else the hover.
           final labelSeconds = _dragSeconds ?? (_hoverDx == null ? null : _secondsAt(_hoverDx!, w));
           final chapter = labelSeconds == null ? null : _chapterAt(labelSeconds);
           return MouseRegion(
             cursor: SystemMouseCursors.click,
-            onHover: (e) => setState(() => _hoverDx = e.localPosition.dx),
+            onHover: (e) {
+              setState(() => _hoverDx = e.localPosition.dx);
+              if (widget.duration > 0) widget.onPreview?.call(_secondsAt(e.localPosition.dx, w));
+            },
             onExit: (_) => setState(() => _hoverDx = null),
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
@@ -167,39 +198,51 @@ class _FilmGateState extends State<FilmGate> with SingleTickerProviderStateMixin
               child: Stack(
                 clipBehavior: Clip.none,
                 children: [
-                  // Full width: a childless CustomPaint in a loose parent is 0 px wide.
+                  // Full width: a childless CustomPaint in a loose parent is 0 px wide. The box
+                  // is the whole touch area; the strip sits at its bottom.
                   SizedBox(
                     width: w.isFinite ? w : null,
-                    height: widget.height,
-                    child: AnimatedBuilder(
-                      animation: _flicker,
-                      builder: (context, _) => CustomPaint(
-                        painter: _GatePainter(
-                          fraction: (shown / dur).clamp(0.0, 1.0),
-                          buffered: (widget.buffered / dur).clamp(0.0, 1.0),
-                          detents: [for (final d in widget.detents) d / dur],
-                          loopA: widget.loopA == null ? null : widget.loopA! / dur,
-                          loopB: widget.loopB == null ? null : widget.loopB! / dur,
-                          palette: p,
-                          edgeLit: _detentFlash,
-                          frameVisible: !widget.buffering || _flicker.value < 0.5,
+                    height: hit,
+                    child: Align(
+                      alignment: Alignment.bottomCenter,
+                      child: SizedBox(
+                        width: w.isFinite ? w : null,
+                        height: widget.height,
+                        child: AnimatedBuilder(
+                          animation: _flicker,
+                          builder: (context, _) => CustomPaint(
+                            painter: _GatePainter(
+                              fraction: (shown / dur).clamp(0.0, 1.0),
+                              buffered: (widget.buffered / dur).clamp(0.0, 1.0),
+                              detents: [for (final d in widget.detents) d / dur],
+                              loopA: widget.loopA == null ? null : widget.loopA! / dur,
+                              loopB: widget.loopB == null ? null : widget.loopB! / dur,
+                              palette: p,
+                              edgeLit: _detentFlash,
+                              frameVisible: !widget.buffering || _flicker.value < 0.5,
+                            ),
+                          ),
                         ),
                       ),
                     ),
                   ),
                   if (labelSeconds != null && w.isFinite && widget.duration > 0)
                     Positioned(
-                      left: ((labelSeconds / dur) * w - 80).clamp(0.0, (w - 160).clamp(0.0, w)),
+                      left: ((labelSeconds / dur) * w - labelWidth / 2).clamp(
+                        0.0,
+                        (w - labelWidth).clamp(0.0, w),
+                      ),
                       bottom: widget.height + Tokens.space2,
-                      width: 160,
+                      width: labelWidth,
                       child: IgnorePointer(
                         child: Center(
-                          child: _TimeLabel(
-                            text: _fine
-                                ? 'FINE ${fmtTimecode(labelSeconds.floor())}'
-                                : fmtTimecode(labelSeconds.floor()),
-                            chapter: chapter,
-                          ),
+                          child: picture == null
+                              ? _TimeLabel(text: _labelText(labelSeconds), chapter: chapter)
+                              : SeekPreviewBubble(
+                                  picture: picture,
+                                  time: _labelText(labelSeconds),
+                                  chapter: chapter,
+                                ),
                         ),
                       ),
                     ),
@@ -240,6 +283,58 @@ class _TimeLabel extends StatelessWidget {
               style: Txt.body(Tokens.textXs, p.inkMuted),
             ),
           Text(text, style: Txt.mono(Tokens.textSm, p.ink)),
+        ],
+      ),
+    );
+  }
+}
+
+/// The seek preview: a small frame of the film at the second under the pointer, with the
+/// chapter it falls in and the time. [picture] is any widget (the live `Video` of the preview
+/// player; a stand-in in the screenshot tests), letterboxed in a 16:9 window.
+class SeekPreviewBubble extends StatelessWidget {
+  static const double width = 192;
+
+  final Widget picture;
+  final String time;
+  final String? chapter;
+  const SeekPreviewBubble({super.key, required this.picture, required this.time, this.chapter});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = House.paletteOf(context);
+    return Container(
+      width: width,
+      decoration: BoxDecoration(
+        color: p.surface2,
+        borderRadius: BorderRadius.circular(Tokens.radiusMd),
+        border: Border.all(color: p.borderStrong),
+        boxShadow: Tokens.shadow3,
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          AspectRatio(
+            aspectRatio: 16 / 9,
+            child: ColoredBox(color: Tokens.pictureBg, child: picture),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: Tokens.space2, vertical: Tokens.space1),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (chapter != null)
+                  Text(
+                    chapter!,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Txt.body(Tokens.textXs, p.inkMuted),
+                  ),
+                Text(time, style: Txt.mono(Tokens.textSm, p.ink)),
+              ],
+            ),
+          ),
         ],
       ),
     );

@@ -1,7 +1,8 @@
 // The Auditorium's own small controls, drawn ON the picture: glyph buttons with a soft wash,
-// the volume slider, the menu panel and its rows, the swipe readout, the "Skip intro" pill,
-// the video details panel and the "Up next" card. They read the Auditorium palette only
-// (playback is always the Auditorium). Pure presentation: the screenshot tests draw them.
+// the volume slider, the menu panel and its rows, the swipe readouts, the "Skip intro" pill,
+// the "Unlock" pill, the video details panel and the "Up next" card. They read the Auditorium
+// palette only (playback is always the Auditorium). Pure presentation: the screenshot tests
+// draw them.
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -510,64 +511,103 @@ class SkipPill extends StatelessWidget {
 
 /// The video details overlay: what the file is and how it is being played, in mono, top-left.
 /// [lines] come from `videoDetailLines`; a value mpv did not give is simply not in them.
+///
+/// [wide] lays the rows out in two columns with no heading: a phone on its side has a band
+/// only a few rows tall between the title and the play button, and the panel must stay in it.
 class VideoDetailsPanel extends StatelessWidget {
   final List<({String label, String value})> lines;
   final VoidCallback? onClose;
-  const VideoDetailsPanel({super.key, required this.lines, this.onClose});
+  final bool wide;
+
+  /// The widest the panel may be (the room's width, less its margins).
+  final double maxWidth;
+  const VideoDetailsPanel({
+    super.key,
+    required this.lines,
+    this.onClose,
+    this.wide = false,
+    this.maxWidth = 400,
+  });
+
+  /// About how tall the one-column panel is with every row present: the screen uses it to
+  /// decide whether the panel fits above the centre transport.
+  static const double tallHeight = 240;
 
   @override
   Widget build(BuildContext context) {
     final p = House.paletteOf(context);
-    return Container(
-      constraints: const BoxConstraints(maxWidth: 400),
-      padding: const EdgeInsets.fromLTRB(
-        Tokens.space3,
-        Tokens.space1,
-        Tokens.space1,
-        Tokens.space3,
+    Widget row(({String label, String value}) l) => Padding(
+      padding: const EdgeInsets.only(top: 2, right: Tokens.space2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: wide ? 104 : 116,
+            child: Text(l.label, style: Txt.mono(Tokens.textXs, p.inkMuted)),
+          ),
+          Flexible(
+            child: Text(
+              l.value,
+              maxLines: wide ? 1 : null,
+              overflow: wide ? TextOverflow.ellipsis : null,
+              style: Txt.mono(Tokens.textXs, p.ink),
+            ),
+          ),
+        ],
       ),
+    );
+    final close = onClose == null
+        ? null
+        : CtlButton(
+            icon: 'x',
+            label: 'Close video details',
+            onTap: onClose,
+            size: 36,
+            iconSize: 16,
+          );
+    final empty = Text('Nothing to show yet.', style: Txt.mono(Tokens.textXs, p.inkMuted));
+    final half = (lines.length + 1) ~/ 2;
+    return Container(
+      constraints: BoxConstraints(maxWidth: wide ? maxWidth.clamp(280.0, 720.0) : maxWidth),
+      padding: wide
+          ? const EdgeInsets.fromLTRB(Tokens.space3, Tokens.space1, Tokens.space1, Tokens.space2)
+          : const EdgeInsets.fromLTRB(Tokens.space3, Tokens.space1, Tokens.space1, Tokens.space3),
       decoration: BoxDecoration(
         color: p.bg.withValues(alpha: 0.82),
         borderRadius: BorderRadius.circular(Tokens.radiusMd),
         border: Border.all(color: p.border),
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(child: Text('VIDEO DETAILS', style: Txt.label(p.inkFaint))),
-              if (onClose != null)
-                CtlButton(
-                  icon: 'x',
-                  label: 'Close video details',
-                  onTap: onClose,
-                  size: 36,
-                  iconSize: 16,
-                )
-              else
-                const SizedBox(height: 36),
-            ],
-          ),
-          if (lines.isEmpty)
-            Text('Nothing to show yet.', style: Txt.mono(Tokens.textXs, p.inkMuted)),
-          for (final l in lines)
-            Padding(
-              padding: const EdgeInsets.only(top: 2, right: Tokens.space2),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SizedBox(
-                    width: 116,
-                    child: Text(l.label, style: Txt.mono(Tokens.textXs, p.inkMuted)),
-                  ),
-                  Flexible(child: Text(l.value, style: Txt.mono(Tokens.textXs, p.ink))),
-                ],
-              ),
+      child: wide
+          ? Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (lines.isEmpty) Expanded(child: empty),
+                for (final column in [lines.take(half), lines.skip(half)])
+                  if (column.isNotEmpty)
+                    Expanded(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [for (final l in column) row(l)],
+                      ),
+                    ),
+                ?close,
+              ],
+            )
+          : Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(child: Text('VIDEO DETAILS', style: Txt.label(p.inkFaint))),
+                    close ?? const SizedBox(height: 36),
+                  ],
+                ),
+                if (lines.isEmpty) empty,
+                for (final l in lines) row(l),
+              ],
             ),
-        ],
-      ),
     );
   }
 }
@@ -616,6 +656,72 @@ class LevelReadout extends StatelessWidget {
             ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+/// The readout of a sideways swipe on the picture: where the film will land when the finger
+/// lifts, and how far that is from where it was (`+0:42`).
+class SeekReadout extends StatelessWidget {
+  final String time;
+  final String delta;
+  const SeekReadout({super.key, required this.time, required this.delta});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = House.paletteOf(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: Tokens.space5, vertical: Tokens.space3),
+      decoration: BoxDecoration(
+        color: p.bg.withValues(alpha: 0.78),
+        borderRadius: BorderRadius.circular(Tokens.radiusLg),
+        border: Border.all(color: p.border),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(time, style: Txt.mono(Tokens.textXl, p.ink, weight: FontWeight.w500)),
+          const SizedBox(height: Tokens.space1),
+          Text(delta, style: Txt.mono(Tokens.textSm, p.accent, weight: FontWeight.w500)),
+        ],
+      ),
+    );
+  }
+}
+
+/// The one thing a locked screen shows, and only for a moment after a tap: the way out.
+/// A tap or a hold unlocks.
+class UnlockPill extends StatelessWidget {
+  final VoidCallback onUnlock;
+  const UnlockPill({super.key, required this.onUnlock});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = House.paletteOf(context);
+    return Pressable(
+      label: 'Unlock the screen',
+      onTap: onUnlock,
+      onLongPress: onUnlock,
+      radius: Tokens.radiusFull,
+      builder: (context, s) => AnimatedContainer(
+        duration: Tokens.durFast,
+        constraints: const BoxConstraints(minHeight: Tokens.targetMin),
+        padding: const EdgeInsets.symmetric(horizontal: Tokens.space4),
+        decoration: BoxDecoration(
+          color: Color.alphaBlend(pressWash(p, s), p.bgElevated.withValues(alpha: 0.92)),
+          borderRadius: BorderRadius.circular(Tokens.radiusFull),
+          border: Border.all(color: s.lit ? p.inkFaint : p.borderStrong),
+          boxShadow: Tokens.shadow3,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            LucideIcon('lock-open', size: 18, color: p.accent),
+            const SizedBox(width: Tokens.space2),
+            Text('Unlock', style: Txt.body(Tokens.textBase, p.ink, weight: FontWeight.w600)),
+          ],
+        ),
       ),
     );
   }

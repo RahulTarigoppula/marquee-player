@@ -60,6 +60,9 @@ class ControlsData {
 
   /// The clock counts down to the end instead of showing the film's length.
   final bool showRemaining;
+
+  /// How the screen is turned for this film (phones: the rotate button says and cycles it).
+  final FilmOrientation orientation;
   final AuditoriumMenu? openMenu;
   final bool syncOpen;
 
@@ -91,6 +94,7 @@ class ControlsData {
     this.pinned = false,
     this.seekStep = 10,
     this.showRemaining = false,
+    this.orientation = FilmOrientation.auto,
     this.openMenu,
     this.syncOpen = false,
   });
@@ -109,6 +113,13 @@ class ControlsActions {
 
   /// A tap on the time readout: total length or time remaining.
   final VoidCallback? onToggleClock;
+
+  /// Phones: lock the screen against touches, and turn it (auto, landscape, portrait). The
+  /// buttons only draw where these are set.
+  final VoidCallback? onLock, onRotate;
+
+  /// The second under the pointer on the seek bar, while it hovers or drags there.
+  final ValueChanged<double>? onSeekHover;
   final ValueChanged<Duration> onSeekBy;
   final ValueChanged<double> onSeek, onScrub, onVolume;
   final VoidCallback onScrubEnd;
@@ -130,6 +141,9 @@ class ControlsActions {
     this.onPip,
     this.onCueSheet,
     this.onToggleClock,
+    this.onLock,
+    this.onRotate,
+    this.onSeekHover,
   });
 
   /// For previews and tests.
@@ -156,7 +170,17 @@ class AuditoriumControls extends StatelessWidget {
 
   /// Extra content under the gate (the sync rule while it is open).
   final Widget? syncRule;
-  const AuditoriumControls({super.key, required this.data, required this.actions, this.syncRule});
+
+  /// The frame the seek bar shows above the pointer (the preview player's picture), when
+  /// there is one; without it the bar shows the time alone.
+  final Widget? seekPreview;
+  const AuditoriumControls({
+    super.key,
+    required this.data,
+    required this.actions,
+    this.syncRule,
+    this.seekPreview,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -176,7 +200,13 @@ class AuditoriumControls extends StatelessWidget {
           ),
         Align(
           alignment: Alignment.bottomCenter,
-          child: _BottomBar(data: d, actions: actions, compact: compact, syncRule: syncRule),
+          child: _BottomBar(
+            data: d,
+            actions: actions,
+            compact: compact,
+            syncRule: syncRule,
+            seekPreview: seekPreview,
+          ),
         ),
       ],
     );
@@ -252,6 +282,15 @@ class _TopBar extends StatelessWidget {
                 LucideIcon('pin', size: 18, color: p.accent),
                 const SizedBox(width: Tokens.space3),
               ],
+              if (actions.onRotate != null)
+                CtlButton(
+                  icon: 'rotate-ccw-square',
+                  label: 'Turn the screen (now: ${d.orientation.label.toLowerCase()})',
+                  active: d.orientation != FilmOrientation.auto,
+                  onTap: actions.onRotate,
+                ),
+              if (actions.onLock != null)
+                CtlButton(icon: 'lock', label: 'Lock the screen', onTap: actions.onLock),
               if (d.showPip && actions.onPip != null)
                 CtlButton(
                   icon: 'picture-in-picture-2',
@@ -351,12 +390,13 @@ class _BottomBar extends StatelessWidget {
   final ControlsData data;
   final ControlsActions actions;
   final bool compact;
-  final Widget? syncRule;
+  final Widget? syncRule, seekPreview;
   const _BottomBar({
     required this.data,
     required this.actions,
     required this.compact,
     this.syncRule,
+    this.seekPreview,
   });
 
   @override
@@ -489,14 +529,18 @@ class _BottomBar extends StatelessWidget {
           onTap: a.onFullscreen,
         ),
     ];
+    // A phone's strip is thinner than a fingertip: its touch area reaches up into the scrim
+    // above it (which gives up as much padding, so nothing below moves).
+    final strip = d.desktop ? Tokens.gateHeightDesktop : Tokens.gateHeight * 0.7;
+    final hit = d.desktop || strip >= Tokens.targetMin ? strip : Tokens.targetMin;
     return _Scrim(
       top: false,
       child: SafeArea(
         top: false,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(
+          padding: EdgeInsets.fromLTRB(
             Tokens.space4,
-            Tokens.space10,
+            Tokens.space10 - (hit - strip),
             Tokens.space4,
             Tokens.space2,
           ),
@@ -513,10 +557,13 @@ class _BottomBar extends StatelessWidget {
                 chapterTitles: d.chapterTitles,
                 loopA: d.loopA,
                 loopB: d.loopB,
-                height: d.desktop ? Tokens.gateHeightDesktop : Tokens.gateHeight * 0.7,
+                height: strip,
+                hitHeight: hit,
                 onSeek: a.onSeek,
                 onScrub: a.onScrub,
                 onScrubEnd: a.onScrubEnd,
+                onPreview: a.onSeekHover,
+                preview: seekPreview,
               ),
               const SizedBox(height: Tokens.space1),
               // Two groups; on a narrow phone the tools wrap under the transport, never overflow.

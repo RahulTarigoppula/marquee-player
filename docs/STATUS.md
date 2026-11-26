@@ -92,3 +92,29 @@ New deviations:
 Still open: C++ single-instance and Kotlin picker/PiP changes are verified only by CI compile
 and real devices; Android has no folder-sibling "next episode" (needs a SAF tree grant);
 Media Session / SMTC integration; seek-bar thumbnails.
+
+## 6. Pass 3: v2.0 (2026-11-26)
+
+The goal changed from "works" to "the player friends actually keep": a device library, the
+controls people expect from VLC / MX Player, and the defects a read-only audit of v1.1 found.
+
+| Area | What changed | Verified by |
+|---|---|---|
+| Audit | 21 findings from reading v1.1 against the package sources (media_kit, window_manager, file_picker). All 11 major ones are fixed: films waiting on subtitles, by-name auto-download, Booth search blanking the film, no orientation control, no audio focus, Back dead in Settings, dead-URL black screen, Android export, off-screen window restore, `singleTop` second instance, stale sign-in token | unit tests where pure (threading, playback rules); the rest by CI builds and the playback test |
+| Library | `lib/engine/library.dart` (pure rules), MediaStore scan + permission + thumbnails through `marquee/content`, Windows folder scan in an isolate, background thumbnailer (one hidden player), Lobby Home / Library tabs | `dart test`, screenshot tests, CI APK + Windows builds |
+| Player | picture adjust, sound profiles (`af`), second subtitle, repeat, skip-intro, details overlay, per-film prefs (`file_prefs`, schema 2), keep on top, seek preview, Android gestures / lock / orientation, audio focus (`audio_session`) | engine tests; screenshot tests; **real libmpv playback test on `windows-latest`** |
+| Settings | sections split into files; every v2 preference; update check (`lib/api/updates.dart`, opt-in) | `dart test test/api`, screenshot tests |
+| CI/CD | `playback.yml` (fixtures from ffmpeg, 6 engine tests + 1 whole-app test), installer smoke test, release gate split from the playback job, friendly asset names | green runs on main |
+
+New deviations:
+
+| # | Plan said | Built | Why |
+|---|---|---|---|
+| D17 | the leader holds the film until threading resolves | a stalled automatic search starts the film; the Booth carries the search on | subtitles are a convenience, the film is the point; offline and key-less builds stalled on every open |
+| D18 | a name search auto-picks the best row | only a fingerprint hit is downloaded without a tap | a guess cost a ticket and wrote `.1.srt` copies |
+| D19 | no update check at all | manual check, plus an opt-in daily one | sideloaded builds have no store to update them; default stays "no request" |
+| D20 | MediaStore scan "someday" | shipped, with `READ_MEDIA_VIDEO` asked for only on a tap | it is the feature phones are judged by |
+
+Still open: mpv-side behaviour of the new properties (`af` chains, `video-rotate`,
+`secondary-sid`) is exercised only on real devices; Android Kotlin is compile-checked by CI, not
+instrumented; Media Session / lock-screen controls and background audio; casting; SMB / DLNA.

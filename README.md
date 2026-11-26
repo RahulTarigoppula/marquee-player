@@ -2,7 +2,7 @@
 
 > **Drop a film. The lights go down. The subtitles are already there.**
 
-**Status: v1.1, see [docs/STATUS.md](docs/STATUS.md)** · design system **HOUSE LIGHTS** · [screenshots](https://github.com/RahulTarigoppula/marquee-player/tree/screenshots)
+**Status: v2.0, see [docs/STATUS.md](docs/STATUS.md)** · design system **HOUSE LIGHTS** · [screenshots](https://github.com/RahulTarigoppula/marquee-player/tree/screenshots)
 
 ![Lobby](https://raw.githubusercontent.com/RahulTarigoppula/marquee-player/screenshots/lobby_library_desktop.png)
 
@@ -12,15 +12,31 @@ Get the files from the **[latest release](https://github.com/RahulTarigoppula/ma
 
 | You have | Download | Then |
 |---|---|---|
-| **Windows 10/11** | `marquee-windows-x64-setup.exe` | Run it. SmartScreen says "Windows protected your PC" (the app isn't code-signed) → **More info → Run anyway**. No admin needed. Right-click any video → **Open with → Marquee**. |
+| **Windows 10/11** | `Marquee-Windows-Setup.exe` | Run it. SmartScreen says "Windows protected your PC" (the app isn't code-signed) → **More info → Run anyway**. No admin needed. Right-click any video → **Open with → Marquee**. |
 | Windows, no install | `marquee-windows-x64-portable.zip` | Extract anywhere, run `marquee.exe`. |
-| **Android 8+** | `marquee-android-arm64-v8a.apk` | Open it on the phone, allow "install unknown apps" once. Older phones: `armeabi-v7a`. |
+| **Android 8+** | `Marquee-Android.apk` | Open it on the phone, allow "install unknown apps" once. Very old (32-bit) phones: `marquee-android-armeabi-v7a.apk`. |
 
-**Subtitles:** open **Settings** (gear) → **Subtitles** and sign in with a free [OpenSubtitles.com](https://www.opensubtitles.com) account. If the app asks for an API key, create a free one at OpenSubtitles → *Profile → API Consumers* and paste it there. Files you already have subtitles for (`film.srt` beside `film.mkv`, or subtitles inside the MKV) need nothing.
+**Subtitles:** open **Settings** (gear) → **Subtitles** and sign in with a free [OpenSubtitles.com](https://www.opensubtitles.com) account. If the app asks for an API key, create a free one at OpenSubtitles → *Profile → API Consumers* and paste it there. Files you already have subtitles for (`film.srt` beside `film.mkv`, or subtitles inside the MKV) need nothing. A film never waits for subtitles: if none are found it simply starts, and the search stays one tap away.
 
-**What it does:** plays practically any video file (MKV, MP4, AVI, HEVC, AC-3, DTS, ASS…), finds matching subtitles automatically, remembers where you stopped and your subtitle timing per film, plays the next episode in the folder, and keeps a library of what you watched with frames from each film. Full keyboard control on Windows (press `?`), gestures on Android (double-tap ±10 s, swipe edges for brightness/volume, long-press 2×).
+## What it does
 
-**Privacy:** no accounts of ours, no telemetry, no analytics. Only the file's fingerprint, size and a title query go to OpenSubtitles when searching. Everything else stays on your device.
+**Plays everything.** MKV, MP4, AVI, HEVC 10-bit, AV1, AC-3, DTS, ASS, PGS… on libmpv, with hardware decoding. No codec packs.
+
+**Your videos, already there.** The **Library** tab lists every video on the phone (by folder, like MX Player) or in the folders you choose on Windows, with search, sorting, thumbnails, resume bars and a NEW dot. **Home** keeps what you were watching.
+
+**Subtitles without the ritual.** An exact match is found by the file's fingerprint and attached before the first frame. Anything less certain is listed for you to pick, so a download is never wasted on a guess. Per-film timing (50 ms steps), size, colour, look, placement, and a second subtitle track for language learners.
+
+**A player that keeps up.**
+- Resume everywhere, next episode in the folder with an Up-next card, repeat one / repeat folder, sleep timer.
+- **Skip intro / recap / credits** when the file has chapters that say so.
+- Speed 0.25× to 4× (fine slider), hold for 2×, frame step, A-B loop, chapters.
+- Picture: fit, fill, 16:9, 4:3, stretch, rotate, zoom, brightness / contrast / saturation / gamma, deinterlace.
+- Sound: 150 % boost, clear-voices / bass / treble / night profiles, evening-out of loud and quiet parts, audio delay, track choice remembered per film.
+- A live preview frame while you move along the seek bar (desktop), video details overlay (`I`), keep-on-top mini window (`T`), screenshots.
+- Android: swipe to seek, edge swipes for brightness and volume, double-tap to jump, pinch to fill, touch lock, rotation that follows the picture, picture-in-picture, pauses for calls and unplugged headphones.
+- Windows: every control on the keyboard (press `?`), drag-and-drop, "Open with", single window.
+
+**Privacy.** No accounts of ours, no telemetry, no analytics, no ads. Only the file's fingerprint, size and a title query go to OpenSubtitles when searching. Looking for an update is off unless you switch it on (it asks GitHub once a day, nothing about you is sent). Everything else stays on your device.
 
 ### Owner checklist (one-time, repo settings)
 
@@ -28,7 +44,7 @@ Get the files from the **[latest release](https://github.com/RahulTarigoppula/ma
 2. **Android signing**: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_PASSWORD`, `ANDROID_KEY_ALIAS` (see §4 below). Without them APKs are signed with a throwaway CI key and won't update in place.
 3. **Settings → Pages → Source: GitHub Actions**, then re-run the `pages` workflow, for Marquee Lite at `https://rahultarigoppula.github.io/marquee-player/`.
 4. Optional: `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` + repo variable `WORKER_URL` to give Lite online subtitle search.
-5. Release: `git tag v1.2.0 && git push --tags`.
+5. Release: `git tag v2.0.1 && git push --tags`.
 
 Marquee is one Flutter codebase that ships a **Windows `.exe`** and an **Android APK** on the same engine, libmpv (ffmpeg + libass) through `media_kit`, so an MKV with HEVC video, AC-3 audio and an ASS subtitle track plays identically on both, with no codec packs.
 The instant a file opens it is fingerprinted with the OpenSubtitles **moviehash** (128 KiB of I/O), looked up hash-first, and the best subtitle is downloaded, saved beside the file and attached **before the first frame is shown**, a hash hit means the subtitle was uploaded for that exact release, so it is already in sync.

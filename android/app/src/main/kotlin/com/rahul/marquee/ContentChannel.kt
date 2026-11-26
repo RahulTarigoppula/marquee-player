@@ -6,6 +6,7 @@ import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ComponentName
 import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -13,6 +14,7 @@ import android.database.Cursor
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
@@ -53,6 +55,9 @@ import java.util.concurrent.Executors
  *                                          modified (epoch ms), folder, folderPath}
  *   videoThumbnail {uri, width: Int}    -> JPEG ByteArray, or null when there is none
  *   shareVideo {uri, name}              -> opens the system share sheet
+ *   saveImageToGallery {path, name}     -> Boolean: the JPEG at `path` copied into the shared
+ *                                          Pictures/Marquee album (API 29+; false before that,
+ *                                          where it would need a storage-write permission)
  *
  * "partial" is Android 14's "selected photos and videos": MediaStore then lists only those.
  *
@@ -203,6 +208,14 @@ class ContentChannel(
                     ?: return result.error("bad-args", "shareVideo needs a uri", null)
                 shareVideo(Uri.parse(uri), call.argument<String>("name") ?: "video", result)
             }
+            "saveImageToGallery" -> {
+                val path = call.argument<String>("path")
+                val name = call.argument<String>("name")
+                if (path == null || name == null) {
+                    return result.error("bad-args", "saveImageToGallery needs a path and a name", null)
+                }
+                background(result) { saveImageToGallery(File(path), name) }
+            }
             else -> result.notImplemented()
         }
     }
@@ -279,7 +292,11 @@ class ContentChannel(
                 try {
                     ch.position(offset)
                 } catch (e: IOException) {
-                    // Not seekable (a pipe from a streaming provider): skip forward instead.
+                    // Not seekable (a pipe from a streaming provider): skip forward instead,
+                    // but only a short way. Reading through a whole film to reach its last
+                    // 64 KiB would hold the one IO thread for minutes; failing here just means
+                    // "no hash" to Dart, and the film is searched by name.
+                    if (offset > MAX_SKIP) throw e
                     var toSkip = offset
                     while (toSkip > 0) {
                         val skipped = input.skip(toSkip)
@@ -487,9 +504,46 @@ class ContentChannel(
         }
     }
 
+    /**
+     * Copies a JPEG the app wrote in its own storage into the shared Pictures/Marquee album, so
+     * the Gallery shows it. Needs no permission on API 29+; before that it would need
+     * WRITE_EXTERNAL_STORAGE, which Marquee does not ask for, so the answer is false.
+     */
+    private fun saveImageToGallery(source: File, name: String): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
+        if (!source.isFile) throw FileNotFoundException("no file at ${source.path}")
+        val resolver = context.contentResolver
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, name)
+            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/Marquee")
+            // Hidden from other apps until every byte is written.
+            put(MediaStore.Images.Media.IS_PENDING, 1)
+        }
+        val collection = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        val item = resolver.insert(collection, values) ?: return false
+        try {
+            val sink = resolver.openOutputStream(item)
+                ?: throw IOException("the provider returned no stream for $item")
+            sink.use { out -> FileInputStream(source).use { input -> input.copyTo(out) } }
+            val done = ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }
+            resolver.update(item, done, null, null)
+            return true
+        } catch (e: IOException) {
+            resolver.delete(item, null, null) // never leave a half-written picture behind
+            return false
+        } catch (e: RuntimeException) {
+            resolver.delete(item, null, null)
+            return false
+        }
+    }
+
     private companion object {
         const val NAME = "marquee/content"
         const val MAX_READ = 16 * 1024 * 1024
+
+        /** The furthest a non-seekable stream is skipped through to reach a read offset. */
+        const val MAX_SKIP = 1024L * 1024L
         const val PICK_VIDEO = 0x4D51
         const val REQUEST_VIDEO = 0x4D52
 
