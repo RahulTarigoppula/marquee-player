@@ -905,3 +905,23 @@ Before `git tag v…`:
 6. Budgets N1–N18 re-measured by hand for N3, N4 and N17; CI covers the rest.
 7. The keystore backup and the OpenSubtitles/Cloudflare credentials are still where DEPLOYMENT §11 says they are.
 8. `docs/RESEARCH.md`, `docs/DESIGN.md` and this file agree with what actually shipped — if any golden number moved, the doc moved in the same commit.
+
+## 17. v2.0 device checklist (what CI cannot see)
+
+CI proves the builds, the unit and widget tests, and real libmpv playback on a Windows runner.
+It cannot hold a phone. Before telling friends "update", run these once on real hardware; each
+names the behaviour that was only ever reasoned about, never observed.
+
+| # | Where | Do | Expect |
+|---|---|---|---|
+| 1 | Android | Watch 10+ min, close, pull-to-refresh the Library, tap the film at once | Resumes where it stopped |
+| 2 | Android, Windows | Settings → Playback → a sound profile and "Even out loud and quiet parts"; play; switch audio track | Still sound, audible effect; or the one sentence "This build can't apply sound effects." |
+| 3 | Android 13, 14+ | Library → Show my videos: allow all; "select videos"; refuse twice then "Ask again" | List fills; partial access says so; the notice points to app settings |
+| 4 | Android | Hold for 2× and press Home mid-hold; rest a thumb on the seek bar, then drag; swipe up from the bottom bar | Speed returns to normal; the bar scrubs; no volume change |
+| 5 | Android | Rotation lock ON, open a wide film from a portrait Lobby; enter and leave PiP; close | Film turns to landscape; the Lobby turns freely again |
+| 6 | Android | "Open with" Marquee from Files while a film is in PiP | The new film replaces the old one, one app instance |
+| 7 | Android | Music playing elsewhere, start a film; take a call; pull out headphones | Music stops; film pauses; film pauses |
+| 8 | Windows | Hover the seek bar of a 4K HEVC file while it plays | A frame appears above the pointer, the film does not stutter |
+| 9 | Windows | Add a folder of mixed files (video, audio-only, a broken file, one cloud-only OneDrive file) | Cards fill in, the app stays smooth, the cloud file is NOT downloaded |
+| 10 | Windows | Install 2.0 over 1.1.0; close maximised; relaunch | History, resume points and settings survive; opens maximised |
+| 11 | Both | Screenshot from the More menu | Android: appears in the Gallery (Pictures/Marquee); Windows: Pictures\Marquee |
