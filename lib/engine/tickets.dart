@@ -5,7 +5,7 @@ import 'models/quota.dart';
 const String kLowQuotaSentence =
     'Sign in at the ticket office (free, more tickets) or use the Subdl slot.';
 const String kNoTicketsSentence =
-    'No tickets left tonight — sign in for more, or use the Subdl slot.';
+    'No tickets left tonight. Sign in for more, or use the Subdl slot.';
 
 String _two(int n) => n.toString().padLeft(2, '0');
 

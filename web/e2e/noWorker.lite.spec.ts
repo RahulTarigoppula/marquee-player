@@ -84,8 +84,8 @@ test.describe('Lite with no Worker', () => {
       await (await chooser).setFiles(srt('mine.srt'))
       await expect(page.locator('video track')).toHaveCount(1)
 
-      await page.getByRole('button', { name: 'Subtitles', exact: true }).click()
-      const booth = page.getByRole('dialog', { name: /Subtitle booth/ })
+      await page.getByRole('button', { name: 'Subtitle settings', exact: true }).click()
+      const booth = page.getByRole('dialog', { name: 'Subtitle settings' })
       await expect(booth.getByRole('radio', { name: /mine\.srt/ })).toHaveAttribute(
         'aria-checked',
         'true',

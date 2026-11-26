@@ -111,9 +111,15 @@ Future<OpenedFile?> fileFromPath(String locator) async {
   final remote = openedFromUrl(locator);
   if (remote != null) return remote;
   final path = locatorToPath(locator);
-  final f = File(path);
-  if (!f.existsSync() || isSubtitleFile(path)) return null;
-  return OpenedFile(locator: path, displayName: p.basename(path), sizeBytes: f.lengthSync());
+  if (isSubtitleFile(path)) return null;
+  try {
+    // One async stat: never block the UI isolate on a sleeping network drive.
+    final stat = await File(path).stat();
+    if (stat.type != FileSystemEntityType.file) return null;
+    return OpenedFile(locator: path, displayName: p.basename(path), sizeBytes: stat.size);
+  } on FileSystemException {
+    return null;
+  }
 }
 
 /// The video files either side of [f] in its folder, in natural order (desktop paths only;
@@ -203,20 +209,18 @@ Future<ChunkReader> chunkReaderFor(OpenedFile f) async {
   };
 }
 
-/// `<video>.<lang>.srt` / `.ass` beside the file — rung 0a, zero requests.
-String? findSidecar(OpenedFile f, List<String> languages) {
+/// `<video>.<lang>.srt` / `.ass` beside the file: rung 0a, zero requests.
+Future<String?> findSidecar(OpenedFile f, List<String> languages) async {
   if (f.isContentUri || f.isRemote) return null;
   final dir = p.dirname(f.locator);
   final stem = p.basenameWithoutExtension(f.locator);
-  for (final lang in languages) {
-    for (final ext in ['srt', 'ass']) {
-      final c = p.join(dir, '$stem.$lang.$ext');
-      if (File(c).existsSync()) return c;
-    }
-  }
-  for (final ext in ['srt', 'ass']) {
-    final c = p.join(dir, '$stem.$ext');
-    if (File(c).existsSync()) return c;
+  final candidates = [
+    for (final lang in languages)
+      for (final ext in const ['srt', 'ass']) p.join(dir, '$stem.$lang.$ext'),
+    for (final ext in const ['srt', 'ass']) p.join(dir, '$stem.$ext'),
+  ];
+  for (final c in candidates) {
+    if (await File(c).exists()) return c;
   }
   return null;
 }
@@ -227,13 +231,13 @@ class WrittenSidecar {
   const WrittenSidecar(this.path, {required this.besideFile});
 }
 
-String _unused(String path) {
-  if (!File(path).existsSync()) return path;
+Future<String> _unused(String path) async {
+  if (!await File(path).exists()) return path;
   final ext = p.extension(path);
   final base = path.substring(0, path.length - ext.length);
   for (var i = 1; ; i++) {
     final c = '$base.$i$ext';
-    if (!File(c).existsSync()) return c;
+    if (!await File(c).exists()) return c;
   }
 }
 
@@ -246,7 +250,7 @@ Future<WrittenSidecar> writeSidecar(
   String extension = 'srt',
 }) async {
   if (besideFile && !f.isContentUri && !f.isRemote) {
-    final target = _unused(
+    final target = await _unused(
       p.join(p.dirname(f.locator), '${p.basenameWithoutExtension(f.locator)}.$language.$extension'),
     );
     try {
@@ -259,7 +263,7 @@ Future<WrittenSidecar> writeSidecar(
   final dir = Directory(p.join((await getApplicationSupportDirectory()).path, 'subtitles'));
   await dir.create(recursive: true);
   final stem = p.basenameWithoutExtension(f.displayName);
-  final target = _unused(p.join(dir.path, '$stem.$language.$extension'));
+  final target = await _unused(p.join(dir.path, '$stem.$language.$extension'));
   await File(target).writeAsBytes(bytes, flush: true);
   return WrittenSidecar(target, besideFile: false);
 }

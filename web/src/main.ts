@@ -1,4 +1,4 @@
-// Marquee Lite — wiring. One AppState, DOM updates by CSS custom properties and textContent,
+// Marquee Lite: the wiring. One app state, DOM updates by CSS custom properties and textContent,
 // overlays toggled with `hidden` (and everything beneath the top layer made `inert`).
 // With a Worker (VITE_API_BASE set) the ritual is:
 //   drop → capability probe → moviehash → IndexedDB (a hit costs ZERO requests) → search →
@@ -6,19 +6,23 @@
 //   <track> via a Blob URL → play.
 // Without one, a film goes straight to the picture; the moviehash still keys the local cache
 // (a subtitle file you added before re-attaches), the sync offset and the resume point.
+// The pieces live in app/ (subtitles, resume, print checks, page input) and ui/ (the views).
 import './styles/tokens.css'
 import './styles/app.css'
 import './styles/player.css'
+import { installDrop, installKeyboard, installLaunchQueue } from './app/input'
+import { checkPictureAndSound, hashOf, playable, sniffHead } from './app/print'
+import { resumeKeeper } from './app/resume'
+import { subtitles } from './app/subtitles'
 import { API_BASE, releasesUrl, SIGN_UP_URL, searchEnabled } from './config'
 import { candidatesFromSearch, createApi, hashSearchParams, nameSearchParams } from './engine/api'
-import { noPrintReason, type PrintSniff, probeCapability, sniffPrint } from './engine/capability'
+import { noPrintReason, type PrintSniff, probeCapability } from './engine/capability'
 import { parseName, parsePath } from './engine/filename'
 import { defaultLanguage, languageLabel } from './engine/languages'
-import { HashUnavailable, isFileTooSmall, osHash } from './engine/osHash'
 import { rank } from './engine/scoring'
-import { decodeSubtitle, parseSidecar, sidecarKind } from './engine/sidecar'
-import { type Cue, parseSrt, toVtt } from './engine/srt2vtt'
-import { OffsetBook, snap, reset as syncReset, step as syncStep } from './engine/syncRule'
+import { sidecarKind } from './engine/sidecar'
+import { parseSrt, toVtt } from './engine/srt2vtt'
+import { OffsetBook, reset as syncReset, step as syncStep } from './engine/syncRule'
 import {
   type Effect,
   FAILURE_SENTENCE,
@@ -45,9 +49,8 @@ import type {
 } from './engine/types'
 import * as idb from './storage/idb'
 import { loadPrefs, savePrefs } from './storage/prefs'
-import type { AssTrack } from './ui/ass'
 import { auditorium } from './ui/auditorium'
-import { type BoothTrack, booth, CUE_SCALE, type CueSize } from './ui/booth'
+import { booth, CUE_SCALE, type CueSize } from './ui/booth'
 import { h } from './ui/dom'
 import { leader } from './ui/leader'
 import { liteLanding, skyFor } from './ui/lite'
@@ -55,13 +58,6 @@ import { noPrint } from './ui/noPrint'
 import { signIn } from './ui/signIn'
 import { ticketStrip } from './ui/ticketStrip'
 
-const PLAYABLE_WITHIN_MS = 5000
-const SNIFF_BYTES = 1 << 20
-const RESYNC_DEBOUNCE_MS = 120
-const SOUND_CHECK_MS = 2000
-const RESUME_MIN_S = 30 // nearer the start than this, a film simply starts again
-const RESUME_TAIL_S = 120 // within the last two minutes, the film counts as watched
-const RESUME_SAVE_MS = 5000
 const APP_TITLE = 'Marquee Lite'
 const root = document.documentElement
 const now = () => performance.now()
@@ -72,13 +68,6 @@ const language =
   prefs.language ?? defaultLanguage(navigator.languages?.length ? navigator.languages : ['en'])
 const RELEASES = releasesUrl(location)
 const APP_LINK = { href: RELEASES, label: 'Get the Windows / Android app' }
-
-interface Subtitle {
-  label: string
-  status: BoothTrack['status']
-  /** The OpenSubtitles file_id, so "Find another print" never offers it again. */
-  fileId: string | null
-}
 
 const app = {
   session: {
@@ -92,26 +81,14 @@ const app = {
   sessionOnly: false,
   machine: initial({ subdlEnabled: false, language }, ANONYMOUS) as Machine,
   sentence: null as string | null, // the Worker's own sentence for the current stall
-  capability: null as Capability | null,
   file: null as File | null,
   parsed: null as ParsedName | null,
   hash: null as MovieHash | null,
   printOk: null as boolean | null,
-  cues: null as Cue[] | null,
-  ass: null as AssTrack | null,
-  subtitle: null as Subtitle | null,
-  /** A sidecar SRT/VTT waiting for the moviehash so it can be remembered for next time. */
-  sidecarToCache: null as { cues: Cue[]; name: string } | null,
-  subsOn: true,
-  inSync: false,
-  delay: 0,
-  cueSize: prefs.cueSize as CueSize,
   pendingTear: false,
   controller: new AbortController(),
-  trackUrl: null as string | null,
   videoUrl: null as string | null,
   noPrintEl: null as HTMLElement | null,
-  resumeKey: null as string | null,
 }
 const offsets = new OffsetBook()
 // With no Worker configured (VITE_API_BASE empty) nothing is ever fetched: the search UI is
@@ -121,7 +98,7 @@ const notConfigured = (): Promise<Response> =>
     new Response(
       JSON.stringify({
         error: 'forbidden-origin',
-        sentence: "Subtitle search isn't set up for this site — add a subtitle file instead.",
+        sentence: "Subtitle search isn't set up for this site. Add a subtitle file instead.",
       }),
       { status: 403, headers: { 'Content-Type': 'application/json' } },
     ),
@@ -186,9 +163,9 @@ const aud = auditorium({
   onBack: () => leaveAuditorium(),
   onBooth: () => openBooth(),
   onAddSubtitle: pickSubtitle,
-  onToggleSubs: () => showTrack(!app.subsOn),
-  onSyncStep: (k) => setDelay(syncStep(app.delay, k)),
-  onSyncReset: () => setDelay(syncReset()),
+  onToggleSubs: () => subs.toggle(),
+  onSyncStep: (k) => subs.setDelay(syncStep(subs.delay, k)),
+  onSyncReset: () => subs.setDelay(syncReset()),
   onVolume: (volume, muted) => {
     prefs.volume = volume
     prefs.muted = muted
@@ -197,11 +174,11 @@ const aud = auditorium({
 })
 const sheet = booth({
   search: searchEnabled,
-  onTrack: (id) => showTrack(id !== null),
-  onSize: (s) => setCueSize(s),
-  onSync: (v) => setDelay(v),
+  onTrack: (id) => subs.show(id !== null),
+  onSize: (s) => subs.setCueSize(s),
+  onSync: (v) => subs.setDelay(v),
   onFindAnother: () =>
-    dispatch({ type: 'research', at: now(), exclude: app.subtitle?.fileId ?? null }),
+    dispatch({ type: 'research', at: now(), exclude: subs.current?.fileId ?? null }),
   onPick: (candidate) => dispatch({ type: 'pick', at: now(), candidate }),
   onClose: () => closeBooth(),
   onAddSubtitle: pickSubtitle,
@@ -217,6 +194,22 @@ const office = signIn(
   },
   officeStrip.el,
 )
+const subs = subtitles({
+  aud,
+  sheet,
+  language: () => app.session.languages[0] ?? 'en',
+  hash: () => app.hash,
+  pickFile: pickSubtitle,
+  onDelay: (hash, delay) => {
+    void idb.offsets.put(offsets.remember(hash, delay)).catch(() => undefined)
+  },
+  cueSize: prefs.cueSize,
+  onCueSize: (s: CueSize) => {
+    prefs.cueSize = s
+    savePrefs(prefs)
+  },
+})
+const resume = resumeKeeper(aud.video, aud.offerResume)
 
 root.dataset.sky = skyFor(new Date())
 const room = h(
@@ -229,9 +222,9 @@ const room = h(
 )
 document.body.append(room, lead.el, aud.el, sheet.el, office.el)
 aud.setVolume(prefs.volume, prefs.muted)
-sheet.setSize(app.cueSize)
+aud.setCueScale(CUE_SCALE[prefs.cueSize])
+sheet.setSize(prefs.cueSize)
 sheet.setLanguage(language)
-aud.pic.style.setProperty('--cue-size', `${CUE_SCALE[app.cueSize]}em`)
 
 /** Only the top layer is live; everything beneath it is inert (no focus, no clicks). */
 function layers(): void {
@@ -272,7 +265,7 @@ function renderBooth(s: ThreadingState, failure: string | null): void {
     if (s.phase === 'searching') sentence = 'Looking for other prints…'
     else if (s.phase === 'downloading') sentence = 'Downloading…'
     else if (s.phase === 'done' && m.listOnly && s.candidates.length > 0)
-      sentence = 'Pick one — it replaces the subtitles on screen.'
+      sentence = 'Pick one. It replaces the subtitles on screen.'
   }
   const signIn = s.failure === 'unauthorized' || s.failure === 'quota-exhausted'
   const key = `${s.candidates.map((c) => c.candidate.id).join(',')}|${s.picked?.candidate.id}|${sentence}|${signIn}`
@@ -281,10 +274,12 @@ function renderBooth(s: ThreadingState, failure: string | null): void {
   sheet.setCandidates(s.candidates, s.picked, sentence || null, signIn)
 }
 
-function render(): void {
+/** `frame`: a sweep tick, where only the leader can have changed. */
+function render(frame = false): void {
   const s = app.machine.state
   const sentence = s.failure ? (app.sentence ?? FAILURE_SENTENCE[s.failure]) : null
   lead.render(app.machine, sentence)
+  if (frame) return
   if (sheet.isOpen) renderBooth(s, sentence)
   renderStrips()
 }
@@ -293,10 +288,17 @@ function render(): void {
 function dispatch(e: ThreadingEvent): void {
   if (!searchEnabled) return
   const wasPending = isPending()
+  const before = app.machine.state
   const step = reduce(app.machine, e)
   app.machine = step.machine
-  if (e.type !== 'failed' && app.machine.state.failure === null) app.sentence = null
-  render()
+  const s = app.machine.state
+  if (e.type !== 'failed' && s.failure === null) app.sentence = null
+  const sweepOnly =
+    e.type === 'tick' &&
+    step.effects.length === 0 &&
+    s.phase === before.phase &&
+    s.failure === before.failure
+  render(sweepOnly)
   for (const effect of step.effects) perform(effect)
   if (!wasPending && isPending()) requestAnimationFrame(tick)
 }
@@ -309,6 +311,7 @@ const isPending = () => {
   )
 }
 
+/** The leader's sweep: one frame-rate loop, only while a phase is in flight. */
 function tick(): void {
   if (!isPending()) return
   dispatch({ type: 'tick', at: now() })
@@ -350,21 +353,21 @@ function perform(effect: Effect): void {
 
 // ── opening files ──
 async function onFiles(files: File[]): Promise<void> {
-  const subs = files.filter((f) => sidecarKind(f.name) !== null)
+  const subtitleFiles = files.filter((f) => sidecarKind(f.name) !== null)
   const film = files.find((f) => sidecarKind(f.name) === null)
   if (film) {
-    await openFile(film, subs[0] ?? null)
+    await openFile(film, subtitleFiles[0] ?? null)
     return
   }
-  const sub = subs[0]
+  const sub = subtitleFiles[0]
   if (!sub) return
   if (app.file && !app.noPrintEl) {
-    await attachSidecar(sub)
+    await subs.attach(sub)
     // A subtitle file chosen while the leader is still threading: no search is needed.
     if (!lead.el.hidden) dispatch({ type: 'choose', at: now(), action: 'skip' })
     return
   }
-  lite.setSentence("That's a subtitle file — open the film first, then add its subtitles.")
+  lite.setSentence("That's a subtitle file. Open the film first, then add its subtitles.")
 }
 
 async function openFile(file: File, sidecar: File | null): Promise<void> {
@@ -391,7 +394,7 @@ async function openFile(file: File, sidecar: File | null): Promise<void> {
   } else {
     // Straight to the picture: the viewer brought their own subtitles, or there is no search.
     void hashInBackground(file)
-    if (sidecar) await attachSidecar(sidecar)
+    if (sidecar) await subs.attach(sidecar)
     if (app.file !== file) return
     enterAuditorium()
   }
@@ -400,110 +403,34 @@ async function openFile(file: File, sidecar: File | null): Promise<void> {
   const ok = await playable(aud.video)
   if (app.file !== file) return
   app.printOk = ok
-  if (!ok) await showNoPrint(file, await sniff)
-  else void checkPictureAndSound(file, await sniff)
-}
-
-const sniffHead = async (file: File): Promise<PrintSniff> =>
-  sniffPrint(new Uint8Array(await file.slice(0, SNIFF_BYTES).arrayBuffer()), file.name)
-
-/** The print is projectable when metadata arrives with a picture (or at least sound). */
-function playable(video: HTMLVideoElement): Promise<boolean> {
-  return new Promise((resolve) => {
-    const done = (ok: boolean) => {
-      clearTimeout(timer)
-      video.removeEventListener('loadedmetadata', onMeta)
-      video.removeEventListener('error', onError)
-      resolve(ok)
-    }
-    const onMeta = () => done(video.videoWidth > 0 || video.duration > 0)
-    const onError = () => done(false)
-    const timer = setTimeout(() => done(video.readyState >= 1), PLAYABLE_WITHIN_MS)
-    if (video.readyState >= 1) {
-      onMeta()
-      return
-    }
-    video.addEventListener('loadedmetadata', onMeta)
-    video.addEventListener('error', onError)
-  })
-}
-
-interface MediaProbe {
-  mozHasAudio?: boolean
-  webkitAudioDecodedByteCount?: number
-  audioTracks?: { length: number }
-}
-
-/** Does the element actually produce sound? null when the browser cannot say. */
-function hasAudio(v: HTMLVideoElement): boolean | null {
-  const p = v as HTMLVideoElement & MediaProbe
-  if (typeof p.mozHasAudio === 'boolean') return p.mozHasAudio
-  if (typeof p.webkitAudioDecodedByteCount === 'number') return p.webkitAudioDecodedByteCount > 0
-  if (p.audioTracks) return p.audioTracks.length > 0
-  return null
-}
-
-/**
- * A print that plays can still be silent (AC-3 / DTS / E-AC-3 in an MKV) or blind (HEVC in a
- * browser without it). Say so once, without stopping the film.
- */
-async function checkPictureAndSound(file: File, sniff: PrintSniff): Promise<void> {
-  const cap = app.capability ?? (await probe())
+  if (!ok) {
+    await showNoPrint(file, await sniff)
+    return
+  }
+  const [head, cap] = await Promise.all([sniff, capability()])
   if (app.file !== file) return
-  const video = aud.video
-  if (video.videoWidth === 0 && sniff.video) {
-    const missing = noPrintReason({ ...sniff, audio: null }, cap).missing
-    aud.notice(
-      `No picture: this browser has no ${missing ?? sniff.video} decoder — only the sound plays.`,
-      APP_LINK,
-    )
-  }
-  if (!sniff.audio) return
-  const missing = noPrintReason({ ...sniff, video: null }, cap).missing
-  const check = () => {
-    if (app.file !== file) return
-    const audible = hasAudio(video)
-    if (audible === true || (audible === null && missing === null)) return
-    aud.notice(
-      missing
-        ? `No sound: this browser has no ${missing} decoder.`
-        : "No sound: this browser can't decode this film's audio.",
-      APP_LINK,
-    )
-  }
-  const later = () => setTimeout(check, SOUND_CHECK_MS)
-  if (!video.paused && video.readyState >= 3) later()
-  else video.addEventListener('playing', later, { once: true })
+  checkPictureAndSound(aud.video, head, cap, () => app.file === file, aud.notice, APP_LINK)
 }
 
 // ── effects ──
-async function hashOf(file: File): Promise<MovieHash | null> {
-  try {
-    return await osHash(file)
-  } catch (e) {
-    // < 128 KiB or unreadable: SILENT — "3" completes and "2" searches by name.
-    if (!isFileTooSmall(e) && !(e instanceof HashUnavailable)) throw e
-    return null
-  }
-}
-
 /** Fingerprint-keyed memory for this film: the sync offset and where you left it. */
 function remember(file: File, hash: MovieHash | null): void {
   app.hash = hash
-  app.resumeKey = hash ?? `${file.name}|${file.size}`
-  setDelay(offsets.recall(hash), false)
-  void maybeResume(file)
-  cacheSidecar()
+  resume.start(hash ?? `${file.name}|${file.size}`)
+  subs.hashKnown()
+  void loadOffsets().then(() => {
+    if (app.file === file) subs.setDelay(offsets.recall(hash), false)
+  })
 }
 
 async function hashInBackground(file: File): Promise<void> {
   const hash = await hashOf(file)
   if (app.file !== file) return
   remember(file, hash)
-  if (!hash || app.subtitle) return
+  if (!hash || subs.current) return
   const cached = await idb.subtitles.get(hash, idb.SIDECAR_LANG).catch(() => undefined)
-  if (!cached || app.file !== file || app.subtitle) return
-  setCues(parseSrt(cached.vttText), {
+  if (!cached || app.file !== file || subs.current) return
+  subs.setCues(parseSrt(cached.vttText), {
     label: cached.release ?? 'Your subtitle file',
     status: 'yours',
     fileId: null,
@@ -523,16 +450,15 @@ async function doHash(): Promise<void> {
     : undefined
   if (app.file !== file) return
   if (cached) {
-    // Rung 0b: re-attach from IndexedDB — zero requests, zero tickets, works offline.
+    // Rung 0b: re-attach from IndexedDB. Zero requests, zero tickets, works offline.
     const yours = cached.provider === 'sidecar'
-    setCues(parseSrt(cached.vttText), {
+    subs.setCues(parseSrt(cached.vttText), {
       label: yours
         ? (cached.release ?? 'Your subtitle file')
         : `${languageLabel(cached.language)} · ${cached.release ?? 'OpenSubtitles'}`,
       status: yours ? 'yours' : cached.syncedByHash ? 'synced' : 'by-name',
       fileId: null,
     })
-    app.inSync = cached.syncedByHash
     dispatch({ type: 'attached', at: now(), inSync: cached.syncedByHash })
     return
   }
@@ -587,13 +513,12 @@ async function doDownload(sc: ScoredCandidate): Promise<void> {
   }
   const cues = parseSrt(file.value)
   if (cues.length === 0) {
-    app.sentence = 'That print was empty — pick another.'
+    app.sentence = 'That print was empty. Pick another.'
     dispatch({ type: 'failed', at: now(), failure: 'no-results' })
     return
   }
   const c = sc.candidate
-  app.inSync = c.moviehashMatch
-  setCues(cues, {
+  subs.setCues(cues, {
     label: `${languageLabel(c.language)} · ${c.release ?? 'OpenSubtitles'}`,
     status: c.moviehashMatch ? 'synced' : 'by-name',
     fileId: c.id,
@@ -621,129 +546,6 @@ async function doDownload(sc: ScoredCandidate): Promise<void> {
   dispatch({ type: 'attached', at: now(), inSync: c.moviehashMatch, quota: app.session.quota })
 }
 
-// ── subtitles on the picture ──
-/** Replace whatever is on screen with these cues (an ASS renderer is torn down first). */
-function setCues(cues: Cue[], sub: Subtitle): void {
-  app.ass?.destroy()
-  app.ass = null
-  app.cues = cues
-  app.subtitle = sub
-  app.subsOn = true
-  applyTrack()
-  renderTracks()
-}
-
-function applyTrack(): void {
-  const video = aud.video
-  for (const t of video.querySelectorAll('track')) t.remove()
-  if (app.trackUrl) URL.revokeObjectURL(app.trackUrl)
-  app.trackUrl = null
-  if (!app.cues) return
-  app.trackUrl = URL.createObjectURL(
-    new Blob([toVtt(app.cues, Math.round(app.delay * 1000))], { type: 'text/vtt' }),
-  )
-  const lang = app.session.languages[0] ?? 'en'
-  const track = h('track', {
-    kind: 'subtitles',
-    srclang: lang,
-    label: app.subtitle?.label ?? languageLabel(lang),
-    src: app.trackUrl,
-    default: app.subsOn,
-  })
-  video.append(track)
-  // The viewer's Off survives a sync change: the re-emitted track keeps their choice.
-  track.track.mode = app.subsOn ? 'showing' : 'hidden'
-}
-
-function renderTracks(): void {
-  const sub = app.subtitle
-  const list: BoothTrack[] = sub ? [{ id: 'current', label: sub.label, status: sub.status }] : []
-  sheet.setTracks(list, sub && app.subsOn ? 'current' : null)
-  aud.setSubs(sub !== null, app.subsOn)
-}
-
-function showTrack(on: boolean): void {
-  if (!app.subtitle) {
-    if (on) pickSubtitle()
-    return
-  }
-  app.subsOn = on
-  for (const t of aud.video.textTracks) t.mode = on ? 'showing' : 'hidden'
-  app.ass?.setVisible(on)
-  renderTracks()
-}
-
-async function attachSidecar(file: File): Promise<void> {
-  const kind = sidecarKind(file.name)
-  if (!kind) return
-  const text = decodeSubtitle(new Uint8Array(await file.arrayBuffer()))
-  if (kind === 'ass') {
-    const { attachAss } = await import('./ui/ass')
-    const ass = await attachAss(aud.video, text)
-    // Only one subtitle at a time: the text track (if any) goes.
-    app.ass?.destroy()
-    app.cues = null
-    app.sidecarToCache = null
-    applyTrack()
-    app.ass = ass
-    app.subtitle = { label: file.name, status: 'yours', fileId: null }
-    app.subsOn = true
-    ass.setDelay(app.delay)
-    ass.setScale(CUE_SCALE[app.cueSize])
-    renderTracks()
-    return
-  }
-  const cues = parseSidecar(kind, text) ?? []
-  if (cues.length === 0) {
-    aud.notice(`${file.name} has no subtitles this player can read.`)
-    return
-  }
-  app.inSync = false
-  setCues(cues, { label: file.name, status: 'yours', fileId: null })
-  app.sidecarToCache = { cues, name: file.name }
-  cacheSidecar()
-}
-
-/** Remember a viewer's own SRT/VTT by moviehash, so the film re-attaches it next time. */
-function cacheSidecar(): void {
-  const pending = app.sidecarToCache
-  if (!pending || !app.hash) return
-  app.sidecarToCache = null
-  const vttText = toVtt(pending.cues)
-  void idb.subtitles
-    .put({
-      hash: app.hash,
-      language: idb.SIDECAR_LANG,
-      provider: 'sidecar',
-      release: pending.name,
-      syncedByHash: false,
-      vttText,
-      bytes: vttText.length,
-      fetchedAt: Date.now(),
-    })
-    .catch(() => undefined)
-}
-
-let resync: ReturnType<typeof setTimeout> | undefined
-function setDelay(v: number, remember = true): void {
-  app.delay = snap(v)
-  sheet.setSync(app.delay)
-  aud.setSubDelay(app.delay)
-  app.ass?.setDelay(app.delay)
-  clearTimeout(resync)
-  resync = setTimeout(applyTrack, RESYNC_DEBOUNCE_MS) // re-emit the shifted VTT
-  if (remember && app.hash)
-    void idb.offsets.put(offsets.remember(app.hash, app.delay)).catch(() => undefined)
-}
-
-function setCueSize(s: CueSize): void {
-  app.cueSize = s
-  aud.pic.style.setProperty('--cue-size', `${CUE_SCALE[s]}em`)
-  app.ass?.setScale(CUE_SCALE[s])
-  prefs.cueSize = s
-  savePrefs(prefs)
-}
-
 function setLanguage(code: string): void {
   app.session.languages = [code]
   app.machine = { ...app.machine, language: code }
@@ -752,52 +554,6 @@ function setLanguage(code: string): void {
   prefs.language = code
   savePrefs(prefs)
 }
-
-// ── resume ──
-async function maybeResume(file: File): Promise<void> {
-  const key = app.resumeKey
-  if (!key) return
-  const point = await idb.resume.get(key).catch(() => undefined)
-  if (!point || app.file !== file) return
-  const video = aud.video
-  const apply = () => {
-    if (app.file !== file) return
-    const dur = Number.isFinite(video.duration) ? video.duration : point.duration
-    if (point.position < RESUME_MIN_S || point.position > dur - RESUME_TAIL_S) return
-    if (video.currentTime > RESUME_MIN_S) return // the viewer already moved on
-    video.currentTime = point.position
-    aud.offerResume(point.position, () => {
-      video.currentTime = 0
-      void idb.resume.clear(key).catch(() => undefined)
-    })
-  }
-  if (video.readyState >= 1) apply()
-  else video.addEventListener('loadedmetadata', apply, { once: true })
-}
-
-let lastSave = 0
-function saveResume(force = false): void {
-  const key = app.resumeKey
-  const video = aud.video
-  if (!key || !app.file || !Number.isFinite(video.duration) || video.duration <= 0) return
-  const t = performance.now()
-  if (!force && t - lastSave < RESUME_SAVE_MS) return
-  lastSave = t
-  const position = video.currentTime
-  if (position > video.duration - RESUME_TAIL_S || video.ended) {
-    void idb.resume.clear(key).catch(() => undefined)
-  } else if (position >= RESUME_MIN_S) {
-    void idb.resume
-      .put(key, { position, duration: video.duration, savedAt: Date.now() })
-      .catch(() => undefined)
-  }
-}
-aud.video.addEventListener('timeupdate', () => saveResume())
-aud.video.addEventListener('pause', () => saveResume(true))
-aud.video.addEventListener('ended', () => saveResume(true))
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') saveResume(true)
-})
 
 // ── lighting states ──
 function enterAuditorium(): void {
@@ -808,7 +564,7 @@ function enterAuditorium(): void {
     return
   }
   aud.el.hidden = false
-  renderTracks()
+  subs.render()
   layers()
   aud.focusPlay()
   void aud.video.play().catch(() => undefined)
@@ -825,8 +581,9 @@ function leaveAuditorium(): void {
   lite.el.querySelector<HTMLElement>('.doors')?.focus()
 }
 
+/** Close the film: every Blob URL revoked, every renderer destroyed, the position saved. */
 function teardown(): void {
-  saveResume(true)
+  resume.stop()
   app.controller.abort()
   app.controller = new AbortController()
   if (app.machine.state.phase !== 'idle' && app.machine.state.phase !== 'done') {
@@ -836,25 +593,16 @@ function teardown(): void {
   aud.video.pause()
   aud.video.removeAttribute('src')
   aud.video.load()
-  for (const t of aud.video.querySelectorAll('track')) t.remove()
   if (app.videoUrl) URL.revokeObjectURL(app.videoUrl)
-  if (app.trackUrl) URL.revokeObjectURL(app.trackUrl)
   app.videoUrl = null
-  app.trackUrl = null
-  app.cues = null
-  app.ass?.destroy()
-  app.ass = null
-  app.subtitle = null
-  app.sidecarToCache = null
-  app.subsOn = true
+  subs.clear()
   app.file = null
-  app.resumeKey = null
+  app.hash = null
   app.noPrintEl?.remove()
   app.noPrintEl = null
   aud.clearNotices()
   aud.setTitle(null)
   document.title = APP_TITLE
-  renderTracks()
 }
 
 let wasPlaying = false
@@ -863,7 +611,8 @@ function openBooth(): void {
   wasPlaying = !aud.video.paused
   aud.video.pause() // booth glass only ever sits over a PAUSED frame
   boothKey = ''
-  renderTracks()
+  subs.render()
+  aud.setBoothOpen(true)
   sheet.open()
   render()
   layers()
@@ -871,6 +620,7 @@ function openBooth(): void {
 function closeBooth(): void {
   if (!sheet.isOpen) return
   sheet.close()
+  aud.setBoothOpen(false)
   layers()
   if (wasPlaying && app.file) void aud.video.play().catch(() => undefined)
 }
@@ -886,7 +636,7 @@ async function showNoPrint(file: File, sniff: PrintSniff): Promise<void> {
   lead.el.hidden = true
   aud.el.hidden = true
   aud.video.pause()
-  const cap = app.capability ?? (await probe())
+  const cap = await capability()
   if (app.file !== file) return
   const card = noPrint({
     reason: noPrintReason(sniff, cap),
@@ -933,15 +683,35 @@ const persistSession = () =>
   idb.saveSession(app.session, app.user, app.sessionOnly).catch(() => undefined)
 
 // ── startup ──
-async function probe(): Promise<Capability> {
-  const v = document.createElement('video')
-  app.capability = await probeCapability({
-    canPlayType: (m) => v.canPlayType(m),
-    VideoDecoder: 'VideoDecoder' in window ? window.VideoDecoder : undefined,
-    AudioDecoder: 'AudioDecoder' in window ? window.AudioDecoder : undefined,
-  })
-  lite.setCapability(app.capability)
-  return app.capability
+// The first canPlayType() in a fresh browser process starts its media stack, which can hold the
+// main thread for a second or more. So the probe waits until the landing has painted, and every
+// caller shares the one probe.
+let probed: Promise<Capability> | null = null
+function capability(): Promise<Capability> {
+  probed ??= (async () => {
+    const v = document.createElement('video')
+    const cap = await probeCapability({
+      canPlayType: (m) => v.canPlayType(m),
+      VideoDecoder: 'VideoDecoder' in window ? window.VideoDecoder : undefined,
+      AudioDecoder: 'AudioDecoder' in window ? window.AudioDecoder : undefined,
+    })
+    lite.setCapability(cap)
+    return cap
+  })()
+  return probed
+}
+
+// Remembered sync offsets, read once from IndexedDB the first time they are needed (or once the
+// landing is idle, whichever comes first).
+let offsetsLoaded: Promise<void> | null = null
+function loadOffsets(): Promise<void> {
+  offsetsLoaded ??= idb.offsets
+    .all()
+    .catch(() => [])
+    .then((stored) => {
+      for (const o of stored) offsets.remember(o.hash, o.delayMs / 1000)
+    })
+  return offsetsLoaded
 }
 
 async function restore(): Promise<void> {
@@ -965,20 +735,19 @@ async function restore(): Promise<void> {
   render()
 }
 
-async function restoreOffsets(): Promise<void> {
-  for (const o of await idb.offsets.all().catch(() => []))
-    offsets.remember(o.hash, o.delayMs / 1000)
+/** After the first paint, when the main thread is free (or within a second regardless). */
+function afterPaint(fn: () => void): void {
+  requestAnimationFrame(() =>
+    setTimeout(() => {
+      if ('requestIdleCallback' in window) requestIdleCallback(fn, { timeout: 1000 })
+      else fn()
+    }, 0),
+  )
 }
 
-// ── keyboard ──
-document.addEventListener('keydown', (e) => {
-  if (e.defaultPrevented) return
-  const t = e.target
-  const typing =
-    (t instanceof HTMLInputElement && !['range', 'checkbox', 'file'].includes(t.type)) ||
-    t instanceof HTMLSelectElement ||
-    t instanceof HTMLTextAreaElement
-  if (e.key === 'Escape') {
+// ── page input ──
+installKeyboard({
+  onEscape() {
     // Esc always goes exactly one lighting state up.
     if (office.isOpen) closeOffice()
     else if (aud.closeMenus() || aud.closeCueSheet()) return
@@ -986,57 +755,19 @@ document.addEventListener('keydown', (e) => {
     else if (app.noPrintEl) leaveAuditorium()
     else if (!lead.el.hidden) dispatch({ type: 'choose', at: now(), action: 'skip' })
     else if (!aud.el.hidden) leaveAuditorium()
-    return
-  }
-  if (typing || office.isOpen || sheet.isOpen || app.noPrintEl) return
-  // The volume slider keeps its own arrow keys.
-  if (t instanceof HTMLInputElement && t.type === 'range' && e.key.startsWith('Arrow')) return
-  if (!aud.el.hidden) aud.handleKey(e)
+  },
+  blocked: () => office.isOpen || sheet.isOpen || app.noPrintEl !== null,
+  onPlayerKey(e) {
+    if (!aud.el.hidden) aud.handleKey(e)
+  },
 })
-
-// ── drag and drop, anywhere on the page ──
-// preventDefault on every dragover/drop: otherwise a film dropped beside the frame makes the
-// browser navigate away to play it.
-let dragDepth = 0
-const carriesFiles = (e: DragEvent) => e.dataTransfer?.types.includes('Files') === true
-window.addEventListener('dragenter', (e) => {
-  if (!carriesFiles(e)) return
-  dragDepth++
-  lite.setDragging(true)
-})
-window.addEventListener('dragover', (e) => {
-  e.preventDefault()
-  if (e.dataTransfer) e.dataTransfer.dropEffect = carriesFiles(e) ? 'copy' : 'none'
-})
-window.addEventListener('dragleave', () => {
-  dragDepth = Math.max(0, dragDepth - 1)
-  if (dragDepth === 0) lite.setDragging(false)
-})
-window.addEventListener('drop', (e) => {
-  e.preventDefault()
-  dragDepth = 0
-  lite.setDragging(false)
-  const files = [...(e.dataTransfer?.files ?? [])]
-  if (files.length > 0) void onFiles(files)
-})
-
-// ── an installed Lite opening a film from the OS ("Open with…", file_handlers) ──
-interface LaunchParamsLike {
-  files: readonly FileSystemFileHandle[]
-}
-const launchQueue = (
-  window as unknown as {
-    launchQueue?: { setConsumer(cb: (p: LaunchParamsLike) => void): void }
-  }
-).launchQueue
-launchQueue?.setConsumer((p) => {
-  void Promise.all(p.files.map((f) => f.getFile())).then((files) => {
-    if (files.length > 0) void onFiles(files)
-  })
-})
+installDrop((files) => void onFiles(files), lite.setDragging)
+installLaunchQueue((files) => void onFiles(files))
 
 renderStrips()
 layers()
-void probe()
 void restore()
-void restoreOffsets()
+afterPaint(() => {
+  void capability()
+  void loadOffsets()
+})

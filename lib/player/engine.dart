@@ -12,7 +12,7 @@ import '../engine/models/media.dart';
 import '../engine/models/settings.dart';
 import '../engine/playback.dart';
 
-const Duration kStreamThrottle = Duration(milliseconds: 100); // 10 Hz — never rebuild at 60
+const Duration kStreamThrottle = Duration(milliseconds: 100); // 10 Hz, never 60
 
 class PlaybackState {
   final Duration position;
@@ -89,16 +89,30 @@ class PlayerEngine {
   /// which only knows the one bundled Noto Sans and shows tofu for Arabic, Hindi, CJK, …
   final systemFontSubtitles = EngineFlag();
 
-  PlayerEngine({String hwdec = 'auto-safe'})
-    : player = Player(
-        configuration: const PlayerConfiguration(
-          title: 'Marquee',
-          libass: true,
-          libassAndroidFont: 'assets/fonts/NotoSans-Regular.ttf',
-          libassAndroidFontName: 'Noto Sans', // the TTF's INTERNAL family name
-          bufferSize: 64 * 1024 * 1024,
-        ),
-      ) {
+  /// Loads libmpv (a large native library) once. main() calls it after the first frame so
+  /// the Lobby never waits for it; the first film calls it too, in case it comes sooner.
+  static void ensureInitialized() {
+    if (_libraryReady) return;
+    MediaKit.ensureInitialized();
+    _libraryReady = true;
+  }
+
+  static bool _libraryReady = false;
+
+  static Player _newPlayer() {
+    ensureInitialized();
+    return Player(
+      configuration: const PlayerConfiguration(
+        title: 'Marquee',
+        libass: true,
+        libassAndroidFont: 'assets/fonts/NotoSans-Regular.ttf',
+        libassAndroidFontName: 'Noto Sans', // the TTF's INTERNAL family name
+        bufferSize: 64 * 1024 * 1024,
+      ),
+    );
+  }
+
+  PlayerEngine({String hwdec = 'auto-safe'}) : player = _newPlayer() {
     controller = VideoController(
       player,
       configuration: VideoControllerConfiguration(
@@ -139,6 +153,7 @@ class PlayerEngine {
 
   PlaybackState get snapshot {
     final st = player.state;
+    _syncTracks(st.tracks);
     return PlaybackState(
       position: st.position,
       duration: st.duration,
@@ -149,8 +164,8 @@ class PlayerEngine {
       rate: st.rate,
       volume: st.volume,
       muted: _muted,
-      audioTracks: st.tracks.audio.where((t) => t.id != 'auto' && t.id != 'no').toList(),
-      subtitleTracks: st.tracks.subtitle.where((t) => t.id != 'auto' && t.id != 'no').toList(),
+      audioTracks: _audioTracks,
+      subtitleTracks: _subtitleTracks,
       audioId: _aid,
       subtitleId: _sid,
       width: st.width ?? 0,
@@ -159,9 +174,26 @@ class PlayerEngine {
     );
   }
 
+  // The track lists are rebuilt only when mpv's own list changes, so consecutive snapshots
+  // share them and a `select` on the tracks (menus, the Booth) sees "unchanged" between ticks.
+  Tracks? _tracksSeen;
+  List<AudioTrack> _audioTracks = const [];
+  List<SubtitleTrack> _subtitleTracks = const [];
+
+  void _syncTracks(Tracks tracks) {
+    if (identical(tracks, _tracksSeen)) return;
+    _tracksSeen = tracks;
+    bool real(String id) => id != 'auto' && id != 'no';
+    _audioTracks = List.unmodifiable(tracks.audio.where((t) => real(t.id)));
+    _subtitleTracks = List.unmodifiable(tracks.subtitle.where((t) => real(t.id)));
+  }
+
+  /// At most one snapshot per [kStreamThrottle], and none at all while nothing changes (a
+  /// paused film has no timer running).
   void _markDirty() {
     _dirty = true;
-    _throttle ??= Timer.periodic(kStreamThrottle, (_) {
+    _throttle ??= Timer(kStreamThrottle, () {
+      _throttle = null;
       if (!_dirty || _disposed) return;
       _dirty = false;
       _state.add(snapshot);
@@ -211,7 +243,7 @@ class PlayerEngine {
         'assets',
         'fonts',
       );
-      if (Directory(fonts).existsSync()) await _set('sub-fonts-dir', fonts);
+      if (await Directory(fonts).exists()) await _set('sub-fonts-dir', fonts);
       await _set('sub-font', 'Noto Sans');
     }
     await applySubtitleStyle(s);
@@ -450,13 +482,14 @@ class PlayerEngine {
     await _set('ab-loop-b', b == null ? 'no' : (b.inMilliseconds / 1000).toStringAsFixed(3));
   }
 
-  /// mpv writes the frame itself (format from the extension) — no Dart-side encoding and no
-  /// player lock. [subtitles] burns the visible subtitle in.
+  /// mpv writes the frame itself (format from the extension): no Dart-side encoding and no
+  /// player lock, and media_kit sends it as an async command, so the UI never waits on the
+  /// JPEG encoder. [subtitles] burns the visible subtitle in.
   Future<bool> screenshotTo(String path, {bool subtitles = false}) async {
     if (_disposed) return false;
     try {
       await _native?.command(['screenshot-to-file', path, subtitles ? 'subtitles' : 'video']);
-      return File(path).existsSync();
+      return await File(path).exists();
     } on Object {
       return false;
     }

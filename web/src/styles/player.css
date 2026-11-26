@@ -32,6 +32,11 @@
   position: absolute;
   inset: 0;
   pointer-events: none;
+  transition: transform var(--dur-base) var(--ease-out);
+}
+/* An ASS canvas steps up with the controls, as text cues do (auditorium.ts lifts their line). */
+.auditorium:not(.is-idle) .pic canvas {
+  transform: translateY(-72px);
 }
 video::cue {
   font-family: var(--font-body);
@@ -67,9 +72,10 @@ video::cue {
     transparent
   );
 }
+/* Only as tall as the controls, so the subtitles lifted above them stay bright. */
 .scrim--bottom {
   bottom: 0;
-  height: 170px;
+  height: 110px;
   background: linear-gradient(
     0deg,
     color-mix(in oklch, var(--picture-bg) 86%, transparent),
@@ -180,6 +186,11 @@ video::cue {
   transform: none;
   pointer-events: auto;
 }
+/* the subtitle settings sheet is open: nothing floats over it */
+.auditorium.is-booth .bigplay {
+  opacity: 0;
+  pointer-events: none;
+}
 
 /* the pulse after a click on the picture, and the double-tap ripples */
 .pulse,
@@ -287,8 +298,25 @@ video::cue {
   flex: 1;
   margin: var(--space-2) 0;
 }
+/* "Resumed from 1:02:13": bottom-left, just above the seek bar, gone after six seconds */
+.player__resume {
+  position: absolute;
+  z-index: 4;
+  left: var(--pad-l);
+  bottom: calc(max(var(--space-2), env(safe-area-inset-bottom)) + 84px);
+  max-width: min(320px, calc(100% - var(--pad-l) - var(--pad-r)));
+  pointer-events: none;
+}
 .notice--resume {
   padding-right: var(--space-4);
+  animation:
+    row-in var(--dur-base) var(--ease-out) both,
+    notice-out var(--dur-slow) var(--ease-in-out) 5520ms forwards;
+}
+@keyframes notice-out {
+  to {
+    opacity: 0;
+  }
 }
 
 /* ── the seek bar ── */
@@ -732,6 +760,11 @@ video::cue {
     max-height: 100%;
     transform: translateY(-50%);
   }
+  /* A short picture would size its cues to about 11 px: hold them at a readable 16 px,
+     scaled by the S/M/L choice. */
+  video::cue {
+    font-size: calc(16px * var(--cue-scale, 1));
+  }
 }
 
 /* ── safe areas on the landing ── */
@@ -775,7 +808,7 @@ video::cue {
     height: 96px;
   }
   .scrim--bottom {
-    height: 130px;
+    height: 100px;
   }
   .player__folio {
     display: none;

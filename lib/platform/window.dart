@@ -14,10 +14,13 @@ import '../ui/components/primitives.dart';
 
 bool get _desktop => Platform.isWindows;
 
+/// Restores the saved bounds and shows the window. The database opens (on its own isolate)
+/// while the window manager starts up: the two waits overlap instead of adding up.
 Future<void> initWindow(MarqueeDatabase db) async {
   if (!_desktop) return;
+  final bounds = db.readState('window_bounds').then<Object?>((b) => b, onError: (Object _) => null);
   await windowManager.ensureInitialized();
-  final b = await db.readState('window_bounds');
+  final b = await bounds;
   const opts = WindowOptions(
     title: 'Marquee',
     minimumSize: Size(720, 480),
@@ -118,10 +121,6 @@ Future<void> setFullscreen(bool full) async {
     );
   }
 }
-
-/// The Lobby is opaque on purpose: the picture is never composited over a translucent surface,
-/// and a flat --bg Lobby is the documented fallback for Mica (decoration, not a feature).
-Future<void> setLobbyChrome({required bool lobby}) async {}
 
 /// The title bar: a thin strip that drags the window, with minimise / maximise / close bulbs.
 class WindowBar extends StatelessWidget {

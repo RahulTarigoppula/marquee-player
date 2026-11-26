@@ -35,6 +35,25 @@ void main() {
       expect(percentSeek(12, dur), const Duration(minutes: 90));
     });
 
+    test('ticks the controls once a second for a feature, finer for a short clip', () {
+      expect(clockStep(const Duration(hours: 2)), const Duration(seconds: 1));
+      expect(clockStep(const Duration(seconds: 30)), const Duration(milliseconds: 100));
+      expect(clockStep(Duration.zero), const Duration(milliseconds: 100));
+      expect(clockStep(const Duration(minutes: 15)), const Duration(milliseconds: 600));
+    });
+
+    test('rounds the position down to the tick, so equal ticks compare equal', () {
+      const film = Duration(hours: 2);
+      final a = clockTick(const Duration(milliseconds: 61100), film);
+      final b = clockTick(const Duration(milliseconds: 61900), film);
+      expect(a, const Duration(seconds: 61));
+      expect(a, b);
+      expect(
+        clockTick(const Duration(milliseconds: 1250), const Duration(seconds: 20)),
+        const Duration(milliseconds: 1200),
+      );
+    });
+
     test('prints a short clock', () {
       expect(shortClock(const Duration(hours: 1, minutes: 2, seconds: 3)), '1:02:03');
       expect(shortClock(const Duration(minutes: 4, seconds: 5)), '4:05');

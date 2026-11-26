@@ -1,6 +1,8 @@
 // A film in the Lobby: a 16:9 frame from the film (or a title card until one is grabbed), the
 // title, plain meta, the resume line and two small tags. Hover lifts it; right click, long
 // press or the ⋮ button opens its menu.
+import 'dart:io' show File;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -28,12 +30,15 @@ class FilmFrame extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    ref.watch(thumbnailEpochProvider); // a fresh grab replaces the frame
+    // No disk access here (hover rebuilds this): the index knows which frames exist, and a
+    // fresh grab bumps it.
+    final has = ref.watch(thumbnailIndexProvider.select((ids) => ids.contains(card.id)));
+    ref.watch(thumbnailEpochProvider); // a fresh grab replaces the frame (same file name)
     final dir = ref.watch(thumbnailDirProvider).value;
-    final file = thumbnailFor(dir, card.id);
-    if (file == null) return fallback;
+    if (!has || dir == null) return fallback;
+    final file = File(thumbnailPath(dir, card.id));
     return Image(
-      image: FileImage(file),
+      image: thumbnailImage(file),
       fit: fit,
       gaplessPlayback: true,
       excludeFromSemantics: true,

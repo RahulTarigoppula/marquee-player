@@ -67,8 +67,8 @@ test.describe('threading with a mocked Worker', () => {
       .setInputFiles({ name: NAME, mimeType: 'video/webm', buffer })
     await expect(page.locator('video track')).toHaveCount(1)
 
-    await page.getByRole('button', { name: 'Subtitles', exact: true }).click()
-    const booth = page.getByRole('dialog', { name: /Subtitle booth/ })
+    await page.getByRole('button', { name: 'Subtitle settings', exact: true }).click()
+    const booth = page.getByRole('dialog', { name: 'Subtitle settings' })
     await expect(booth).toBeVisible()
     await booth.getByRole('button', { name: 'Find another print' }).click()
     const prints = booth.getByRole('radiogroup', { name: 'Other prints' }).getByRole('radio')

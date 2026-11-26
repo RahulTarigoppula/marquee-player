@@ -1,11 +1,11 @@
-// The academy leader (§3.6.2, §4.2). The sweep angle is the machine's sweep — driven by real
+// The academy leader (§3.6.2, §4.2). The sweep angle is the machine's sweep: driven by real
 // promise progress, frozen on a stall. The phase is announced once per phase (aria-live),
 // never per frame. Fallback rows slide in beneath the numeral without leaving the leader.
 import type { Machine } from '../engine/threading'
 import { numeral, phaseLabel } from '../engine/threading'
 import { THREADING_FOLIO } from '../engine/timecode'
 import type { NextAction, ScoredCandidate, ThreadingState } from '../engine/types'
-import { fill, h } from './dom'
+import { fill, h, setText } from './dom'
 
 export const NEXT_LABEL: Readonly<Record<NextAction, string>> = {
   'filename-search': 'Search by the file name',
@@ -161,6 +161,8 @@ export function leader(cb: LeaderCallbacks, strip: HTMLElement): LeaderView {
   let lastPhase: ThreadingState['phase'] | null = null
   let lastRows: { list: ScoredCandidate[]; picked: ScoredCandidate | null } | null = null
   let lastNext = ''
+  let lastAngle = ''
+  let lastHash = ''
 
   return {
     el,
@@ -170,25 +172,35 @@ export function leader(cb: LeaderCallbacks, strip: HTMLElement): LeaderView {
     setMeta(bytes) {
       size = bytes
     },
+    // Called once per animation frame while a phase is in flight: only the sweep angle changes
+    // every frame; everything else is written when it changes.
     render(m, text) {
       const s = m.state
-      num.textContent = numeral(s.phase)
-      dial.style.setProperty('--a', `${(s.sweep * 360).toFixed(1)}deg`)
+      setText(num, numeral(s.phase))
+      const angle = `${(s.sweep * 360).toFixed(1)}deg`
+      if (angle !== lastAngle) {
+        lastAngle = angle
+        dial.style.setProperty('--a', angle)
+      }
       dial.classList.toggle('is-stalled', s.failure !== null)
       if (s.phase !== lastPhase) {
         lastPhase = s.phase
         phase.textContent = phaseLabel(m) // announced once per phase
       }
-      const parts: Array<Node | string> = []
-      if (s.hash) parts.push(h('b', {}, s.hash))
-      else if (s.phase === 'hashing') parts.push('················')
-      if (size !== null) parts.push(...(parts.length > 0 ? [' · '] : []), formatSize(size))
-      fill(hashline, ...parts)
+      const hashKey = `${s.hash ?? (s.phase === 'hashing' ? '…' : '')}|${size}`
+      if (hashKey !== lastHash) {
+        lastHash = hashKey
+        const parts: Array<Node | string> = []
+        if (s.hash) parts.push(h('b', {}, s.hash))
+        else if (s.phase === 'hashing') parts.push('················')
+        if (size !== null) parts.push(...(parts.length > 0 ? [' · '] : []), formatSize(size))
+        fill(hashline, ...parts)
+      }
       if (!lastRows || lastRows.list !== s.candidates || lastRows.picked !== s.picked) {
         lastRows = { list: s.candidates, picked: s.picked }
         fill(rows, ...s.candidates.map((c) => candidateRow(c, c === s.picked, () => cb.onPick(c))))
       }
-      if (sentence.textContent !== (text ?? '')) sentence.textContent = text ?? ''
+      setText(sentence, text ?? '')
       const key = s.next.join('|')
       if (key !== lastNext) {
         lastNext = key

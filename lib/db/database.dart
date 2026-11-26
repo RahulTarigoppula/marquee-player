@@ -10,7 +10,6 @@ part 'database.g.dart';
 
 const Duration kSearchCacheTtl = Duration(hours: 24);
 const Duration kArtworkTtl = Duration(days: 180); // TMDB terms: never cache longer than 6 months
-const int kFinishedWithinMs = 30000; // a position this close to the end stores as "finished"
 
 @DriftDatabase(
   tables: [
@@ -33,10 +32,9 @@ class MarqueeDatabase extends _$MarqueeDatabase {
   @override
   MigrationStrategy get migration => MigrationStrategy(
     onCreate: (m) => m.createAll(),
-    beforeOpen: (details) async {
-      await customStatement('PRAGMA foreign_keys = ON');
-      await sweepArtwork();
-    },
+    // Only what every query needs. The artwork sweep runs after the first frame (main.dart):
+    // opening the database is on the cold-start path.
+    beforeOpen: (details) => customStatement('PRAGMA foreign_keys = ON'),
   );
 
   // ───────────────────────────── media files ─────────────────────────────
@@ -106,45 +104,50 @@ class MarqueeDatabase extends _$MarqueeDatabase {
   Future<int?> mediaIdFor(String locator) async =>
       (await (select(mediaFiles)..where((t) => t.locator.equals(locator))).getSingleOrNull())?.id;
 
-  /// Reactive Lobby rail: media ⋈ resume ⋈ offsets ⋈ cached subtitle language.
+  /// Reactive Lobby rail: media ⋈ resume ⋈ offsets, with the cached subtitle language as a
+  /// correlated subquery (the hash_cache primary key answers it). ONE query per change, and a
+  /// subtitle download refreshes the card too: hash_cache is one of the watched tables.
   Stream<List<LobbyCard>> watchLobby({int limit = 200}) {
+    final language = subqueryExpression<String>(
+      selectOnly(hashCache)
+        ..addColumns([hashCache.language])
+        ..where(hashCache.moviehash.equalsExp(mediaFiles.moviehash))
+        ..limit(1),
+    );
     final q =
         select(mediaFiles).join([
             leftOuterJoin(resumePoints, resumePoints.moviehash.equalsExp(mediaFiles.moviehash)),
             leftOuterJoin(syncOffsets, syncOffsets.moviehash.equalsExp(mediaFiles.moviehash)),
           ])
+          ..addColumns([language])
           ..orderBy([OrderingTerm.desc(mediaFiles.lastPlayedAt)])
           ..limit(limit);
-    return q.watch().asyncMap((rows) async {
-      final langs = <String, String>{};
-      for (final r in await select(hashCache).get()) {
-        langs.putIfAbsent(r.moviehash, () => r.language);
-      }
-      return [
-        for (final row in rows)
-          () {
-            final m = row.readTable(mediaFiles);
-            final rp = row.readTableOrNull(resumePoints);
-            final so = row.readTableOrNull(syncOffsets);
-            final dur = rp?.durationMs ?? m.durationMs ?? 0;
-            return LobbyCard(
-              id: m.id,
-              locator: m.locator,
-              displayName: m.displayName,
-              title: m.title,
-              year: m.year,
-              container: m.container,
-              durationMs: m.durationMs,
-              hash: m.moviehash == null ? null : MovieHash(m.moviehash!),
-              resumeFraction: rp == null || dur == 0 ? 0 : (rp.positionMs / dur).clamp(0.0, 1.0),
-              finished: rp != null && isFinished(rp.positionMs, rp.durationMs),
-              delayMs: so?.delayMs,
-              subtitleLanguage: m.moviehash == null ? null : langs[m.moviehash],
-              lastPlayedAt: m.lastPlayedAt,
-            );
-          }(),
-      ];
-    });
+    return q.watch().map(
+      (rows) => [for (final row in rows) _card(row, language: row.read(language))],
+    );
+  }
+
+  LobbyCard _card(TypedResult row, {String? language}) {
+    final m = row.readTable(mediaFiles);
+    final rp = row.readTableOrNull(resumePoints);
+    final so = row.readTableOrNull(syncOffsets);
+    final dur = rp?.durationMs ?? m.durationMs ?? 0;
+    return LobbyCard(
+      id: m.id,
+      locator: m.locator,
+      displayName: m.displayName,
+      title: m.title,
+      year: m.year,
+      container: m.container,
+      durationMs: m.durationMs,
+      hash: m.moviehash == null ? null : MovieHash(m.moviehash!),
+      resumeFraction: rp == null || dur == 0 ? 0 : (rp.positionMs / dur).clamp(0.0, 1.0),
+      resumePositionMs: rp?.positionMs,
+      finished: rp != null && isFinished(rp.positionMs, rp.durationMs),
+      delayMs: so?.delayMs,
+      subtitleLanguage: language,
+      lastPlayedAt: m.lastPlayedAt,
+    );
   }
 
   Future<MediaRow?> latestPlayed() =>
@@ -199,10 +202,10 @@ class MarqueeDatabase extends _$MarqueeDatabase {
 
   // ───────────────────────────── resume + sync ─────────────────────────────
 
-  /// A film within [kFinishedWithinMs] of its end counts as watched. Stored as position =
-  /// duration (not 0, which used to mean both "finished" and "opened and closed at once").
-  static bool isFinished(int positionMs, int durationMs) =>
-      durationMs > 0 && positionMs > 0 && durationMs - positionMs <= kFinishedWithinMs;
+  /// A film within [kFinishedWithinMs] of its end counts as watched ([isFinishedAt], the one
+  /// rule). Stored as position = duration (not 0, which used to mean both "finished" and
+  /// "opened and closed at once").
+  static bool isFinished(int positionMs, int durationMs) => isFinishedAt(positionMs, durationMs);
 
   Future<void> saveResume(MovieHash hash, int positionMs, int durationMs) {
     return into(resumePoints).insertOnConflictUpdate(

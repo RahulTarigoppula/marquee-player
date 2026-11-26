@@ -1,4 +1,4 @@
-// A tiny element builder. Text always goes in as text nodes — never innerHTML — so no
+// A tiny element builder. Text always goes in as text nodes (never innerHTML), so no
 // subtitle, filename or release name can ever become markup.
 
 type Attr = string | number | boolean | null | undefined
@@ -65,7 +65,17 @@ export const ICONS = {
     'M9 15h6',
   ],
   close: ['M18 6 6 18', 'M6 6l12 12'],
-  gauge: ['M12 14l4-4', 'M3.34 19a10 10 0 1 1 17.32 0'],
+  sliders: [
+    'M4 6h9',
+    'M17 6h3',
+    'M15 4v4',
+    'M4 12h3',
+    'M11 12h9',
+    'M9 10v4',
+    'M4 18h11',
+    'M19 18h1',
+    'M17 16v4',
+  ],
   film: [
     'M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z',
     'M7 3v18',
@@ -131,6 +141,16 @@ export function trapFocus(root: HTMLElement): () => void {
       if (before?.isConnected && !before.closest('[inert],[hidden]')) before.focus()
     })
   }
+}
+
+/** Set an element's text only when it changed: no new text node, no mutation, no style work. */
+export function setText(el: Element, text: string): void {
+  if (el.textContent !== text) el.textContent = text
+}
+
+/** Set an attribute only when it changed. */
+export function setAttr(el: Element, name: string, value: string): void {
+  if (el.getAttribute(name) !== value) el.setAttribute(name, value)
 }
 
 /** Replace an element's children in one go. */

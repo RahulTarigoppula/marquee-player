@@ -26,25 +26,32 @@ import 'ui/ticket_office/ticket_office_screen.dart';
 class MarqueeApp extends ConsumerWidget {
   const MarqueeApp({super.key});
 
+  /// Two themes exist; each is built once, so a rebuild never hands MaterialApp a "new" one
+  /// (which would animate every themed widget for 200 ms).
+  static final _themes = <bool, ThemeData>{};
+  static ThemeData _theme(bool matinee) => _themes[matinee] ??= marqueeTheme(
+    matinee ? Tokens.matinee : Tokens.auditorium,
+    matinee: matinee,
+  );
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final settings = ref.watch(settingsValueProvider);
-    final room = ref.watch(roomProvider);
+    // ONLY what decides the light: a volume save or a subtitle setting never rebuilds the app.
+    final lobbyTheme = ref.watch(settingsValueProvider.select((s) => s.lobbyTheme));
+    final inAuditorium = ref.watch(roomProvider.select((r) => r == Room.auditorium));
     final platformDark = MediaQuery.platformBrightnessOf(context) == Brightness.dark;
-    final phase = skyPhaseAt(clock.now());
     final matinee =
-        room != Room.auditorium &&
-        switch (settings.lobbyTheme) {
+        !inAuditorium &&
+        switch (lobbyTheme) {
           LobbyTheme.matinee => true,
           LobbyTheme.auditorium => false,
-          LobbyTheme.auto => !platformDark && phase == SkyPhase.day,
+          LobbyTheme.auto => !platformDark && skyPhaseAt(clock.now()) == SkyPhase.day,
         };
-    final palette = matinee ? Tokens.matinee : Tokens.auditorium;
     return MaterialApp(
       title: 'Marquee',
       debugShowCheckedModeBanner: false,
-      theme: marqueeTheme(palette, matinee: matinee),
-      home: HouseLights(palette: palette, matinee: matinee),
+      theme: _theme(matinee),
+      home: HouseLights(palette: matinee ? Tokens.matinee : Tokens.auditorium, matinee: matinee),
     );
   }
 }
@@ -78,11 +85,20 @@ class _HouseLightsState extends ConsumerState<HouseLights> with SingleTickerProv
     HardwareKeyboard.instance.addHandler(_globalKeys);
     // Backgrounded (Home, the app switcher, a call) or hidden: keep the resume point honest.
     _lifecycle = AppLifecycleListener(
-      onPause: _saveResume,
+      onPause: _paused,
       onHide: _saveResume,
       onInactive: Platform.isAndroid ? _saveResume : null,
     );
     onWindowClosing = () => ref.read(sessionProvider.notifier).close(toLobby: false);
+  }
+
+  /// Android: stopped (Home without PiP, the screen off, a closed PiP window) means unseen, so
+  /// the film pauses. A PiP window only makes the app inactive, never paused.
+  void _paused() {
+    _saveResume();
+    if (Platform.isAndroid && !ref.read(pipProvider)) {
+      ref.read(sessionProvider.notifier).pauseUnseen();
+    }
   }
 
   @override
@@ -101,7 +117,7 @@ class _HouseLightsState extends ConsumerState<HouseLights> with SingleTickerProv
     if (e is! KeyDownEvent || e.logicalKey != LogicalKeyboardKey.keyO) return false;
     if (!HardwareKeyboard.instance.isControlPressed) return false;
     unawaited(() async {
-      final f = await pickVideo();
+      final f = await ref.read(pipProvider.notifier).withoutAutoEnter(pickVideo);
       if (f != null) await ref.read(sessionProvider.notifier).open(f);
     }());
     return true;
@@ -134,16 +150,6 @@ class _HouseLightsState extends ConsumerState<HouseLights> with SingleTickerProv
     await session.openLocator(path);
   }
 
-  /// Android Back (and predictive back) for the rooms without a back of their own. The
-  /// Auditorium handles its own (overlays, then the film); the Lobby lets the app close.
-  void _back() {
-    final room = ref.read(roomProvider);
-    if (room == Room.ticketOffice) {
-      final filmOpen = ref.read(sessionProvider) != null;
-      ref.read(roomProvider.notifier).go(filmOpen ? Room.auditorium : Room.lobby);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final reduced = MediaQuery.disableAnimationsOf(context);
@@ -158,7 +164,6 @@ class _HouseLightsState extends ConsumerState<HouseLights> with SingleTickerProv
           ),
         );
       }
-      unawaited(setLobbyChrome(lobby: !down));
       if (!down) unawaited(ref.read(pipProvider.notifier).setAutoEnter(enabled: false));
     });
     ref.listen(fullscreenProvider, (_, full) => unawaited(setFullscreen(full)));
@@ -173,11 +178,10 @@ class _HouseLightsState extends ConsumerState<HouseLights> with SingleTickerProv
           ),
     );
 
+    // Android Back: the Lobby lets the app close; the Auditorium (overlays, then the film) and
+    // the Ticket Office (a section, then the room) each handle their own.
     return PopScope(
       canPop: room == Room.lobby,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) _back();
-      },
       child: House(
         palette: palette,
         matinee: widget.matinee && !inAuditorium,

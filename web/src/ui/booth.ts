@@ -1,9 +1,10 @@
-// The Subtitle Booth (§4.4): a sheet that never exceeds 70 % of the height, over a paused
-// frame. Tracks (and Off), "Add subtitle file…", size S/M/L, the sync rule (FIXED caret, MOVING
-// ruler) and — when online search exists — the language, "Find another print" and the tickets.
-// Modal: Tab stays inside, Esc or a click outside closes it.
+// The Subtitle Booth (§4.4), shown to the viewer as "Subtitle settings": a sheet that never
+// exceeds 70 % of the height, over a paused frame. Tracks (and Off), "Add subtitle file…", size
+// S/M/L, the sync rule (FIXED caret, MOVING ruler) and, when online search exists, the language,
+// "Find another print" and the tickets. Modal: Tab stays inside, Esc or a click outside closes it.
 import { LANGUAGES } from '../engine/languages'
-import { ariaValueText, RANGE, readout, snap, step } from '../engine/syncRule'
+import { ariaValueText, RANGE, snap, step } from '../engine/syncRule'
+import { signed } from '../engine/timecode'
 import type { ScoredCandidate } from '../engine/types'
 import { fill, h, ICONS, icon, trapFocus } from './dom'
 import { candidateRow } from './leader'
@@ -11,6 +12,9 @@ import { candidateRow } from './leader'
 export const PX_PER_SECOND = 200 // 10 px per 50 ms detent
 const TICK_S = 0.05
 const MAJOR_EVERY = 10 // a labelled major every 0.50 s
+
+/** The booth's own readout beside its "Sync" label: `+0.35 s`. */
+const syncText = (v: number) => `${signed(v)} s`
 
 export type CueSize = 'S' | 'M' | 'L'
 export const CUE_SCALE: Readonly<Record<CueSize, number>> = { S: 0.86, M: 1, L: 1.22 }
@@ -88,7 +92,13 @@ export function booth(o: BoothOptions): BoothView {
     ruler,
     h('div', { class: 'rule__caret', 'aria-hidden': 'true' }),
   )
-  const syncOut = h('span', { class: 'mono' }, readout(0))
+  const syncOut = h('span', { class: 'mono rule__out' }, syncText(0))
+  const hints = h(
+    'div',
+    { class: 'rule__hints', 'aria-hidden': 'true' },
+    h('span', {}, '← Earlier (G)'),
+    h('span', {}, 'Later (H) →'),
+  )
   const tracks = h('div', { class: 'tracks', role: 'radiogroup', 'aria-label': 'Subtitle tracks' })
   const sizes = (['S', 'M', 'L'] as const).map((s) => {
     const b = h(
@@ -139,7 +149,12 @@ export function booth(o: BoothOptions): BoothView {
   signInBtn.addEventListener('click', () => o.onSignIn?.())
   const close = h(
     'button',
-    { class: 'mark', type: 'button', 'aria-label': 'Close the booth', title: 'Close (Esc)' },
+    {
+      class: 'mark',
+      type: 'button',
+      'aria-label': 'Close subtitle settings',
+      title: 'Close (Esc)',
+    },
     icon(...ICONS.close),
   )
   close.addEventListener('click', o.onClose)
@@ -176,7 +191,7 @@ export function booth(o: BoothOptions): BoothView {
       h(
         'div',
         { class: 'sheet__head' },
-        h('h2', { class: 'label', id: 'booth-title' }, 'Subtitle booth · tracks'),
+        h('h2', { class: 'label', id: 'booth-title' }, 'Subtitle settings'),
         close,
       ),
       tracks,
@@ -192,6 +207,7 @@ export function booth(o: BoothOptions): BoothView {
         { class: 'sheet__sec' },
         h('div', { class: 'sheet__head' }, h('span', { class: 'label' }, 'Sync'), syncOut),
         rule,
+        hints,
       ),
       searchSec,
     ),
@@ -205,7 +221,7 @@ export function booth(o: BoothOptions): BoothView {
     ruler.style.setProperty('--rx', `${-value * PX_PER_SECOND}px`) // the RULER moves
     rule.setAttribute('aria-valuenow', value.toFixed(2))
     rule.setAttribute('aria-valuetext', ariaValueText(value))
-    syncOut.textContent = readout(value)
+    syncOut.textContent = syncText(value)
   }
 
   let drag: { x: number; v: number } | null = null

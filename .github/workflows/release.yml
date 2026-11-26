@@ -4,7 +4,7 @@ on:
   push:
     tags: ['v*']
   schedule:
-    - cron: '0 4 * * 1'          # Mondays 04:00 UTC — integration tests only
+    - cron: '0 4 * * 1'          # Mondays 04:00 UTC: integration tests only
   workflow_dispatch:             # manual run: artifacts only, no Release
 
 permissions:
@@ -70,7 +70,7 @@ jobs:
         if: matrix.target == 'android'
         with:
           distribution: temurin
-          java-version: '17'     # R1 — the proven version for this Flutter + AGP pair
+          java-version: '17'     # R1: the proven version for this Flutter + AGP pair
           cache: gradle
 
       - uses: subosito/flutter-action@v2
@@ -155,7 +155,7 @@ jobs:
           KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
           if [ -z "$KS_B64" ]; then
-            echo "::warning::ANDROID_KEYSTORE_BASE64 is not set — the APKs will be DEBUG-signed and cannot update a release-signed install."
+            echo "::warning::ANDROID_KEYSTORE_BASE64 is not set, the APKs will be DEBUG-signed and cannot update a release-signed install."
             exit 0
           fi
           printf '%s' "$KS_B64" | base64 -d > "$RUNNER_TEMP/release.p12"
@@ -206,7 +206,7 @@ jobs:
           if [ -z "${ANDROID_KEYSTORE_FILE:-}" ]; then
             echo "SIGNING=debug" >> "$GITHUB_ENV"
           fi
-          # No universal APK — libmpv is ~30-40 MB per ABI (N11)
+          # No universal APK: libmpv is ~30-40 MB per ABI (N11)
           test ! -f build/app/outputs/flutter-apk/app-release.apk
           sz=$(stat -c%s "out/marquee-android-arm64-v8a.apk")
           echo "arm64-v8a APK: $((sz / 1024 / 1024)) MB"
@@ -238,8 +238,8 @@ jobs:
 
           | You have | Download |
           |---|---|
-          | **Windows 10/11** | `marquee-windows-x64-setup.exe` — installs for your user only (no admin), adds Start-menu entry and "Open with → Marquee" for video files |
-          | Windows, no install | `marquee-windows-x64-portable.zip` — extract anywhere, run `marquee.exe` |
+          | **Windows 10/11** | `marquee-windows-x64-setup.exe`: installs for your user only (no admin), adds Start-menu entry and "Open with → Marquee" for video files |
+          | Windows, no install | `marquee-windows-x64-portable.zip`: extract anywhere, run `marquee.exe` |
           | **Android 8+ phone** | `marquee-android-arm64-v8a.apk` (every phone since ~2019) · `armeabi-v7a` for very old phones · `x86_64` for emulators |
 
           **Windows:** the installer is not code-signed (certificates cost money), so SmartScreen says
@@ -251,7 +251,7 @@ jobs:
           If this build has no API key baked in, paste a free consumer key there too (OpenSubtitles →
           Profile → API Consumers).
 
-          Subtitles by OpenSubtitles.com. Playback by libmpv / FFmpeg / libass (LGPL — see
+          Subtitles by OpenSubtitles.com. Playback by libmpv / FFmpeg / libass (LGPL, see
           the Ticket Office for notices and source links). Verify downloads against `SHA256SUMS-*.txt`.
           No telemetry, no accounts of our own: only the file's hash, size and a title query ever leave the device.
           NOTES
@@ -260,7 +260,7 @@ jobs:
             cat >> notes.md <<'NOTES'
 
           > **Android update note:** this build is signed with a throwaway CI key (the repo has no
-          > release keystore secret yet), so it will not install over an earlier Marquee APK —
+          > release keystore secret yet), so it will not install over an earlier Marquee APK ,
           > uninstall the old one first. Once the owner adds `ANDROID_KEYSTORE_*` secrets, every
           > later release updates in place.
           NOTES

@@ -1,4 +1,4 @@
-; Marquee — per-user Windows installer (Inno Setup 6). Built by release.yml:
+; Marquee: per-user Windows installer (Inno Setup 6). Built by release.yml:
 ;   iscc /DAppVersion=1.2.3 /DSourceDir=<Release folder> /DOutputDir=out windows\installer\marquee.iss
 ; No admin rights, no services, nothing outside %LOCALAPPDATA%\Programs\Marquee and HKCU.
 ; Video types are added to "Open with" (and to Settings > Default apps) without stealing any

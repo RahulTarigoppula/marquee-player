@@ -116,6 +116,69 @@ class Settings {
     volume: (volume ?? this.volume).clamp(0, maxVolume),
   );
 
+  /// Value equality, so an unchanged save notifies nobody and `select`ed fields compare
+  /// cheaply. Kept in step with [toJson] (every field, nothing else).
+  @override
+  bool operator ==(Object other) =>
+      other is Settings &&
+      _sameList(other.languages, languages) &&
+      other.preferHearingImpaired == preferHearingImpaired &&
+      other.saveBesideFile == saveBesideFile &&
+      other.subdlEnabled == subdlEnabled &&
+      other.tmdbEnabled == tmdbEnabled &&
+      other.roomTone == roomTone &&
+      other.biasLight == biasLight &&
+      other.beam == beam &&
+      other.sounds == sounds &&
+      other.haptics == haptics &&
+      other.lobbyTheme == lobbyTheme &&
+      other.hwdec == hwdec &&
+      other.scanMode == scanMode &&
+      other.subtitleScale == subtitleScale &&
+      other.subtitleLook == subtitleLook &&
+      other.subtitlePlacement == subtitlePlacement &&
+      _sameList(other.audioLanguages, audioLanguages) &&
+      other.preferEmbeddedSubtitles == preferEmbeddedSubtitles &&
+      other.autoplayNext == autoplayNext &&
+      other.volume == volume;
+
+  @override
+  int get hashCode => Object.hashAll([
+    Object.hashAll(languages),
+    preferHearingImpaired,
+    saveBesideFile,
+    subdlEnabled,
+    tmdbEnabled,
+    roomTone,
+    biasLight,
+    beam,
+    sounds,
+    haptics,
+    lobbyTheme,
+    hwdec,
+    scanMode,
+    subtitleScale,
+    subtitleLook,
+    subtitlePlacement,
+    Object.hashAll(audioLanguages),
+    preferEmbeddedSubtitles,
+    autoplayNext,
+    volume,
+  ]);
+
+  /// The fields that change how mpv draws text subtitles (size, look, placement).
+  ({double scale, SubtitleLook look, SubtitlePlacement placement}) get subtitleStyle =>
+      (scale: subtitleScale, look: subtitleLook, placement: subtitlePlacement);
+
+  static bool _sameList(List<String> a, List<String> b) {
+    if (identical(a, b)) return true;
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
   Map<String, Object?> toJson() => {
     'languages': languages,
     'preferHearingImpaired': preferHearingImpaired,

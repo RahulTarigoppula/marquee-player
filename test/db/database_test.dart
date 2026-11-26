@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:clock/clock.dart';
 import 'package:drift/drift.dart' show driftRuntimeOptions;
 import 'package:drift/native.dart';
@@ -67,6 +69,42 @@ void main() {
       expect(card.finished, isFalse);
       expect(await db.mediaIdFor(row), id);
       expect(await db.mediaIdFor('elsewhere.mkv'), isNull);
+    });
+
+    test('shows a newly cached subtitle language on the Lobby card', () async {
+      await db.upsertMedia(locator: 'a.mkv', displayName: 'a.mkv', sizeBytes: 1, hash: hash);
+      final seen = <String?>[];
+      final first = Completer<void>();
+      final tagged = Completer<void>();
+      final sub = db.watchLobby().listen((cards) {
+        final lang = cards.single.subtitleLanguage;
+        seen.add(lang);
+        if (!first.isCompleted) first.complete();
+        if (lang == 'hi' && !tagged.isCompleted) tagged.complete();
+      });
+      addTearDown(sub.cancel);
+      await first.future;
+      expect(seen.single, isNull);
+      await db.putCachedSubtitle(
+        hash: hash,
+        language: 'hi',
+        provider: 'openSubtitles',
+        sidecarPath: 'a.hi.srt',
+        syncedByHash: true,
+        besideFile: true,
+      );
+      await tagged.future.timeout(const Duration(seconds: 5));
+      expect(seen.last, 'hi');
+    });
+
+    test('carries the saved position, so the card and the session agree on Resume', () async {
+      await db.upsertMedia(locator: 'a.mkv', displayName: 'a.mkv', sizeBytes: 1, hash: hash);
+      // Two minutes before the end: in progress for the Lobby AND resumable for the session.
+      await db.saveResume(hash, 9663000 - 120000, 9663000);
+      final card = (await db.watchLobby().first).single;
+      expect(card.positionMs, 9663000 - 120000);
+      expect(card.inProgress, isTrue);
+      expect((await db.resumeFor(hash))!.resumable, isTrue);
     });
 
     test('remembers the sync offset per moviehash', () async {

@@ -7,6 +7,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../api/opensubtitles.dart';
 import '../db/database.dart';
 import '../engine/models/models.dart';
+import '../engine/sentences.dart';
 import '../engine/tickets.dart';
 import 'thumbnails.dart';
 
@@ -79,21 +80,40 @@ final quotaProvider = NotifierProvider<QuotaNotifier, Quota>(QuotaNotifier.new);
 
 final ticketStripProvider = Provider((ref) => ticketStrip(ref.watch(quotaProvider)));
 
+/// How long a search waits for the saved key and sign-in before going ahead without them.
+const Duration kKeysRestoreWait = Duration(seconds: 3);
+
 class AccountNotifier extends Notifier<Account> {
-  final _restored = Completer<void>();
+  final _keysRestored = Completer<void>();
 
   @override
   Account build() {
-    unawaited(_restore().whenComplete(() => _restored.isCompleted ? null : _restored.complete()));
+    unawaited(_restore());
     return const Account();
   }
 
-  /// Completes once the saved key and sign-in are back in the client — a film opened from the
-  /// command line or "Open with" waits for this, or its search would run keyless.
-  Future<void> get restored => _restored.future;
+  /// Completes once the saved API key and sign-in token are back in the client (a few local
+  /// secure-storage reads, never the network). Only a subtitle request waits for it: opening
+  /// a film never does.
+  Future<void> get keysRestored => _keysRestored.future;
+
+  /// Waits (at most [kKeysRestoreWait]) for [keysRestored]; a slow keyring searches keyless
+  /// rather than hold up the film.
+  Future<void> untilKeysRestored() async {
+    if (_keysRestored.isCompleted) return;
+    try {
+      await _keysRestored.future.timeout(kKeysRestoreWait);
+    } on TimeoutException {
+      // Go ahead with what the client has.
+    }
+  }
 
   FlutterSecureStorage get _store => ref.read(secureStorageProvider);
   OpenSubtitlesClient get _client => ref.read(openSubtitlesProvider);
+
+  void _keysBack() {
+    if (!_keysRestored.isCompleted) _keysRestored.complete();
+  }
 
   Future<void> _restore() async {
     try {
@@ -110,18 +130,18 @@ class AccountNotifier extends Notifier<Account> {
       _client.host = await _store.read(key: _hostKey) ?? kDefaultHost;
       state = const Account(status: AccountStatus.signedIn);
       ref.read(quotaProvider.notifier).set(const Quota(signedIn: true));
+      _keysBack(); // the quota refresh below is a network call: nobody waits for it
       if (_client.hasKey) {
         ref.read(quotaProvider.notifier).set(await _client.userInfo());
       }
     } on ThreadingException catch (e) {
       if (e.failure == ThreadingFailure.unauthorized) {
-        state = const Account(
-          status: AccountStatus.expired,
-          sentence: 'Ticket expired — sign in again.',
-        );
+        state = const Account(status: AccountStatus.expired, sentence: kTicketExpired);
       }
     } on Object {
       // Secure storage unavailable (e.g. a locked keyring): stay signed out, quietly.
+    } finally {
+      _keysBack();
     }
   }
 
@@ -131,7 +151,7 @@ class AccountNotifier extends Notifier<Account> {
       state = Account(
         status: AccountStatus.error,
         username: username,
-        sentence: 'Signing in needs an OpenSubtitles API key — add yours first (it is free).',
+        sentence: 'Signing in needs an OpenSubtitles API key. Add yours first (it is free).',
       );
       return;
     }
@@ -151,9 +171,9 @@ class AccountNotifier extends Notifier<Account> {
         username: username,
         sentence: switch (e.failure) {
           ThreadingFailure.unauthorized => "That username and password didn't work.",
-          ThreadingFailure.offline => "You're offline — try again when you're connected.",
+          ThreadingFailure.offline => "You're offline. Try again when you're connected.",
           ThreadingFailure.rateLimited => 'OpenSubtitles asked us to wait a moment.',
-          _ => "OpenSubtitles didn't answer — try again in a moment.",
+          _ => "OpenSubtitles didn't answer. Try again in a moment.",
         },
       );
     }
@@ -175,10 +195,7 @@ class AccountNotifier extends Notifier<Account> {
     _client.host = kDefaultHost;
     unawaited(_forgetJwt());
     ref.read(quotaProvider.notifier).set(Quota.anonymous);
-    state = const Account(
-      status: AccountStatus.expired,
-      sentence: 'Ticket expired — sign in again.',
-    );
+    state = const Account(status: AccountStatus.expired, sentence: kTicketExpired);
   }
 
   Future<void> _forgetJwt() async {

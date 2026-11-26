@@ -1,16 +1,14 @@
 // The open film: one PlayerEngine + one ThreadingMachine, wired to the cache, the sidecar
-// writer and the API. Libmpv opens the file (PAUSED, at the resume point) while the leader
-// counts; the film starts when threading is done, skipped, or falls back to "no subtitles".
+// writer and the API. The Auditorium appears the moment a film is chosen; libmpv opens the
+// file (PAUSED, at the resume point) while the leader counts, and the film starts when
+// threading is done, skipped, or falls back to "no subtitles".
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show File;
-import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 
-import '../api/opensubtitles.dart';
-import '../api/subdl.dart';
 import '../engine/filename.dart';
 import '../engine/hash.dart';
 import '../engine/models/models.dart';
@@ -19,105 +17,23 @@ import '../engine/threading.dart';
 import '../platform/files.dart';
 import '../platform/pip.dart';
 import '../player/engine.dart';
+import 'film_session.dart';
 import 'notice.dart';
 import 'providers.dart';
+import 'subtitle_ports.dart';
 import 'thumbnails.dart';
+
+export 'film_session.dart';
 
 const Duration kResumeSaveEvery = Duration(seconds: 5);
 const Duration kUndecodableAfter = Duration(seconds: 5);
 
+/// The volume is written to Settings this long after the last change (a wheel spin is one
+/// write, not forty).
+const Duration kVolumeSaveAfter = Duration(milliseconds: 800);
+
 /// The Lobby frame is grabbed this far in (or at 10 % of a shorter film), and again on close.
 const Duration kThumbnailAt = Duration(minutes: 2, seconds: 30);
-
-class FilmSession {
-  final OpenedFile file;
-  final PlayerEngine engine;
-  final ThreadingState threading;
-  final ParsedName? parsed;
-  final int? mediaId;
-  final int delayMs;
-  final int audioDelayMs;
-  final List<Chapter> chapters;
-  final String? title;
-  final String? error; // "This print can't be projected." — never a code
-
-  /// The folder's neighbours (desktop paths only), for N / P and "Up next".
-  final String? previousPath, nextPath;
-
-  /// A–B loop points; both set ⇒ looping.
-  final Duration? loopA, loopB;
-  final SleepTimer sleep;
-  final PictureFit fit;
-
-  /// The film has been told to play (threading finished or was skipped).
-  final bool started;
-
-  const FilmSession({
-    required this.file,
-    required this.engine,
-    this.threading = const ThreadingState(),
-    this.parsed,
-    this.mediaId,
-    this.delayMs = 0,
-    this.audioDelayMs = 0,
-    this.chapters = const [],
-    this.title,
-    this.error,
-    this.previousPath,
-    this.nextPath,
-    this.loopA,
-    this.loopB,
-    this.sleep = SleepTimer.off,
-    this.fit = PictureFit.fit,
-    this.started = false,
-  });
-
-  bool get threadingVisible =>
-      threading.phase != LeaderPhase.done && threading.phase != LeaderPhase.idle;
-
-  String get displayTitle => title ?? parsed?.title ?? file.displayName;
-
-  String? get nextName => nextPath == null ? null : p.basename(nextPath!);
-  String? get previousName => previousPath == null ? null : p.basename(previousPath!);
-
-  bool get looping => loopA != null && loopB != null;
-
-  FilmSession copyWith({
-    ThreadingState? threading,
-    int? mediaId,
-    int? delayMs,
-    int? audioDelayMs,
-    List<Chapter>? chapters,
-    String? title,
-    String? error,
-    String? previousPath,
-    String? nextPath,
-    Duration? loopA,
-    Duration? loopB,
-    bool clearLoop = false,
-    SleepTimer? sleep,
-    PictureFit? fit,
-    bool? started,
-  }) => FilmSession(
-    file: file,
-    engine: engine,
-    threading: threading ?? this.threading,
-    parsed: parsed,
-    mediaId: mediaId ?? this.mediaId,
-    delayMs: delayMs ?? this.delayMs,
-    audioDelayMs: audioDelayMs ?? this.audioDelayMs,
-    chapters: chapters ?? this.chapters,
-    title: title ?? this.title,
-    error: error ?? this.error,
-    previousPath: previousPath ?? this.previousPath,
-    nextPath: nextPath ?? this.nextPath,
-    loopA: clearLoop ? null : (loopA ?? this.loopA),
-    loopB: clearLoop ? null : (loopB ?? this.loopB),
-    sleep: sleep ?? this.sleep,
-    fit: fit ?? this.fit,
-    started: started ?? this.started,
-  );
-}
 
 class SessionNotifier extends Notifier<FilmSession?> {
   ThreadingMachine? _machine;
@@ -132,11 +48,13 @@ class SessionNotifier extends Notifier<FilmSession?> {
   /// open() is serialised: each call waits for the previous one, and a call superseded while
   /// waiting does nothing (two quick drops play the second file, once).
   int _openSeq = 0;
+  int _opening = 0;
   Future<void> _tail = Future.value();
 
   /// The resume key: the moviehash, or [urlResumeKey] for a stream.
   MovieHash? _resumeKey;
   Duration? _resumeAt;
+  ({MovieHash key, int positionMs})? _lastSaved;
   bool _pausedForOffice = false;
   Completer<int>? _mediaIdReady;
 
@@ -145,13 +63,11 @@ class SessionNotifier extends Notifier<FilmSession?> {
     // The machine holds its own quota; keep it current (sign-in, restore, sign-out) or a pick
     // after signing in is refused as "no tickets" without a request.
     ref.listen(quotaProvider, (_, q) => _machine?.setQuota(q));
-    // Subtitle look and size apply to the open film the moment they change in Settings.
-    ref.listen(settingsProvider, (prev, next) {
-      final s = next.value;
+    // Subtitle look and size apply to the open film the moment they change in Settings, and
+    // ONLY then: a volume save or a theme change sends mpv nothing.
+    ref.listen(settingsValueProvider.select((s) => s.subtitleStyle), (_, _) {
       final engine = state?.engine;
-      if (s != null && engine != null && prev?.value != s) {
-        unawaited(engine.applySubtitleStyle(s));
-      }
+      if (engine != null) unawaited(engine.applySubtitleStyle(ref.read(settingsValueProvider)));
     });
     // The Ticket Office is a room of its own: the film waits for you there.
     ref.listen(roomProvider, (prev, room) {
@@ -165,14 +81,11 @@ class SessionNotifier extends Notifier<FilmSession?> {
         unawaited(engine.play());
       }
     });
-    ref.read(pipProvider.notifier).onPlayPause = () => unawaited(state?.engine.playOrPause());
+    ref.read(pipProvider.notifier)
+      ..onPlayPause = (() => unawaited(state?.engine.playOrPause()))
+      ..onDismissed = pauseUnseen;
     ref.onDispose(() {
-      _resumeTimer?.cancel();
-      _undecodable?.cancel();
-      _thumbTimer?.cancel();
-      _sleepTimer?.cancel();
-      _volumeSave?.cancel();
-      unawaited(_completedSub?.cancel());
+      _cancelTimers();
       _machine?.dispose();
     });
     return null;
@@ -180,19 +93,32 @@ class SessionNotifier extends Notifier<FilmSession?> {
 
   ThreadingMachine? get machine => _machine;
 
+  /// True while a film is being opened (the Auditorium may be empty for a moment then).
+  bool get isOpening => _opening > 0;
+
   bool _isCurrent(PlayerEngine engine) => state?.engine == engine && !engine.isDisposed;
+
+  void _cancelTimers() {
+    _resumeTimer?.cancel();
+    _undecodable?.cancel();
+    _thumbTimer?.cancel();
+    _sleepTimer?.cancel();
+    unawaited(_completedSub?.cancel());
+    _completedSub = null;
+  }
 
   // ───────────────────────────── opening ─────────────────────────────
 
   /// THE entry point: a picked, dropped, forwarded or "Open URL…" film.
   Future<void> open(OpenedFile file) {
     final seq = ++_openSeq;
+    _opening++;
     final run = _tail.then((_) async {
       if (seq != _openSeq) return;
       await _open(file, seq);
     });
     _tail = run.catchError((Object _) {});
-    return run;
+    return run.whenComplete(() => _opening--);
   }
 
   /// A Lobby card, a command-line argument or an "Open with" URI. A film that has moved or
@@ -219,48 +145,77 @@ class SessionNotifier extends Notifier<FilmSession?> {
         );
   }
 
+  /// A film replaced by one that could not open leaves no empty Auditorium behind.
+  void _lobbyIfEmpty(int seq) {
+    if (seq != _openSeq || state != null) return; // a newer open owns the room
+    if (ref.read(roomProvider) == Room.auditorium) {
+      ref.read(fullscreenProvider.notifier).set(false);
+      ref.read(roomProvider.notifier).go(Room.lobby);
+    }
+  }
+
   Future<void> _open(OpenedFile file, int seq) async {
     if (state != null) await close(toLobby: false);
-    if (seq != _openSeq) return;
+    PlayerEngine? engine;
     try {
-      // A film opened at launch must not search before the saved API key is back.
-      await ref.read(accountProvider.notifier).restored.timeout(const Duration(seconds: 3));
+      if (seq != _openSeq) return;
+      final settings = await ref.read(settingsProvider.future);
+      if (seq != _openSeq) return;
+      if (!file.isRemote && !file.isContentUri && !await File(file.locator).exists()) {
+        await _missing(file.locator);
+        return;
+      }
+      final parsed = file.isRemote || file.isContentUri
+          ? parseName(file.displayName)
+          : parsePath(file.locator);
+      // The hash (two 64 KiB reads) overlaps the player's start-up; the threading machine
+      // reuses the same future, so the file is read once.
+      final hashing = file.isRemote ? null : _hashOf(file);
+      final e = engine = PlayerEngine(hwdec: settings.hwdec);
+      _attachedOnce = false;
+      _pausedForOffice = false;
+      _resumeKey = null;
+      _resumeAt = null;
+      _mediaIdReady = Completer<int>();
+      // The room changes NOW: the player configures behind the house lights.
+      state = FilmSession(file: file, engine: e, parsed: parsed);
+      ref.read(roomProvider.notifier).go(Room.auditorium);
+      _watchCompletion(e);
+      await e.configure(settings);
+      if (!_isCurrent(e)) return;
+      if (hashing == null) {
+        await _openStream(file, e, settings, parsed);
+      } else {
+        await _openLocal(file, e, settings, parsed, hashing);
+      }
     } on Object {
-      // A slow keyring: search without it rather than wait.
+      final e = engine;
+      if (e != null && _isCurrent(e)) {
+        _fail(e);
+      } else if (e != null) {
+        unawaited(e.dispose());
+      }
+    } finally {
+      _lobbyIfEmpty(seq);
     }
-    final settings = await ref.read(settingsProvider.future);
-    if (seq != _openSeq) return;
-    if (!file.isRemote && !file.isContentUri && !File(file.locator).existsSync()) {
-      await _missing(file.locator);
-      return;
-    }
-    final parsed = file.isRemote || file.isContentUri
-        ? parseName(file.displayName)
-        : parsePath(file.locator);
-    final engine = PlayerEngine(hwdec: settings.hwdec);
-    await engine.configure(settings);
-    if (seq != _openSeq) {
-      await engine.dispose();
-      return;
-    }
-    _attachedOnce = false;
-    _pausedForOffice = false;
-    _resumeKey = null;
-    _resumeAt = null;
-    _mediaIdReady = Completer<int>();
-    state = FilmSession(file: file, engine: engine, parsed: parsed);
-    ref.read(roomProvider.notifier).go(Room.auditorium);
-    _watchCompletion(engine);
+  }
 
-    if (file.isRemote) {
-      await _openStream(file, engine, settings, parsed);
-      return;
-    }
-
-    // The hash is ~40 ms; reading it first lets libmpv open AT the resume point (a seek after
-    // load is racy). The threading machine reuses the same future — one read of the file.
-    final hashing = movieHashOf(await chunkReaderFor(file), file.sizeBytes);
+  /// Starts reading the moviehash. Its failure is the threading machine's to report (a slow
+  /// disk or a read error just means "search by name"), never an uncaught error.
+  Future<MovieHash> _hashOf(OpenedFile file) {
+    final hashing = chunkReaderFor(file).then((read) => movieHashOf(read, file.sizeBytes));
     unawaited(hashing.then((_) {}, onError: (Object _) {}));
+    return hashing;
+  }
+
+  Future<void> _openLocal(
+    OpenedFile file,
+    PlayerEngine engine,
+    Settings settings,
+    ParsedName? parsed,
+    Future<MovieHash> hashing,
+  ) async {
+    // Reading the hash first lets libmpv open AT the resume point (a seek after load is racy).
     MovieHash? hash;
     try {
       hash = await hashing.timeout(kHashDeadline);
@@ -271,17 +226,7 @@ class SessionNotifier extends Notifier<FilmSession?> {
     if (hash != null) await _loadResume(hash);
     if (!_isCurrent(engine)) return;
     unawaited(_startPlayback(engine, file, start: _resumeAt));
-
-    final machine = ThreadingMachine(
-      ports: _ports(file, settings, engine, () => hashing),
-      config: ThreadingConfig(
-        languages: settings.languages,
-        preferHearingImpaired: settings.preferHearingImpaired,
-        subdlEnabled: settings.subdlEnabled,
-      ),
-      quota: ref.read(quotaProvider),
-      onChange: (t) => _onThreading(engine, t),
-    );
+    final machine = _machineFor(file, settings, engine, () => hashing);
     _machine = machine;
     await machine.open(displayName: file.displayName, sizeBytes: file.sizeBytes, parsed: parsed);
     unawaited(ref.read(databaseProvider).sweepArtwork());
@@ -312,28 +257,41 @@ class SessionNotifier extends Notifier<FilmSession?> {
     state = state?.copyWith(mediaId: id, delayMs: delay);
     await _loadResume(key);
     if (!_isCurrent(engine)) return;
-    _machine = ThreadingMachine(
-      ports: _ports(file, settings, engine, () => throw const HashUnavailable('a stream')),
-      config: ThreadingConfig(
-        languages: settings.languages,
-        preferHearingImpaired: settings.preferHearingImpaired,
-        subdlEnabled: settings.subdlEnabled,
-      ),
-      quota: ref.read(quotaProvider),
-      onChange: (t) => _onThreading(engine, t),
-    );
+    _machine = _machineFor(file, settings, engine, () => throw const HashUnavailable('a stream'));
     _attachedOnce = true; // nothing automatic to attach; a manual pick resets this
     await _startPlayback(engine, file, start: _resumeAt);
     if (delay != 0) await engine.setSubDelayMs(delay);
     await _begin(engine);
   }
 
+  ThreadingMachine _machineFor(
+    OpenedFile file,
+    Settings settings,
+    PlayerEngine engine,
+    Future<MovieHash> Function() hash,
+  ) => ThreadingMachine(
+    ports: SubtitlePorts(
+      ref: ref,
+      file: file,
+      settings: settings,
+      engine: engine,
+      onHashKnown: (h) => _recordMedia(file, engine, h),
+      onFeatureTitle: (title, year) => _retitle(engine, title, year),
+    ).build(hash),
+    config: ThreadingConfig(
+      languages: settings.languages,
+      preferHearingImpaired: settings.preferHearingImpaired,
+      subdlEnabled: settings.subdlEnabled,
+    ),
+    quota: ref.read(quotaProvider),
+    onChange: (t) => _onThreading(engine, t),
+  );
+
+  /// The one resume rule ([ResumePoint.resumable]), the same one the Lobby shows.
   Future<void> _loadResume(MovieHash key) async {
     _resumeKey = key;
     final rp = await ref.read(databaseProvider).resumeFor(key);
-    if (rp != null && rp.positionMs > 10000 && !rp.finished) {
-      _resumeAt = Duration(milliseconds: rp.positionMs);
-    }
+    if (rp != null && rp.resumable) _resumeAt = Duration(milliseconds: rp.positionMs);
   }
 
   Future<void> _startPlayback(PlayerEngine engine, OpenedFile file, {Duration? start}) async {
@@ -349,8 +307,11 @@ class SessionNotifier extends Notifier<FilmSession?> {
     _undecodable?.cancel();
     _undecodable = Timer(kUndecodableAfter, () {
       if (!_isCurrent(engine)) return;
+      // Nothing ever played: no length, no movement, and mpv said why. A live stream has no
+      // length either, but it moves, so a recoverable network error never ends it.
       final s = engine.snapshot;
-      if (s.duration == Duration.zero && s.error != null) _fail(engine);
+      final stuck = !s.playing && s.position == Duration.zero && s.duration == Duration.zero;
+      if (stuck && s.error != null) _fail(engine);
     });
     _resumeTimer?.cancel();
     _resumeTimer = Timer.periodic(kResumeSaveEvery, (_) => unawaited(_saveResume()));
@@ -372,7 +333,10 @@ class SessionNotifier extends Notifier<FilmSession?> {
     final thumbAt = dur < kThumbnailAt * 2 ? dur * 0.1 : kThumbnailAt;
     _thumbTimer?.cancel();
     if (!file.isRemote) {
-      _thumbTimer = Timer(thumbAt, () => unawaited(_grabThumbnail(engine)));
+      _thumbTimer = Timer(thumbAt, () {
+        final cur = state;
+        if (cur != null && cur.engine == engine) unawaited(_grabThumbnail(cur));
+      });
     }
     try {
       final id = await _mediaIdReady!.future.timeout(const Duration(seconds: 20));
@@ -393,12 +357,13 @@ class SessionNotifier extends Notifier<FilmSession?> {
     }
   }
 
-  Future<void> _grabThumbnail(PlayerEngine engine) async {
-    final id = state?.mediaId;
-    if (id == null || !_isCurrent(engine) || state!.file.isRemote) return;
-    if (engine.player.state.position < const Duration(seconds: 5)) return;
+  /// The Lobby frame. mpv encodes and writes it on its own thread (an async command).
+  Future<void> _grabThumbnail(FilmSession s) async {
+    final id = s.mediaId;
+    if (id == null || s.engine.isDisposed || s.file.isRemote) return;
+    if (s.engine.player.state.position < const Duration(seconds: 5)) return;
     final target = await thumbnailTarget(ref, id);
-    if (await engine.screenshotTo(target)) await thumbnailWritten(ref, id);
+    if (await s.engine.screenshotTo(target)) await thumbnailWritten(ref, id);
   }
 
   void _watchCompletion(PlayerEngine engine) {
@@ -420,166 +385,6 @@ class SessionNotifier extends Notifier<FilmSession?> {
     state = cur.copyWith(error: "This print can't be projected.");
   }
 
-  ThreadingPorts _ports(
-    OpenedFile file,
-    Settings settings,
-    PlayerEngine engine,
-    Future<MovieHash> Function() hash,
-  ) {
-    final db = ref.read(databaseProvider);
-    final os = ref.read(openSubtitlesProvider);
-    return ThreadingPorts(
-      hash: hash,
-      findExisting: (hash) async {
-        await _recordMedia(file, engine, hash);
-        final side = findSidecar(file, settings.languages);
-        if (side != null) {
-          return ExternalSubtitle(
-            path: side,
-            language: settings.languages.first,
-            provider: SubtitleProvider.sidecar,
-            syncedByHash: false,
-          );
-        }
-        if (hash != null) {
-          final row = await db.cachedSubtitle(hash, settings.languages, exists: fileExists);
-          if (row != null) {
-            return ExternalSubtitle(
-              path: row.sidecarPath,
-              language: row.language,
-              provider:
-                  SubtitleProvider.values.asNameMap()[row.provider] ??
-                  SubtitleProvider.openSubtitles,
-              syncedByHash: row.syncedByHash,
-              besideFile: row.besideFile,
-              release: row.release,
-            );
-          }
-        }
-        return settings.preferEmbeddedSubtitles ? _embeddedFor(engine, settings.languages) : null;
-      },
-      search: (req) async {
-        if (!os.hasKey) throw const ThreadingException(ThreadingFailure.noApiKey);
-        final key = OpenSubtitlesClient.cacheKey(req);
-        final cached = await db.cachedSearch(key);
-        if (cached != null) return OpenSubtitlesClient.parseSearch(cached);
-        final body = await os.searchRaw(req);
-        await db.putSearch(key, body);
-        return OpenSubtitlesClient.parseSearch(body);
-      },
-      subdl: settings.subdlEnabled
-          ? (req) async {
-              final key = await ref.read(accountProvider.notifier).subdlKey();
-              final client = SubdlClient(apiKey: key);
-              try {
-                return await client.search(req);
-              } finally {
-                client.client.close();
-              }
-            }
-          : null,
-      download: (pick, hash) => _download(file, settings, engine, pick, hash),
-    );
-  }
-
-  /// An embedded subtitle in a wanted language (best language first; a "forced" track only
-  /// covers foreign dialogue, so it never counts). Waits for libmpv to list the tracks.
-  Future<EmbeddedSubtitle?> _embeddedFor(PlayerEngine engine, List<String> languages) async {
-    if (!await engine.whenLoaded(timeout: const Duration(seconds: 4))) return null;
-    final tracks = engine.snapshot.subtitleTracks
-        .where((t) => !engine.isExternal(t.id))
-        .where((t) => !(t.title ?? '').toLowerCase().contains('forced'))
-        .toList();
-    for (final lang in languages) {
-      final t = tracks.where((t) => languageMatches(t.language, lang)).firstOrNull;
-      if (t != null) return EmbeddedSubtitle(mpvTrackId: t.id, language: lang, title: t.title);
-    }
-    return null;
-  }
-
-  Future<DownloadOutcome> _download(
-    OpenedFile file,
-    Settings settings,
-    PlayerEngine engine,
-    ScoredCandidate pick,
-    MovieHash? hash,
-  ) async {
-    final c = pick.candidate;
-    final db = ref.read(databaseProvider);
-    Uint8List bytes;
-    var ext = 'srt';
-    int? remaining;
-    DateTime? reset;
-    if (c.provider == SubtitleProvider.subdl) {
-      final client = SubdlClient();
-      final ZipText z;
-      try {
-        z = await client.download(c.id);
-      } finally {
-        client.client.close();
-      }
-      bytes = z.bytes;
-      if (!z.name.toLowerCase().endsWith('.srt')) ext = 'ass';
-    } else {
-      final os = ref.read(openSubtitlesProvider);
-      if (!os.hasKey) throw const ThreadingException(ThreadingFailure.noApiKey);
-      try {
-        final link = await os.requestDownload(c.id);
-        remaining = link.remaining;
-        reset = link.resetUtc;
-        ref.read(quotaProvider.notifier).afterDownload(link.remaining, link.resetUtc);
-        bytes = await os.fetchLink(link.link);
-      } on ThreadingException catch (e) {
-        if (e.failure == ThreadingFailure.unauthorized) {
-          ref.read(accountProvider.notifier).markExpired();
-        }
-        if (e.failure == ThreadingFailure.quotaExhausted) {
-          ref.read(quotaProvider.notifier).afterDownload(0, null);
-        }
-        rethrow;
-      }
-    }
-    final written = await writeSidecar(
-      file,
-      language: c.language,
-      bytes: bytes,
-      besideFile: settings.saveBesideFile,
-      extension: ext,
-    );
-    if (hash != null) {
-      await db.putCachedSubtitle(
-        hash: hash,
-        language: c.language,
-        provider: c.provider.name,
-        sidecarPath: written.path,
-        syncedByHash: c.moviehashMatch,
-        besideFile: written.besideFile,
-        fileId: c.id,
-        release: c.release,
-      );
-    }
-    // A download that lands after its film was closed must not retitle the next one.
-    final feature = c.feature;
-    final cur = state;
-    if (feature?.title != null && cur != null && cur.engine == engine && cur.mediaId != null) {
-      await db.setTitle(cur.mediaId!, feature!.title!, feature.year);
-      final now = state;
-      if (now != null && now.engine == engine) state = now.copyWith(title: feature.title);
-    }
-    return DownloadOutcome(
-      attached: ExternalSubtitle(
-        path: written.path,
-        language: c.language,
-        provider: c.provider,
-        syncedByHash: c.moviehashMatch,
-        besideFile: written.besideFile,
-        release: c.release,
-      ),
-      remaining: remaining,
-      resetUtc: reset,
-    );
-  }
-
   Future<void> _recordMedia(OpenedFile file, PlayerEngine engine, MovieHash? hash) async {
     final db = ref.read(databaseProvider);
     final parsed = state?.parsed;
@@ -599,6 +404,15 @@ class SessionNotifier extends Notifier<FilmSession?> {
     if (delay != 0) await engine.setSubDelayMs(delay);
   }
 
+  /// A download that lands after its film was closed must not retitle the next one.
+  Future<void> _retitle(PlayerEngine engine, String title, int? year) async {
+    final id = state?.mediaId;
+    if (!_isCurrent(engine) || id == null) return;
+    await ref.read(databaseProvider).setTitle(id, title, year);
+    final now = state;
+    if (now != null && now.engine == engine) state = now.copyWith(title: title);
+  }
+
   void _onThreading(PlayerEngine engine, ThreadingState t) {
     final cur = state;
     if (cur == null || cur.engine != engine) return;
@@ -606,29 +420,30 @@ class SessionNotifier extends Notifier<FilmSession?> {
     if (t.phase != LeaderPhase.done) return;
     if (!_attachedOnce) {
       _attachedOnce = true;
-      final a = t.attached;
-      unawaited(() async {
-        try {
-          switch (a) {
-            case ExternalSubtitle():
-              await engine.attachSubtitle(a.path, language: a.language);
-            case EmbeddedSubtitle():
-              if (await engine.whenLoaded()) await engine.selectSubtitle(a.mpvTrackId);
-            case NoSubtitle():
-              break;
-          }
-          final now = state;
-          final delay = now != null && now.engine == engine ? now.delayMs : 0;
-          if (delay != 0) await engine.setSubDelayMs(delay);
-        } on Object {
-          // The film was closed while the subtitle was being attached.
-        }
-      }());
+      unawaited(_attach(engine, t.attached));
     }
     if (!cur.started) unawaited(_begin(engine));
   }
 
-  /// House lights fully down: the film starts — at the resume point, which a notice offers
+  Future<void> _attach(PlayerEngine engine, SubtitleTrackRef a) async {
+    try {
+      switch (a) {
+        case ExternalSubtitle():
+          await engine.attachSubtitle(a.path, language: a.language);
+        case EmbeddedSubtitle():
+          if (await engine.whenLoaded()) await engine.selectSubtitle(a.mpvTrackId);
+        case NoSubtitle():
+          break;
+      }
+      final now = state;
+      final delay = now != null && now.engine == engine ? now.delayMs : 0;
+      if (delay != 0) await engine.setSubDelayMs(delay);
+    } on Object {
+      // The film was closed while the subtitle was being attached.
+    }
+  }
+
+  /// House lights fully down: the film starts, at the resume point, which a notice offers
   /// to undo.
   Future<void> _begin(PlayerEngine engine) async {
     final cur = state;
@@ -669,20 +484,30 @@ class SessionNotifier extends Notifier<FilmSession?> {
     await cur.engine.setAudioDelayMs(v);
   }
 
-  /// The volume slider, wheel, keys and swipes. Remembered for the next film.
+  /// The volume slider, wheel, keys and swipes. Remembered for the next film, once the hand
+  /// is still ([kVolumeSaveAfter]).
   Future<void> setVolume(double v) async {
     final engine = state?.engine;
     if (engine == null) return;
     final value = v.clamp(0, Settings.maxVolume).toDouble();
     await engine.setVolume(value);
     _volumeSave?.cancel();
-    _volumeSave = Timer(const Duration(milliseconds: 800), () => unawaited(_persistVolume(value)));
+    _volumeSave = Timer(kVolumeSaveAfter, () => unawaited(_persistVolume(value)));
   }
 
   Future<void> _persistVolume(double v) async {
     final s = ref.read(settingsProvider).value;
     if (s == null || s.volume == v) return;
     await ref.read(settingsProvider.notifier).edit((s) => s.copyWith(volume: v));
+  }
+
+  /// The PiP window was closed, or the app went to the background without one: pause, so
+  /// nothing plays unseen. Resume is the user's call.
+  void pauseUnseen() {
+    final engine = state?.engine;
+    if (engine == null || engine.isDisposed || !engine.player.state.playing) return;
+    unawaited(engine.pause());
+    unawaited(_saveResume());
   }
 
   Future<void> pick(ScoredCandidate c) async {
@@ -714,28 +539,34 @@ class SessionNotifier extends Notifier<FilmSession?> {
     ref.read(noticeProvider.notifier).show('Subtitles loaded: ${p.basename(path)}');
   }
 
+  /// "Load subtitle file…": the picker, then the file. On Android the picker is our own
+  /// activity, so it must not count as going Home (which would shrink the film into PiP).
+  Future<void> pickAndLoadSubtitle() async {
+    final path = await ref.read(pipProvider.notifier).withoutAutoEnter(pickSubtitleFile);
+    if (path != null) await loadSubtitleFile(path);
+  }
+
   /// L: set A, then B (the loop starts), then clear.
   Future<void> toggleLoop() async {
     final cur = state;
     if (cur == null) return;
     final pos = cur.engine.player.state.position;
+    final notice = ref.read(noticeProvider.notifier);
     if (cur.loopA == null) {
       state = cur.copyWith(loopA: pos);
       await cur.engine.setLoop(pos, null);
-      ref
-          .read(noticeProvider.notifier)
-          .show('Loop start set at ${shortClock(pos)} — press L again for the end.');
+      notice.show('Loop start set at ${shortClock(pos)}. Press L again for the end.');
     } else if (cur.loopB == null) {
       final a = pos < cur.loopA! ? pos : cur.loopA!;
       final b = pos < cur.loopA! ? cur.loopA! : pos;
       if (b - a < const Duration(milliseconds: 500)) return;
       state = cur.copyWith(loopA: a, loopB: b);
       await cur.engine.setLoop(a, b);
-      ref.read(noticeProvider.notifier).show('Looping ${shortClock(a)} – ${shortClock(b)}');
+      notice.show('Looping ${shortClock(a)} to ${shortClock(b)}');
     } else {
       state = cur.copyWith(clearLoop: true);
       await cur.engine.setLoop(null, null);
-      ref.read(noticeProvider.notifier).show('Loop off');
+      notice.show('Loop off');
     }
   }
 
@@ -803,35 +634,33 @@ class SessionNotifier extends Notifier<FilmSession?> {
   /// Saves where you are (every 5 s, on close, when the app goes to the background).
   Future<void> saveResumeNow() => _saveResume();
 
-  Future<void> _saveResume() async {
-    final cur = state;
+  Future<void> _saveResume([FilmSession? of]) async {
+    final cur = of ?? state;
     final key = cur?.threading.hash ?? _resumeKey;
     if (cur == null || key == null || !cur.started || cur.engine.isDisposed) return;
     final s = cur.engine.snapshot;
     if (s.duration == Duration.zero) return;
     final pos = s.completed ? s.duration : s.position;
     if (pos == Duration.zero) return; // never overwrite a resume point before playback moved
+    // Paused: the 5 s tick has nothing new to say (and every write re-runs the Lobby query).
+    final last = _lastSaved;
+    if (last != null && last.key == key && last.positionMs == pos.inMilliseconds) return;
+    _lastSaved = (key: key, positionMs: pos.inMilliseconds);
     await ref.read(databaseProvider).saveResume(key, pos.inMilliseconds, s.duration.inMilliseconds);
   }
 
-  /// House lights up: save, grab the Lobby frame, dispose the Player, back to the Lobby.
+  /// House lights up: the room changes at once; the resume point, the Lobby frame and the
+  /// player's disposal follow behind it.
   Future<void> close({bool toLobby = true}) async {
     final cur = state;
-    _resumeTimer?.cancel();
-    _undecodable?.cancel();
-    _thumbTimer?.cancel();
-    _sleepTimer?.cancel();
-    unawaited(_completedSub?.cancel());
-    _completedSub = null;
+    _cancelTimers();
     _machine?.dispose();
     _machine = null;
     if (cur == null) return;
-    await _saveResume();
-    if (cur.started && cur.error == null) await _grabThumbnail(cur.engine);
-    if (_volumeSave?.isActive ?? false) {
-      _volumeSave!.cancel();
-      await _persistVolume(cur.engine.player.state.volume);
-    }
+    // Read everything from the player BEFORE the room changes; write it after.
+    final resume = _saveResume(cur);
+    final volume = (_volumeSave?.isActive ?? false) ? cur.engine.player.state.volume : null;
+    _volumeSave?.cancel();
     state = null;
     ref.read(boothOpenProvider.notifier).set(false);
     ref.read(cueSheetProvider.notifier).set(false);
@@ -839,7 +668,15 @@ class SessionNotifier extends Notifier<FilmSession?> {
       ref.read(fullscreenProvider.notifier).set(false);
       ref.read(roomProvider.notifier).go(Room.lobby);
     }
-    await cur.engine.dispose();
+    try {
+      await resume;
+      if (cur.started && cur.error == null) await _grabThumbnail(cur);
+      if (volume != null) await _persistVolume(volume);
+    } on Object {
+      // The film is closing either way.
+    } finally {
+      await cur.engine.dispose();
+    }
   }
 
   String exportName() =>
@@ -848,7 +685,8 @@ class SessionNotifier extends Notifier<FilmSession?> {
 
 final sessionProvider = NotifierProvider<SessionNotifier, FilmSession?>(SessionNotifier.new);
 
-/// position/duration/tracks at 10 Hz — never 60.
+/// position/duration/tracks at 10 Hz, never 60. Watch it through `select` (see
+/// `ControlsLayer`): only the controls need the clock, and only while they show.
 final playbackProvider = StreamProvider<PlaybackState>((ref) {
   final engine = ref.watch(sessionProvider.select((s) => s?.engine));
   if (engine == null) return Stream.value(const PlaybackState());

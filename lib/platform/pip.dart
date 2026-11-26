@@ -10,6 +10,10 @@ class PipNotifier extends Notifier<bool> {
   /// The play/pause button inside the PiP window. Set by the session while a film is open.
   void Function()? onPlayPause;
 
+  /// The PiP window was closed (its X, or swiped away): the film must not keep playing
+  /// unseen. Set by the session.
+  void Function()? onDismissed;
+
   @override
   bool build() {
     if (Platform.isAndroid) {
@@ -18,6 +22,9 @@ class PipNotifier extends Notifier<bool> {
           case 'pipChanged':
             final args = call.arguments;
             state = args is Map && args['inPip'] == true;
+          case 'pipDismissed':
+            state = false;
+            onDismissed?.call();
           case 'pipAction':
             if (call.arguments == 'playPause') onPlayPause?.call();
         }
@@ -25,6 +32,24 @@ class PipNotifier extends Notifier<bool> {
     }
     return false;
   }
+
+  /// Runs [pick] (a file picker: our own activity, not a trip Home) with auto-enter off, so
+  /// Android 8-11 does not take the picker's launch for Home and shrink the film into PiP.
+  /// Auto-enter comes back as it was.
+  Future<T> withoutAutoEnter<T>(Future<T> Function() pick) async {
+    final was = _autoEnter;
+    if (!Platform.isAndroid || !was) return pick();
+    await setAutoEnter(enabled: false, w: _w, h: _h, playing: _playing);
+    try {
+      return await pick();
+    } finally {
+      await setAutoEnter(enabled: true, w: _w, h: _h, playing: _playing);
+    }
+  }
+
+  bool _autoEnter = false;
+  int _w = 16, _h = 9;
+  bool _playing = true;
 
   /// While a film plays, Home enters PiP; in the Lobby it does not. [w]×[h] is the picture's
   /// own size, so the PiP window has the film's shape (not always 16:9).
@@ -35,6 +60,10 @@ class PipNotifier extends Notifier<bool> {
     bool playing = true,
   }) async {
     if (!Platform.isAndroid) return;
+    _w = w;
+    _h = h;
+    _playing = playing;
+    _autoEnter = enabled;
     try {
       await _pip.invokeMethod<bool>('setAutoEnter', {
         'enabled': enabled,
@@ -51,6 +80,7 @@ class PipNotifier extends Notifier<bool> {
 
   Future<void> enter({int w = 16, int h = 9, bool playing = true}) async {
     if (!Platform.isAndroid) return;
+    _autoEnter = true; // entering by hand turns auto-enter on natively too (PipChannel.kt)
     try {
       await _pip.invokeMethod<bool>('enter', {'w': w, 'h': h, 'playing': playing});
     } on PlatformException {

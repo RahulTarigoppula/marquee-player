@@ -3,8 +3,8 @@
 // after 2400 ms of stillness while the film plays. Mouse: click = play/pause, double-click =
 // fullscreen. Touch: tap = show/hide the controls, double-tap left/right third = ∓10 s.
 import type { StepKey } from '../engine/syncRule'
-import { auditoriumFolio, withSuffixes } from '../engine/timecode'
-import { h, ICONS, icon, trapFocus } from './dom'
+import { auditoriumFolio, signed, withSuffixes } from '../engine/timecode'
+import { h, ICONS, icon, setText, trapFocus } from './dom'
 import { clock, filmGate } from './gate'
 
 export const CONTROLS_IDLE_MS = 2400
@@ -16,10 +16,11 @@ const SPEED_STEP = 0.25
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] as const
 const FRAME_S = 1 / 24
 const DOUBLE_TAP_MS = 300
-const RESUME_NOTE_MS = 10_000
+const LONG_PRESS_MS = 600
+const RESUME_NOTE_MS = 6000 // the CSS fade-out ends at the same moment
 const LIFT_LINES = -4 // lines from the bottom while the controls show
 
-/** The web cue sheet. Web-only keys (K, J/L, M, 0–9, G/H, B, C) differ from the native map. */
+/** The web cue sheet. Web-only keys (K, J/L, M, 0-9, G/H, B, C) differ from the native map. */
 export const CUES: ReadonlyArray<readonly [string, string]> = [
   ['Space · K', 'Play / pause'],
   ['← / →', 'Back / forward 5 s'],
@@ -30,12 +31,12 @@ export const CUES: ReadonlyArray<readonly [string, string]> = [
   ['M', 'Mute'],
   ['F · double-click', 'Fullscreen'],
   ['C', 'Subtitles on / off'],
-  ['S', 'Subtitle booth'],
+  ['S', 'Subtitle settings'],
   ['G / H', 'Subtitles 50 ms earlier / later (Shift = 500 ms)'],
   ['Shift + G + H', 'Reset subtitle sync'],
   [', / .', 'Frame step'],
   ['[ / ]', 'Slower / faster'],
-  ['B', 'A–B loop'],
+  ['B', 'A-B loop'],
   ['P', 'Picture-in-picture'],
   ['?', 'This cue sheet'],
   ['Esc', 'Back one lighting state'],
@@ -59,11 +60,14 @@ export interface NoticeLink {
 export interface AuditoriumView {
   el: HTMLElement
   video: HTMLVideoElement
-  pic: HTMLElement
   setTitle(title: string | null): void
   setSubDelay(v: number): void
   /** `available`: a subtitle is attached; `on`: it is showing. */
   setSubs(available: boolean, on: boolean): void
+  /** The subtitle settings sheet is over the picture: the big play mark steps aside. */
+  setBoothOpen(open: boolean): void
+  /** The booth's S/M/L as a factor on the cue font size. */
+  setCueScale(scale: number): void
   setVolume(volume: number, muted: boolean): void
   revealControls(): void
   focusPlay(): void
@@ -97,6 +101,18 @@ const markBtn = (label: string, paths: readonly string[], extra = '') =>
     { class: `mark ${extra}`.trim(), type: 'button', 'aria-label': label, title: label },
     icon(...paths),
   )
+
+/** Call `fn` when the pointer stays down on `el` for LONG_PRESS_MS. */
+function onLongPress(el: HTMLElement, fn: () => void): void {
+  let press: ReturnType<typeof setTimeout> | undefined
+  el.addEventListener('pointerdown', () => {
+    clearTimeout(press)
+    press = setTimeout(fn, LONG_PRESS_MS)
+  })
+  for (const ev of ['pointerup', 'pointerleave', 'pointercancel'] as const) {
+    el.addEventListener(ev, () => clearTimeout(press))
+  }
+}
 
 export function auditorium(o: AuditoriumOptions): AuditoriumView {
   const video = h('video', {
@@ -132,6 +148,8 @@ export function auditorium(o: AuditoriumOptions): AuditoriumView {
   const rippleL = h('div', { class: 'ripple ripple--l', 'aria-hidden': 'true' })
   const rippleR = h('div', { class: 'ripple ripple--r', 'aria-hidden': 'true' })
   const notices = h('div', { class: 'player__notices', role: 'status', 'aria-live': 'polite' })
+  // "Resumed from 1:02:13" sits bottom-left, just above the seek bar, and fades by itself.
+  const resumeBox = h('div', { class: 'player__resume', role: 'status', 'aria-live': 'polite' })
 
   // ── bottom bar ──
   const gate = filmGate((t) => {
@@ -158,14 +176,17 @@ export function auditorium(o: AuditoriumOptions): AuditoriumView {
     {
       class: 'syncchip mono',
       type: 'button',
-      'aria-label': 'Subtitle delay — open the booth',
+      'aria-label': 'Subtitle delay: open subtitle settings',
       hidden: true,
     },
     'SYNC +0.00',
   )
   const addSub = markBtn('Add subtitle file…', ICONS.filePlus)
   const cc = markBtn('Subtitles', ICONS.captions)
+  cc.title = 'Subtitles on / off (C)'
   cc.setAttribute('aria-pressed', 'false')
+  const subSettings = markBtn('Subtitle settings', ICONS.sliders)
+  subSettings.title = 'Subtitle settings (S)'
   const speedBtn = h(
     'button',
     {
@@ -212,6 +233,7 @@ export function auditorium(o: AuditoriumOptions): AuditoriumView {
       syncBtn,
       addSub,
       cc,
+      subSettings,
       h('div', { class: 'menuwrap' }, speedBtn, speedMenu),
       pip,
       fs,
@@ -260,6 +282,7 @@ export function auditorium(o: AuditoriumOptions): AuditoriumView {
     top,
     bigPlay,
     notices,
+    resumeBox,
     bottom,
     cuesheet,
   )
@@ -278,30 +301,42 @@ export function auditorium(o: AuditoriumOptions): AuditoriumView {
     for (let i = 0; i < b.length; i++) if (b.start(i) <= t + 0.5 && t <= b.end(i)) return b.end(i)
     return 0
   }
+  // Runs on every timeupdate/progress (about 4 Hz while playing): every write is skipped when the
+  // value is unchanged, so a steady frame costs no style or layout work.
   const renderTime = () => {
     const dur = Number.isFinite(video.duration) ? video.duration : null
     const pos = video.currentTime
-    folioEl.textContent = withSuffixes(auditoriumFolio(null, pos, dur), {
-      speed: video.playbackRate,
-      looping: loop?.b != null,
-      subDelay: delay,
-    })
+    setText(
+      folioEl,
+      withSuffixes(auditoriumFolio(null, pos, dur), {
+        speed: video.playbackRate,
+        looping: loop?.b != null,
+        subDelay: delay,
+      }),
+    )
     const hours = (dur ?? 0) >= 3600
-    time.textContent = `${clock(pos, hours)} / ${dur === null ? '–:––' : clock(dur, hours)}`
+    setText(time, `${clock(pos, hours)} / ${dur === null ? '-:--' : clock(dur, hours)}`)
     gate.update(pos, video.duration, bufferedAt(pos), video.readyState < 3 && !video.paused)
   }
+  // Icons are swapped only when the state they show changes.
+  let playShown: boolean | null = null
   const renderPlay = () => {
     const paused = video.paused
+    el.classList.toggle('is-paused', paused)
+    if (paused === playShown) return
+    playShown = paused
     play.replaceChildren(icon(...(paused ? ICONS.play : ICONS.pause)))
     play.setAttribute('aria-label', paused ? 'Play' : 'Pause')
     play.title = paused ? 'Play (K)' : 'Pause (K)'
-    el.classList.toggle('is-paused', paused)
   }
+  let volumeIcon: readonly string[] | null = null
   const renderVolume = () => {
     const v = video.muted ? 0 : video.volume
-    mute.replaceChildren(
-      icon(...(v === 0 ? ICONS.volumeOff : v < 0.5 ? ICONS.volumeLow : ICONS.volume)),
-    )
+    const paths = v === 0 ? ICONS.volumeOff : v < 0.5 ? ICONS.volumeLow : ICONS.volume
+    if (paths !== volumeIcon) {
+      volumeIcon = paths
+      mute.replaceChildren(icon(...paths))
+    }
     mute.setAttribute('aria-label', video.muted ? 'Unmute' : 'Mute')
     mute.title = video.muted ? 'Unmute (M)' : 'Mute (M)'
     volume.value = String(v)
@@ -317,20 +352,30 @@ export function auditorium(o: AuditoriumOptions): AuditoriumView {
   // ── chrome visibility ──
   // While the bottom bar shows, subtitle cues step up a few lines so the bar never covers them;
   // when it hides they return to their own line. Cues with a line of their own (an8 → top) stay.
+  // An ASS canvas has no cue lines, so CSS lifts the whole canvas instead (player.css).
   const lifted = new WeakSet<TextTrackCue>()
   let lift = false
   const applyLift = () => {
     if (typeof VTTCue === 'undefined') return
     for (const t of video.textTracks) {
+      let changed = false
       for (const c of t.cues ?? []) {
         if (!(c instanceof VTTCue)) continue
         if (lift && c.line === 'auto') {
           c.line = LIFT_LINES
           lifted.add(c)
+          changed = true
         } else if (!lift && lifted.has(c)) {
           c.line = 'auto'
           lifted.delete(c)
+          changed = true
         }
+      }
+      // Browsers keep a cue that is already on screen where it was laid out; re-showing the
+      // track makes them place it again at its new line.
+      if (changed && t.mode === 'showing') {
+        t.mode = 'hidden'
+        t.mode = 'showing'
       }
     }
   }
@@ -476,9 +521,6 @@ export function auditorium(o: AuditoriumOptions): AuditoriumView {
   }
   video.addEventListener('ratechange', renderSpeed)
   video.addEventListener('volumechange', renderVolume)
-  video.addEventListener('timeupdate', () => {
-    if (loop?.b != null && video.currentTime >= loop.b) video.currentTime = loop.a
-  })
   const onPlayState = () => {
     renderPlay()
     reveal()
@@ -529,12 +571,15 @@ export function auditorium(o: AuditoriumOptions): AuditoriumView {
       else hideNow()
     }, DOUBLE_TAP_MS)
   })
-  stage.addEventListener('pointermove', (e) => {
-    if (e.pointerType === 'mouse') reveal()
-  })
-  el.addEventListener('pointermove', (e) => {
-    if (e.pointerType === 'mouse') reveal()
-  })
+  // One passive listener for the whole auditorium (the stage's moves bubble here). A moving
+  // mouse fires this up to once a frame, so it only re-arms the timer unless the chrome is hidden.
+  el.addEventListener(
+    'pointermove',
+    (e) => {
+      if (e.pointerType === 'mouse') reveal()
+    },
+    { passive: true },
+  )
   for (const bar of [top, bottom]) {
     bar.addEventListener('pointerenter', (e) => {
       if (e.pointerType === 'mouse') overChrome = true
@@ -545,6 +590,13 @@ export function auditorium(o: AuditoriumOptions): AuditoriumView {
     })
   }
   el.addEventListener('focusin', reveal)
+  // A button pressed with the mouse or a finger gives its focus back, so Space and the arrows
+  // keep meaning play/pause and seek instead of pressing that button again.
+  el.addEventListener('click', (e) => {
+    if (e.detail === 0) return // a keyboard press: keep the focus where the viewer put it
+    const b = e.target instanceof Element ? e.target.closest('button') : null
+    if (b && (top.contains(b) || bottom.contains(b)) && document.activeElement === b) b.blur()
+  })
 
   bigPlay.addEventListener('click', () => {
     void video.play().catch(() => undefined)
@@ -558,15 +610,30 @@ export function auditorium(o: AuditoriumOptions): AuditoriumView {
   })
   volume.addEventListener('input', () => setVol(Number(volume.value), Number(volume.value) === 0))
   syncBtn.addEventListener('click', o.onBooth)
-  cc.addEventListener('click', o.onBooth)
+  subSettings.addEventListener('click', o.onBooth)
   addSub.addEventListener('click', o.onAddSubtitle)
+  // The subtitles button switches them on and off (with none attached it asks for a file); a
+  // long press opens the subtitle settings, for phones without an S key.
+  let ccHeld = false
+  cc.addEventListener('pointerdown', () => {
+    ccHeld = false
+  })
+  cc.addEventListener('contextmenu', (e) => e.preventDefault())
+  cc.addEventListener('click', () => {
+    if (ccHeld) ccHeld = false
+    else o.onToggleSubs()
+  })
+  onLongPress(cc, () => {
+    ccHeld = true
+    o.onBooth()
+  })
   speedBtn.addEventListener('click', () => openSpeed(speedMenu.hidden))
   speedMenu.addEventListener('click', (e) => {
     const b = (e.target as HTMLElement).closest<HTMLElement>('[data-speed]')
     if (!b) return
     video.playbackRate = Number(b.dataset.speed)
     openSpeed(false)
-    speedBtn.focus()
+    if (e.detail === 0) speedBtn.focus() // chosen from the keyboard: back to the menu button
   })
   speedMenu.addEventListener('keydown', (e) => {
     const items = [...speedMenu.querySelectorAll<HTMLElement>('[data-speed]')]
@@ -598,17 +665,30 @@ export function auditorium(o: AuditoriumOptions): AuditoriumView {
   exit.addEventListener('click', o.onBack)
 
   // Long-press the SYNC readout to reset it.
-  let press: ReturnType<typeof setTimeout> | undefined
-  syncBtn.addEventListener('pointerdown', () => {
-    press = setTimeout(o.onSyncReset, 600)
-  })
-  for (const ev of ['pointerup', 'pointerleave', 'pointercancel'] as const) {
-    syncBtn.addEventListener(ev, () => clearTimeout(press))
-  }
+  onLongPress(syncBtn, o.onSyncReset)
   document.addEventListener('keyup', (e) => held.delete(e.key.toLowerCase()))
 
   // ── Media Session: the lock screen, headset keys and the OS media flyout ──
   const ms = 'mediaSession' in navigator ? navigator.mediaSession : null
+  let lastPos = 0
+  const updatePosition = () => {
+    if (!ms || Math.abs(video.currentTime - lastPos) < 1 || !Number.isFinite(video.duration)) return
+    lastPos = video.currentTime
+    try {
+      ms.setPositionState({
+        duration: video.duration,
+        playbackRate: video.playbackRate,
+        position: Math.min(video.currentTime, video.duration),
+      })
+    } catch {
+      // not supported
+    }
+  }
+  // One timeupdate listener for the A-B loop and the OS position.
+  video.addEventListener('timeupdate', () => {
+    if (loop?.b != null && video.currentTime >= loop.b) video.currentTime = loop.a
+    updatePosition()
+  })
   if (ms) {
     const on = (a: MediaSessionAction, fn: MediaSessionActionHandler) => {
       try {
@@ -624,20 +704,11 @@ export function auditorium(o: AuditoriumOptions): AuditoriumView {
     on('seekto', (d) => {
       if (d.seekTime !== undefined) seekTo(d.seekTime)
     })
-    let lastPos = 0
-    video.addEventListener('timeupdate', () => {
-      if (Math.abs(video.currentTime - lastPos) < 1 || !Number.isFinite(video.duration)) return
-      lastPos = video.currentTime
-      try {
-        ms.setPositionState({
-          duration: video.duration,
-          playbackRate: video.playbackRate,
-          position: Math.min(video.currentTime, video.duration),
-        })
-      } catch {
-        // not supported
-      }
-    })
+  }
+
+  // The SYNC chip shows only while the subtitles are shifted (the folio says SUB too).
+  const renderSyncChip = () => {
+    syncBtn.hidden = !subsAvailable || Math.round(delay * 100) === 0
   }
 
   renderPlay()
@@ -647,7 +718,6 @@ export function auditorium(o: AuditoriumOptions): AuditoriumView {
   const view: AuditoriumView = {
     el,
     video,
-    pic,
     setTitle(t) {
       titleEl.textContent = t ?? ''
       if (ms) {
@@ -670,14 +740,22 @@ export function auditorium(o: AuditoriumOptions): AuditoriumView {
     },
     setSubDelay(v) {
       delay = v
-      syncBtn.textContent = `SYNC ${v < 0 ? '−' : '+'}${Math.abs(v).toFixed(2)}`
+      syncBtn.textContent = `SYNC ${signed(v)}`
+      renderSyncChip()
       renderTime()
     },
     setSubs(available, on) {
       subsAvailable = available
       cc.classList.toggle('is-on', available && on)
       cc.setAttribute('aria-pressed', available && on ? 'true' : 'false')
-      syncBtn.hidden = !available
+      renderSyncChip()
+    },
+    setBoothOpen(open) {
+      el.classList.toggle('is-booth', open)
+    },
+    setCueScale(scale) {
+      pic.style.setProperty('--cue-size', `${scale}em`)
+      pic.style.setProperty('--cue-scale', String(scale))
     },
     setVolume(v, muted) {
       video.volume = v
@@ -717,6 +795,7 @@ export function auditorium(o: AuditoriumOptions): AuditoriumView {
     },
     clearNotices() {
       notices.replaceChildren()
+      resumeBox.replaceChildren()
     },
     offerResume(at, onStartOver) {
       const again = h('button', { class: 'linkbtn', type: 'button' }, 'Start over')
@@ -730,7 +809,7 @@ export function auditorium(o: AuditoriumOptions): AuditoriumView {
         onStartOver()
         n.remove()
       })
-      notices.append(n)
+      resumeBox.replaceChildren(n)
       setTimeout(() => n.remove(), RESUME_NOTE_MS)
     },
     handleKey(e) {
@@ -738,7 +817,11 @@ export function auditorium(o: AuditoriumOptions): AuditoriumView {
       const k = e.key.toLowerCase()
       held.add(k)
       reveal()
-      const onButton = e.target instanceof HTMLButtonElement
+      // Space presses a button only when the viewer tabbed to it; a button that merely kept the
+      // focus from a click gives it up and Space plays or pauses.
+      const t = e.target
+      const onButton = t instanceof HTMLButtonElement && t.matches(':focus-visible')
+      if (e.key === ' ' && !onButton && t instanceof HTMLButtonElement) t.blur()
       if (e.key === ' ' && !onButton) toggle()
       else if (k === 'k') toggle()
       else if (e.key === 'ArrowLeft') seekBy(e.shiftKey ? -SHIFT_ARROW_S : -ARROW_S)

@@ -1,8 +1,8 @@
-# Marquee — The No-Hassle Smart Media Player
+# Marquee: The No-Hassle Smart Media Player
 
 > **Drop a film. The lights go down. The subtitles are already there.**
 
-**Status: v1.1 — see [docs/STATUS.md](docs/STATUS.md)** · design system **HOUSE LIGHTS** · [screenshots](https://github.com/RahulTarigoppula/marquee-player/tree/screenshots)
+**Status: v1.1, see [docs/STATUS.md](docs/STATUS.md)** · design system **HOUSE LIGHTS** · [screenshots](https://github.com/RahulTarigoppula/marquee-player/tree/screenshots)
 
 ![Lobby](https://raw.githubusercontent.com/RahulTarigoppula/marquee-player/screenshots/lobby_library_desktop.png)
 
@@ -24,16 +24,16 @@ Get the files from the **[latest release](https://github.com/RahulTarigoppula/ma
 
 ### Owner checklist (one-time, repo settings)
 
-1. **Settings → Secrets → Actions → `OS_API_KEY`** — your OpenSubtitles consumer key, so friends don't need their own.
-2. **Android signing** — `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_PASSWORD`, `ANDROID_KEY_ALIAS` (see §4 below). Without them APKs are signed with a throwaway CI key and won't update in place.
+1. **Settings → Secrets → Actions → `OS_API_KEY`**: your OpenSubtitles consumer key, so friends don't need their own.
+2. **Android signing**: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_PASSWORD`, `ANDROID_KEY_ALIAS` (see §4 below). Without them APKs are signed with a throwaway CI key and won't update in place.
 3. **Settings → Pages → Source: GitHub Actions**, then re-run the `pages` workflow, for Marquee Lite at `https://rahultarigoppula.github.io/marquee-player/`.
 4. Optional: `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` + repo variable `WORKER_URL` to give Lite online subtitle search.
 5. Release: `git tag v1.2.0 && git push --tags`.
 
-Marquee is one Flutter codebase that ships a **Windows `.exe`** and an **Android APK** on the same engine — libmpv (ffmpeg + libass) through `media_kit` — so an MKV with HEVC video, AC-3 audio and an ASS subtitle track plays identically on both, with no codec packs.
-The instant a file opens it is fingerprinted with the OpenSubtitles **moviehash** (128 KiB of I/O), looked up hash-first, and the best subtitle is downloaded, saved beside the file and attached **before the first frame is shown** — a hash hit means the subtitle was uploaded for that exact release, so it is already in sync.
+Marquee is one Flutter codebase that ships a **Windows `.exe`** and an **Android APK** on the same engine, libmpv (ffmpeg + libass) through `media_kit`, so an MKV with HEVC video, AC-3 audio and an ASS subtitle track plays identically on both, with no codec packs.
+The instant a file opens it is fingerprinted with the OpenSubtitles **moviehash** (128 KiB of I/O), looked up hash-first, and the best subtitle is downloaded, saved beside the file and attached **before the first frame is shown**, a hash hit means the subtitle was uploaded for that exact release, so it is already in sync.
 The whole identification chain is staged as an academy leader counting **3-2-1**, so the loading indicator is literally the truth about what the app is doing; a failure stalls the numeral instead of faking progress.
-A third, mandatory tier — **Marquee Lite** — is a small Vite + TypeScript web player on GitHub Pages that runs the same hash → subtitle ritual for whatever the browser can decode, through a Cloudflare Worker that holds the API key.
+A third, mandatory tier, **Marquee Lite**, is a small Vite + TypeScript web player on GitHub Pages that runs the same hash → subtitle ritual for whatever the browser can decode, through a Cloudflare Worker that holds the API key.
 Everything is free and open source: no accounts of our own, no telemetry, no store listings, no paid services anywhere.
 
 ---
@@ -47,10 +47,10 @@ Everything is free and open source: no accounts of our own, no telemetry, no sto
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Stack, system diagram, folder layout, Dart + TypeScript data model, moviehash, the subtitle matching ladder, house-lights colour extraction, the Worker contract, budgets |
 | [docs/PLAN.md](docs/PLAN.md) | Phases 0–6 with checkbox tasks, acceptance criteria, effort, risks, and the Weekend MVP fast path |
 | [docs/DESIGN.md](docs/DESIGN.md) | HOUSE LIGHTS: palettes, type, motion, signature interactions, screen-by-screen wireframes, tokens |
-| [docs/RESEARCH.md](docs/RESEARCH.md) | Verified stack survey, API facts, licensing findings, risks — with a full verification log |
+| [docs/RESEARCH.md](docs/RESEARCH.md) | Verified stack survey, API facts, licensing findings, risks, with a full verification log |
 | [docs/TESTING.md](docs/TESTING.md) | Test strategy, golden data (hashes, scoring, timecodes, tickets, contrast), fixtures, the Worker suite, performance gates, a11y, the manual Android and Windows checklists |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Worker, Pages, `ci.yml` + `release.yml`, keystore, secrets, versioning, rollback, troubleshooting |
-| [docs/IMPLEMENTATION-PROMPT.md](docs/IMPLEMENTATION-PROMPT.md) | The self-contained build brief: every reconciliation, the full design system, the algorithms with golden values, the Worker source, the CI YAML — build from this one file |
+| [docs/IMPLEMENTATION-PROMPT.md](docs/IMPLEMENTATION-PROMPT.md) | The self-contained build brief: every reconciliation, the full design system, the algorithms with golden values, the Worker source, the CI YAML, build from this one file |
 | [design/preview.html](design/preview.html) | The visual contract (Lobby night + Matinee, Threading mid-sweep, Auditorium with controls, Booth sheet) |
 
 Shared, binding context: [`_shared/DECISIONS.md`](../_shared/DECISIONS.md) (D1 Marquee exception, D2 Worker, D5 licensing, D7 tokens, D9 working agreement) and [`_shared/GETTING-STARTED.md`](../_shared/GETTING-STARTED.md).
@@ -59,7 +59,7 @@ Shared, binding context: [`_shared/DECISIONS.md`](../_shared/DECISIONS.md) (D1 M
 
 ## Quickstart
 
-Three deployables live in one repo: the Flutter app at the root (Windows + Android — **not**
+Three deployables live in one repo: the Flutter app at the root (Windows + Android, **not**
 Capacitor), `web/` (Marquee Lite) and `worker/` (the mandatory OpenSubtitles proxy). The scaffold
 is done; this is how to work on it.
 
@@ -125,7 +125,7 @@ Add to the repo's **Settings → Secrets and variables → Actions**:
 | `ANDROID_KEY_ALIAS` | `release` |
 | `OS_API_KEY` | OpenSubtitles consumer key (injected into native builds via `--dart-define`) |
 | `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` | for `wrangler deploy` |
-| `TMDB_READ_TOKEN` | optional, posters only (that exact name — `release.yml` and the Worker both read it) |
+| `TMDB_READ_TOKEN` | optional, posters only (that exact name, `release.yml` and the Worker both read it) |
 
 Then **Settings → Pages → Source: GitHub Actions**, push to `main` (Lite goes live at `https://<owner>.github.io/marquee/`), and `git tag v0.1.0 && git push --tags` for the first Windows zip + split-per-ABI APKs on a GitHub Release.
 
@@ -176,23 +176,23 @@ The same map drives the `?` cue-sheet overlay; both come from `design/cue-sheet.
 
 Marquee's own code is **MIT**. Everything it stands on:
 
-**Playback engine (dynamically linked, LGPL — licence texts and source links ship in the Ticket Office)**
-- [libmpv / mpv](https://github.com/mpv-player/mpv) — LGPL-2.1+ (built `-Dgpl=false`)
-- [FFmpeg](https://ffmpeg.org) — LGPL-3.0 (built `--disable-gpl --enable-version3`)
-- [libass](https://github.com/libass/libass) — ISC
-- Build scripts: [media-kit/libmpv-android-video-build](https://github.com/media-kit/libmpv-android-video-build) (`default` flavour only — never `encoders-gpl`) and [media-kit/libmpv-win32-video-cmake](https://github.com/media-kit/libmpv-win32-video-cmake)
+**Playback engine (dynamically linked, LGPL: licence texts and source links ship in the Ticket Office)**
+- [libmpv / mpv](https://github.com/mpv-player/mpv): LGPL-2.1+ (built `-Dgpl=false`)
+- [FFmpeg](https://ffmpeg.org): LGPL-3.0 (built `--disable-gpl --enable-version3`)
+- [libass](https://github.com/libass/libass): ISC
+- Build scripts: [media-kit/libmpv-android-video-build](https://github.com/media-kit/libmpv-android-video-build) (`default` flavour only, never `encoders-gpl`) and [media-kit/libmpv-win32-video-cmake](https://github.com/media-kit/libmpv-win32-video-cmake)
 
-**Libraries** — [media_kit](https://github.com/media-kit/media-kit) (MIT), [drift](https://pub.dev/packages/drift) (MIT), [Riverpod](https://pub.dev/packages/flutter_riverpod) (MIT), [material_color_utilities](https://pub.dev/packages/material_color_utilities) (Apache-2.0), [flutter_animate](https://pub.dev/packages/flutter_animate) (BSD-3), [window_manager](https://pub.dev/packages/window_manager) · [flutter_acrylic](https://pub.dev/packages/flutter_acrylic) · [flutter_soloud](https://pub.dev/packages/flutter_soloud) (MIT), [JASSUB](https://github.com/ThaUnknown/jassub) (LGPL-2.1+ / FTL / MIT — loaded as a separate WASM module, not statically linked), [mediabunny](https://github.com/Vanilagy/mediabunny) (MPL-2.0) / [movi-player](https://github.com/mrujjwalg/movi-player) (Apache-2.0) for the optional WebCodecs path, [Howler.js](https://howlerjs.com) (MIT). Filename parsing is a Dart/TS port of [parse-torrent-title](https://github.com/clement-escolano/parse-torrent-title) (**MIT**) — deliberately *not* [guessit-js](https://github.com/opensubtitles/guessit-js) (LGPL-3.0). Candidate scoring follows [subliminal](https://github.com/Diaoul/subliminal) (MIT) as a reference model.
+**Libraries**: [media_kit](https://github.com/media-kit/media-kit) (MIT), [drift](https://pub.dev/packages/drift) (MIT), [Riverpod](https://pub.dev/packages/flutter_riverpod) (MIT), [material_color_utilities](https://pub.dev/packages/material_color_utilities) (Apache-2.0), [flutter_animate](https://pub.dev/packages/flutter_animate) (BSD-3), [window_manager](https://pub.dev/packages/window_manager) · [flutter_acrylic](https://pub.dev/packages/flutter_acrylic) · [flutter_soloud](https://pub.dev/packages/flutter_soloud) (MIT), [JASSUB](https://github.com/ThaUnknown/jassub) (LGPL-2.1+ / FTL / MIT: loaded as a separate WASM module, not statically linked), [mediabunny](https://github.com/Vanilagy/mediabunny) (MPL-2.0) / [movi-player](https://github.com/mrujjwalg/movi-player) (Apache-2.0) for the optional WebCodecs path, [Howler.js](https://howlerjs.com) (MIT). Filename parsing is a Dart/TS port of [parse-torrent-title](https://github.com/clement-escolano/parse-torrent-title) (**MIT**): deliberately *not* [guessit-js](https://github.com/opensubtitles/guessit-js) (LGPL-3.0). Candidate scoring follows [subliminal](https://github.com/Diaoul/subliminal) (MIT) as a reference model.
 
 **Data & APIs**
-- **Subtitles by [OpenSubtitles.com](https://www.opensubtitles.com)** — used through the official REST API v1 with a consumer key and the user's own free account. Credit line shown in the Lobby and the Ticket Office.
-- [Subdl](https://subdl.com) — optional fallback provider, user's own free key.
+- **Subtitles by [OpenSubtitles.com](https://www.opensubtitles.com)**: used through the official REST API v1 with a consumer key and the user's own free account. Credit line shown in the Lobby and the Ticket Office.
+- [Subdl](https://subdl.com): optional fallback provider, user's own free key.
 - **This product uses TMDB and the TMDB APIs but is not endorsed, certified, or otherwise approved by TMDB.** Posters and backdrops from [themoviedb.org](https://www.themoviedb.org) are optional, non-commercial, cached ≤ 6 months, never used for ML. TMDB logo per [their attribution rules](https://www.themoviedb.org/about/logos-attribution).
-- moviehash algorithm — public spec, [opensubtitles.github.io/oshash](https://opensubtitles.github.io/oshash/).
+- moviehash algorithm: public spec, [opensubtitles.github.io/oshash](https://opensubtitles.github.io/oshash/).
 
-**Fonts (all SIL OFL 1.1, self-hosted / bundled — never hotlinked)**
+**Fonts (all SIL OFL 1.1, self-hosted / bundled: never hotlinked)**
 - [Big Shoulders Display](https://github.com/xotypeco/big_shoulders) (display) · [Geist](https://github.com/vercel/geist-font) and Geist Mono (UI + numerals) · [Noto Sans](https://fonts.google.com/noto) (subtitle rendering by libass/JASSUB only)
 
-**Icons, sound, shaders** — [Lucide](https://lucide.dev) (ISC), subset shipped as SVG assets; room tone and ticket-tear from [freesound.org CC0](https://freesound.org) / [Kenney](https://kenney.nl/assets/ui-audio) (CC0); the sine sweep, 2-pop and detent clicks are synthesised, no asset; optional upscaling presets from [Anime4K](https://github.com/bloc97/Anime4K) (MIT).
+**Icons, sound, shaders**: [Lucide](https://lucide.dev) (ISC), subset shipped as SVG assets; room tone and ticket-tear from [freesound.org CC0](https://freesound.org) / [Kenney](https://kenney.nl/assets/ui-audio) (CC0); the sine sweep, 2-pop and detent clicks are synthesised, no asset; optional upscaling presets from [Anime4K](https://github.com/bloc97/Anime4K) (MIT).
 
-**Privacy** — no analytics, no telemetry, no crash reporting, no accounts of our own. Only the moviehash, file size, a filename-derived query and the user's own OpenSubtitles JWT ever leave the device. The Worker stores nothing and logs nothing.
+**Privacy**: no analytics, no telemetry, no crash reporting, no accounts of our own. Only the moviehash, file size, a filename-derived query and the user's own OpenSubtitles JWT ever leave the device. The Worker stores nothing and logs nothing.

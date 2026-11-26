@@ -47,7 +47,22 @@ class Chapter {
   const Chapter({required this.index, required this.startSeconds, this.title});
 }
 
-/// One per MovieHash — survives a move or rename.
+/// A film within this of its end counts as watched (and opens at the start next time).
+const int kFinishedWithinMs = 30000;
+
+/// A film less than this far in has not really been started: it opens at the start.
+const int kStartedAfterMs = 10000;
+
+/// THE definition of "watched", shared by the Lobby, the resume store and the session, so a
+/// card that says Resume always resumes.
+bool isFinishedAt(int positionMs, int durationMs) =>
+    durationMs > 0 && positionMs > 0 && durationMs - positionMs <= kFinishedWithinMs;
+
+/// THE definition of "part-way through": far enough in to resume, not yet watched.
+bool isResumableAt(int positionMs, int durationMs) =>
+    positionMs > kStartedAfterMs && !isFinishedAt(positionMs, durationMs);
+
+/// One per MovieHash: survives a move or rename.
 class ResumePoint {
   final MovieHash hash;
   final int positionMs;
@@ -61,7 +76,10 @@ class ResumePoint {
   });
 
   double get fraction => durationMs == 0 ? 0 : positionMs / durationMs;
-  bool get finished => fraction > 0.97;
+  bool get finished => isFinishedAt(positionMs, durationMs);
+
+  /// Where the film should open, or null to start from the beginning.
+  bool get resumable => isResumableAt(positionMs, durationMs);
 }
 
 class SyncOffset {
@@ -85,6 +103,9 @@ class LobbyCard {
   final int? delayMs;
   final String? subtitleLanguage;
   final DateTime? lastPlayedAt;
+
+  /// The saved position itself; when absent it is derived from [resumeFraction].
+  final int? resumePositionMs;
   const LobbyCard({
     required this.id,
     required this.locator,
@@ -99,5 +120,12 @@ class LobbyCard {
     this.delayMs,
     this.subtitleLanguage,
     this.lastPlayedAt,
+    this.resumePositionMs,
   });
+
+  int get positionMs =>
+      resumePositionMs ?? (durationMs == null ? 0 : (durationMs! * resumeFraction).round());
+
+  /// Part-way through, by the same rule the session uses to resume ([isResumableAt]).
+  bool get inProgress => !finished && positionMs > kStartedAfterMs;
 }

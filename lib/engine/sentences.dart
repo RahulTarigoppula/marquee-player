@@ -1,17 +1,20 @@
 // Every failure has exactly one plain sentence (§7.5). Never a code, never a stack trace.
 import 'models/leader.dart';
+import 'tickets.dart';
+
+/// The sign-in token stopped working (a 401).
+const String kTicketExpired = 'Your ticket expired. Sign in again.';
 
 String sentenceFor(ThreadingFailure f, {int? retryAfterSeconds}) => switch (f) {
   ThreadingFailure.fileTooSmall => '',
-  ThreadingFailure.offline => "You're offline — playing without new subtitles.",
+  ThreadingFailure.offline => "You're offline, so the film plays without new subtitles.",
   ThreadingFailure.timeout => 'OpenSubtitles is taking too long to answer.',
   ThreadingFailure.noResults => 'No subtitles found for this print.',
-  ThreadingFailure.unauthorized => 'Ticket expired — sign in again.',
-  ThreadingFailure.quotaExhausted =>
-    'No tickets left tonight — sign in for more, or use the Subdl slot.',
+  ThreadingFailure.unauthorized => kTicketExpired,
+  ThreadingFailure.quotaExhausted => kNoTicketsSentence,
   ThreadingFailure.rateLimited => 'OpenSubtitles asked us to wait ${retryAfterSeconds ?? 2} s.',
-  ThreadingFailure.linkExpired => 'That print expired — fetching a fresh link.',
-  ThreadingFailure.writeFailed => "Couldn't write beside the file — saved in app storage instead.",
+  ThreadingFailure.linkExpired => 'That download link expired. Fetching a fresh one.',
+  ThreadingFailure.writeFailed => "Couldn't save beside the file, so it's in app storage instead.",
   ThreadingFailure.decodeFailed => "This print can't be projected.",
   ThreadingFailure.cancelled => 'Skipped subtitles.',
   ThreadingFailure.noApiKey =>

@@ -67,7 +67,7 @@ void main() {
       thumbnails: thumbs,
       overrides: screenOverrides(library: sampleLibrary(), thumbnails: thumbs),
       act: (t) async {
-        await t.ensureVisible(find.byKey(const ValueKey('grid-5')));
+        await scrollTo(t, find.byKey(const ValueKey('grid-5')));
         await t.pump(const Duration(milliseconds: 300));
       },
     );
@@ -105,7 +105,7 @@ void main() {
       thumbnails: thumbs,
       overrides: screenOverrides(library: sampleLibrary(), thumbnails: thumbs),
       act: (t) async {
-        await t.ensureVisible(find.byKey(const ValueKey('grid-4')));
+        await scrollTo(t, find.byKey(const ValueKey('grid-4')));
         await t.pump(const Duration(milliseconds: 300));
       },
     );

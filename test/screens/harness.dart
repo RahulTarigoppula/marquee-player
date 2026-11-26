@@ -201,14 +201,21 @@ int _crc32(List<int> bytes) {
   return c ^ 0xFFFFFFFF;
 }
 
+/// Scrolls the Lobby until [target] is built and on screen. The grid is lazy: a card below
+/// the fold does not exist until the page scrolls to it, so `ensureVisible` alone cannot find it.
+Future<void> scrollTo(WidgetTester tester, Finder target) async {
+  await tester.scrollUntilVisible(target, 240, scrollable: find.byType(Scrollable).first);
+  await tester.ensureVisible(target);
+}
+
 /// Decodes every frame in [dir] into the image cache with real async, BEFORE the room is
 /// pumped: inside the fake-async test zone a file read never completes, so a card would show
-/// its title card forever.
+/// its title card forever. Uses the same provider the cards draw ([thumbnailImage]).
 Future<void> _precacheFrames(WidgetTester tester, Directory dir) async {
   await tester.runAsync(() async {
     for (final f in dir.listSync().whereType<File>()) {
       final done = Completer<void>();
-      final stream = FileImage(f).resolve(ImageConfiguration.empty);
+      final stream = thumbnailImage(f).resolve(ImageConfiguration.empty);
       void finish() {
         if (!done.isCompleted) done.complete();
       }

@@ -56,14 +56,11 @@ String? containerText(LobbyCard c) {
   return raw.split(',').first.toUpperCase();
 }
 
-bool isInProgress(LobbyCard c) => c.resumeFraction > 0.01 && !c.finished;
+/// Part-way through: the same rule the session resumes by, so "Resume" always resumes.
+bool isInProgress(LobbyCard c) => c.inProgress;
 
-/// The resume position of [c], when known.
-int? resumeMs(LobbyCard c) {
-  final d = c.durationMs;
-  if (d == null || !isInProgress(c)) return null;
-  return (d * c.resumeFraction).round();
-}
+/// The resume position of [c], when it will resume.
+int? resumeMs(LobbyCard c) => c.inProgress ? c.positionMs : null;
 
 /// Removals wait out the Undo window before they touch the library, so "Remove" is never one
 /// slip of a finger: the card hides at once and a notice offers Undo.

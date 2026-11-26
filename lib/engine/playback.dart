@@ -27,6 +27,19 @@ String shortClock(Duration d) {
   return h > 0 ? '$h:${m.toString().padLeft(2, '0')}:$sec' : '$m:$sec';
 }
 
+/// How finely the transport needs the clock for a film of [duration]: about one step per
+/// pixel of a 1500 px seek bar, never finer than the 100 ms playback stream and never coarser
+/// than the one-second time readout. A two-hour film redraws its controls once a second, not
+/// ten times.
+Duration clockStep(Duration duration) =>
+    Duration(milliseconds: (duration.inMilliseconds ~/ 1500).clamp(100, 1000));
+
+/// [position] rounded down to [clockStep] of [duration]: what the controls actually draw.
+Duration clockTick(Duration position, Duration duration) {
+  final step = clockStep(duration).inMilliseconds;
+  return Duration(milliseconds: position.inMilliseconds ~/ step * step);
+}
+
 // ───────────────────────────── the folder's order ─────────────────────────────
 
 final _chunk = RegExp(r'\d+|\D+');
