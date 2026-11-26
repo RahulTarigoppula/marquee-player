@@ -17,6 +17,7 @@ import '../engine/playback.dart';
 import '../engine/threading.dart';
 import '../platform/audio_focus.dart';
 import '../platform/files.dart';
+import '../platform/library_scan.dart';
 import '../platform/pip.dart';
 import '../platform/window.dart';
 import '../player/engine.dart';
@@ -1034,9 +1035,20 @@ class SessionNotifier extends Notifier<FilmSession?> {
       final dir = await screenshotDir();
       final path = p.join(dir.path, '$stem $stamp.jpg');
       final ok = await cur.engine.screenshotTo(path, subtitles: true);
+      // Android: the app's own Pictures folder is invisible to the Gallery; hand the frame to
+      // MediaStore (Android 10+) and keep the private copy only when that is not possible.
+      final inGallery =
+          ok && Platform.isAndroid && await saveImageToGallery(path, p.basename(path));
+      if (inGallery) unawaited(File(path).delete().then<void>((_) {}, onError: (Object _) {}));
       ref
           .read(noticeProvider.notifier)
-          .show(ok ? 'Screenshot saved to ${dir.path}' : "Couldn't save the screenshot.");
+          .show(
+            !ok
+                ? "Couldn't save the screenshot."
+                : inGallery
+                ? 'Screenshot saved to Pictures/Marquee in your Gallery.'
+                : 'Screenshot saved to ${dir.path}',
+          );
     } on Object {
       ref.read(noticeProvider.notifier).show("Couldn't save the screenshot.");
     }

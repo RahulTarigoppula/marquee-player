@@ -269,10 +269,16 @@ class _TopBar extends StatelessWidget {
                 ),
               ),
               if (d.matched) ...[
-                Bulb(color: p.success, size: 7),
+                Tooltip(
+                  message: 'These subtitles were made for this exact file',
+                  child: Bulb(color: p.success, size: 7),
+                ),
                 const SizedBox(width: Tokens.space2),
-                Text('MATCH', style: Txt.mono(Tokens.textXs, p.success)),
-                const SizedBox(width: Tokens.space3),
+                // A narrow phone keeps the bulb and gives the word's room to the title.
+                if (MediaQuery.sizeOf(context).width >= 480) ...[
+                  Text('MATCH', style: Txt.mono(Tokens.textXs, p.success)),
+                  const SizedBox(width: Tokens.space3),
+                ],
               ],
               if (d.sleeping) ...[
                 LucideIcon('timer', size: 18, color: p.accent),
