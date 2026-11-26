@@ -41,6 +41,7 @@ dependencies:
   http: ^1.2.0
   clock: ^1.1.1 # injectable clock, TESTING determinism rules
   desktop_drop: ^0.8.4
+  url_launcher: ^6.3.3
 
 dev_dependencies:
   flutter_test:

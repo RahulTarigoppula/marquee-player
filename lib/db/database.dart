@@ -21,17 +21,21 @@ const Duration kArtworkTtl = Duration(days: 180); // TMDB terms: never cache lon
     Artwork,
     SearchCache,
     AppState,
+    FilePrefs,
   ],
 )
 class MarqueeDatabase extends _$MarqueeDatabase {
   MarqueeDatabase(super.e);
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
     onCreate: (m) => m.createAll(),
+    onUpgrade: (m, from, to) async {
+      if (from < 2) await m.createTable(filePrefs);
+    },
     // Only what every query needs. The artwork sweep runs after the first frame (main.dart):
     // opening the database is on the cold-start path.
     beforeOpen: (details) => customStatement('PRAGMA foreign_keys = ON'),
@@ -238,6 +242,52 @@ class MarqueeDatabase extends _$MarqueeDatabase {
         syncOffsets,
       )..where((t) => t.moviehash.equals(hash.value))).getSingleOrNull())?.delayMs ??
       0;
+
+  // ───────────────────────────── per-film preferences ─────────────────────────────
+
+  /// The viewer's choices for one film (see [FilePrefs]); null when nothing was ever chosen.
+  Future<Map<String, Object?>?> filePrefsFor(MovieHash hash) async {
+    final r = await (select(
+      filePrefs,
+    )..where((t) => t.moviehash.equals(hash.value))).getSingleOrNull();
+    if (r == null) return null;
+    try {
+      final v = jsonDecode(r.prefsJson);
+      return v is Map<String, Object?> ? v : null;
+    } on FormatException {
+      return null;
+    }
+  }
+
+  /// An empty map forgets the film's preferences.
+  Future<void> saveFilePrefs(MovieHash hash, Map<String, Object?> prefs) => prefs.isEmpty
+      ? (delete(filePrefs)..where((t) => t.moviehash.equals(hash.value))).go()
+      : into(filePrefs).insertOnConflictUpdate(
+          FilePrefsCompanion.insert(
+            moviehash: hash.value,
+            prefsJson: jsonEncode(prefs),
+            at: clock.now(),
+          ),
+        );
+
+  // ───────────────────────────── library folders ─────────────────────────────
+
+  /// The folders the device library scans (Windows paths), oldest first.
+  Stream<List<String>> watchFolders() => (select(folders)..orderBy([(t) => OrderingTerm.asc(t.id)]))
+      .watch()
+      .map((rows) => [for (final r in rows) r.locator]);
+
+  Future<List<String>> libraryFolders() async => [
+    for (final r in await (select(folders)..orderBy([(t) => OrderingTerm.asc(t.id)])).get())
+      r.locator,
+  ];
+
+  Future<void> addFolder(String locator) => into(
+    folders,
+  ).insert(FoldersCompanion.insert(locator: locator), mode: InsertMode.insertOrIgnore);
+
+  Future<void> removeFolder(String locator) =>
+      (delete(folders)..where((t) => t.locator.equals(locator))).go();
 
   // ───────────────────────────── search cache ─────────────────────────────
 

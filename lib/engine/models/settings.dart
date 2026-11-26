@@ -9,6 +9,52 @@ enum SubtitleLook { outline, box }
 /// Where subtitles sit on the picture.
 enum SubtitlePlacement { bottom, lowerThird, top }
 
+/// The colour of text subtitles (styled ASS tracks keep their own colours).
+enum SubtitleTint {
+  white('White', '#FFFFFF'),
+  yellow('Yellow', '#FFE14D'),
+  warm('Warm', '#FFD9A0');
+
+  final String label;
+
+  /// mpv `sub-color`.
+  final String mpvColor;
+  const SubtitleTint(this.label, this.mpvColor);
+}
+
+/// One-tap sound profiles (a 10-band equaliser underneath, see `lib/engine/audio_fx.dart`).
+enum EqPreset {
+  flat('Off'),
+  voiceBoost('Clear voices'),
+  bassBoost('More bass'),
+  trebleBoost('More treble'),
+  nightMode('Night mode');
+
+  final String label;
+  const EqPreset(this.label);
+}
+
+/// What happens when a film ends.
+enum RepeatMode {
+  off('Off'),
+  one('Repeat this video'),
+  all('Repeat the folder');
+
+  final String label;
+  const RepeatMode(this.label);
+}
+
+/// The order of the device library.
+enum LibrarySort {
+  name('Name'),
+  newest('Newest first'),
+  largest('Largest first'),
+  longest('Longest first');
+
+  final String label;
+  const LibrarySort(this.label);
+}
+
 class BiasStops {
   final List<int> argb; // exactly 5, by population then darkened duplicates
   final DateTime sampledAt;
@@ -19,6 +65,9 @@ class Settings {
   static const maxLanguages = 3;
   static const minSubtitleScale = 0.6;
   static const maxSubtitleScale = 2.0;
+
+  /// The jump sizes offered for the ±buttons, the arrow keys' big brother and double-tap.
+  static const seekSteps = [5, 10, 15, 30];
 
   final List<String> languages; // max 3, ISO 639-1, ordered by preference
   final bool preferHearingImpaired;
@@ -49,6 +98,30 @@ class Settings {
   final double volume;
   static const maxVolume = 150.0;
 
+  // ── v2 ──
+  final SubtitleTint subtitleTint;
+
+  /// Seconds jumped by the ± buttons and a double-tap (one of [seekSteps]).
+  final int seekStepSeconds;
+
+  /// Evens out loud and quiet passages (mpv `dynaudnorm`).
+  final bool audioNormalize;
+  final EqPreset eqPreset;
+
+  /// Desktop: a small live frame above the seek bar while hovering or dragging it.
+  final bool seekPreview;
+
+  /// Phone: a horizontal swipe on the picture scrubs through the film.
+  final bool swipeToSeek;
+
+  /// Ask GitHub for a newer release on start-up (off by default: no request without consent).
+  final bool autoCheckUpdates;
+  final RepeatMode repeat;
+  final LibrarySort librarySort;
+
+  /// The clock in the player shows time remaining instead of the total.
+  final bool showRemaining;
+
   const Settings({
     this.languages = const ['en'],
     this.preferHearingImpaired = false,
@@ -70,6 +143,16 @@ class Settings {
     this.preferEmbeddedSubtitles = true,
     this.autoplayNext = true,
     this.volume = 100,
+    this.subtitleTint = SubtitleTint.white,
+    this.seekStepSeconds = 10,
+    this.audioNormalize = false,
+    this.eqPreset = EqPreset.flat,
+    this.seekPreview = true,
+    this.swipeToSeek = true,
+    this.autoCheckUpdates = false,
+    this.repeat = RepeatMode.off,
+    this.librarySort = LibrarySort.name,
+    this.showRemaining = false,
   });
 
   Settings copyWith({
@@ -93,6 +176,16 @@ class Settings {
     bool? preferEmbeddedSubtitles,
     bool? autoplayNext,
     double? volume,
+    SubtitleTint? subtitleTint,
+    int? seekStepSeconds,
+    bool? audioNormalize,
+    EqPreset? eqPreset,
+    bool? seekPreview,
+    bool? swipeToSeek,
+    bool? autoCheckUpdates,
+    RepeatMode? repeat,
+    LibrarySort? librarySort,
+    bool? showRemaining,
   }) => Settings(
     languages: languages ?? this.languages,
     preferHearingImpaired: preferHearingImpaired ?? this.preferHearingImpaired,
@@ -114,7 +207,19 @@ class Settings {
     preferEmbeddedSubtitles: preferEmbeddedSubtitles ?? this.preferEmbeddedSubtitles,
     autoplayNext: autoplayNext ?? this.autoplayNext,
     volume: (volume ?? this.volume).clamp(0, maxVolume),
+    subtitleTint: subtitleTint ?? this.subtitleTint,
+    seekStepSeconds: _seekStep(seekStepSeconds ?? this.seekStepSeconds),
+    audioNormalize: audioNormalize ?? this.audioNormalize,
+    eqPreset: eqPreset ?? this.eqPreset,
+    seekPreview: seekPreview ?? this.seekPreview,
+    swipeToSeek: swipeToSeek ?? this.swipeToSeek,
+    autoCheckUpdates: autoCheckUpdates ?? this.autoCheckUpdates,
+    repeat: repeat ?? this.repeat,
+    librarySort: librarySort ?? this.librarySort,
+    showRemaining: showRemaining ?? this.showRemaining,
   );
+
+  static int _seekStep(int v) => seekSteps.contains(v) ? v : 10;
 
   /// Value equality, so an unchanged save notifies nobody and `select`ed fields compare
   /// cheaply. Kept in step with [toJson] (every field, nothing else).
@@ -140,7 +245,17 @@ class Settings {
       _sameList(other.audioLanguages, audioLanguages) &&
       other.preferEmbeddedSubtitles == preferEmbeddedSubtitles &&
       other.autoplayNext == autoplayNext &&
-      other.volume == volume;
+      other.volume == volume &&
+      other.subtitleTint == subtitleTint &&
+      other.seekStepSeconds == seekStepSeconds &&
+      other.audioNormalize == audioNormalize &&
+      other.eqPreset == eqPreset &&
+      other.seekPreview == seekPreview &&
+      other.swipeToSeek == swipeToSeek &&
+      other.autoCheckUpdates == autoCheckUpdates &&
+      other.repeat == repeat &&
+      other.librarySort == librarySort &&
+      other.showRemaining == showRemaining;
 
   @override
   int get hashCode => Object.hashAll([
@@ -164,11 +279,25 @@ class Settings {
     preferEmbeddedSubtitles,
     autoplayNext,
     volume,
+    subtitleTint,
+    seekStepSeconds,
+    audioNormalize,
+    eqPreset,
+    seekPreview,
+    swipeToSeek,
+    autoCheckUpdates,
+    repeat,
+    librarySort,
+    showRemaining,
   ]);
 
-  /// The fields that change how mpv draws text subtitles (size, look, placement).
-  ({double scale, SubtitleLook look, SubtitlePlacement placement}) get subtitleStyle =>
-      (scale: subtitleScale, look: subtitleLook, placement: subtitlePlacement);
+  /// The fields that change how mpv draws text subtitles (size, look, placement, colour).
+  ({double scale, SubtitleLook look, SubtitlePlacement placement, SubtitleTint tint})
+  get subtitleStyle =>
+      (scale: subtitleScale, look: subtitleLook, placement: subtitlePlacement, tint: subtitleTint);
+
+  /// The fields behind mpv's audio filter chain.
+  ({bool normalize, EqPreset preset}) get audioFx => (normalize: audioNormalize, preset: eqPreset);
 
   static bool _sameList(List<String> a, List<String> b) {
     if (identical(a, b)) return true;
@@ -200,6 +329,16 @@ class Settings {
     'preferEmbeddedSubtitles': preferEmbeddedSubtitles,
     'autoplayNext': autoplayNext,
     'volume': volume,
+    'subtitleTint': subtitleTint.name,
+    'seekStepSeconds': seekStepSeconds,
+    'audioNormalize': audioNormalize,
+    'eqPreset': eqPreset.name,
+    'seekPreview': seekPreview,
+    'swipeToSeek': swipeToSeek,
+    'autoCheckUpdates': autoCheckUpdates,
+    'repeat': repeat.name,
+    'librarySort': librarySort.name,
+    'showRemaining': showRemaining,
   };
 
   /// Unknown fields are ignored and missing ones keep their defaults (the import rule, §5.5).
@@ -237,6 +376,16 @@ class Settings {
       preferEmbeddedSubtitles: pick('preferEmbeddedSubtitles', d.preferEmbeddedSubtitles),
       autoplayNext: pick('autoplayNext', d.autoplayNext),
       volume: num_('volume', d.volume).clamp(0, maxVolume).toDouble(),
+      subtitleTint: SubtitleTint.values.asNameMap()[j['subtitleTint']] ?? d.subtitleTint,
+      seekStepSeconds: _seekStep(num_('seekStepSeconds', d.seekStepSeconds.toDouble()).round()),
+      audioNormalize: pick('audioNormalize', d.audioNormalize),
+      eqPreset: EqPreset.values.asNameMap()[j['eqPreset']] ?? d.eqPreset,
+      seekPreview: pick('seekPreview', d.seekPreview),
+      swipeToSeek: pick('swipeToSeek', d.swipeToSeek),
+      autoCheckUpdates: pick('autoCheckUpdates', d.autoCheckUpdates),
+      repeat: RepeatMode.values.asNameMap()[j['repeat']] ?? d.repeat,
+      librarySort: LibrarySort.values.asNameMap()[j['librarySort']] ?? d.librarySort,
+      showRemaining: pick('showRemaining', d.showRemaining),
     );
   }
 }

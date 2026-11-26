@@ -1,4 +1,4 @@
-// The eight tables (§5.2). Nothing sensitive lives here: the JWT is in secure storage only.
+// The nine tables (§5.2; file_prefs joined in schema 2). Nothing sensitive lives here: the JWT is in secure storage only.
 import 'package:drift/drift.dart';
 
 @TableIndex(name: 'media_files_moviehash', columns: {#moviehash})
@@ -101,4 +101,16 @@ class AppState extends Table {
 
   @override
   Set<Column<Object>> get primaryKey => {key};
+}
+
+/// What the viewer chose for one film (audio track, picture rotation and zoom, a second
+/// subtitle…), as JSON so a new preference never needs a migration. Keyed like resume points.
+@DataClassName('FilePrefsRow')
+class FilePrefs extends Table {
+  TextColumn get moviehash => text()();
+  TextColumn get prefsJson => text()();
+  DateTimeColumn get at => dateTime()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {moviehash};
 }
