@@ -1,0 +1,154 @@
+name: playback
+
+# Real libmpv in the real Windows app (integration_test/playback_test.dart). The dev machine
+# cannot build Flutter, so this job is the only place playback is ever exercised.
+#
+# Called by ci.yml (advisory) and by release.yml (advisory on a tag or a manual run, BLOCKING
+# on the weekly schedule, where it is the only job and a red run is the whole point). Run it
+# alone from the Actions tab with "Run workflow".
+on:
+  workflow_call:
+    inputs:
+      blocking:
+        description: Fail the run when the playback test fails
+        type: boolean
+        default: false
+  workflow_dispatch:
+    inputs:
+      blocking:
+        description: Fail the run when the playback test fails
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: '3.47.5'      # keep in step with ci.yml and release.yml (a called workflow does not inherit env)
+  FFMPEG_VERSION: '7.1.1'        # chocolatey package; fetched only when the fixture cache misses
+
+jobs:
+  windows:
+    name: real playback (libmpv, windows)
+    runs-on: windows-latest      # no GPU, no sound card: software decode, null audio output
+    continue-on-error: ${{ !inputs.blocking }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash              # Git Bash: the fixture script and `| tee` need it
+    steps:
+      - uses: actions/checkout@v5
+
+      # The fixtures depend only on the script that makes them. A hit skips chocolatey and
+      # ffmpeg entirely, so a chocolatey outage cannot fail this job two runs in a row.
+      - name: Restore the generated fixtures
+        id: fixtures
+        uses: actions/cache/restore@v4
+        with:
+          path: build/playback-fixtures
+          key: playback-fixtures-v1-${{ hashFiles('scripts/make-playback-fixtures.sh') }}
+
+      - name: Generate the fixtures with ffmpeg
+        if: steps.fixtures.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            echo "::group::choco install ffmpeg $FFMPEG_VERSION"
+            if ! choco install ffmpeg --version="$FFMPEG_VERSION" -y --no-progress; then
+              echo "::warning title=ffmpeg pin::ffmpeg $FFMPEG_VERSION could not be installed from chocolatey; taking the current version. Update FFMPEG_VERSION in playback.yml."
+              choco install ffmpeg -y --no-progress
+            fi
+            echo "::endgroup::"
+            export PATH="/c/ProgramData/chocolatey/bin:$PATH"
+            hash -r
+          fi
+          command -v ffmpeg >/dev/null 2>&1 || { echo "::error title=No ffmpeg::chocolatey did not provide ffmpeg, so no fixtures and no playback test. Re-run the job; if it persists, see FFMPEG_VERSION in playback.yml."; exit 1; }
+          ffmpeg -hide_banner -version | sed -n 1p
+          bash scripts/make-playback-fixtures.sh build/playback-fixtures
+
+      # Saved here, not in a post step: a failing TEST must not throw the fixtures away.
+      - name: Save the fixtures
+        if: steps.fixtures.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/playback-fixtures
+          key: ${{ steps.fixtures.outputs.cache-primary-key }}
+
+      - name: Point the test at the fixtures
+        run: |
+          set -euo pipefail
+          ls -l build/playback-fixtures
+          test -f build/playback-fixtures/marquee-test.mkv || { echo "::error title=No fixtures::build/playback-fixtures has no marquee-test.mkv"; exit 1; }
+          root="$(cygpath -m "$PWD")"          # D:/a/... : forward slashes survive every shell
+          mkdir -p build/playback-out
+          {
+            echo "MARQUEE_FIXTURES=$root/build/playback-fixtures"
+            echo "MARQUEE_TEST_OUT=$root/build/playback-out"
+            echo "MARQUEE_REQUIRE_FIXTURES=1"   # missing fixtures FAIL here instead of skipping
+          } >> "$GITHUB_ENV"
+
+      - uses: subosito/flutter-action@v2
+        with: { flutter-version: '${{ env.FLUTTER_VERSION }}', channel: stable, cache: true }
+      - run: flutter pub get
+      - run: dart run build_runner build --delete-conflicting-outputs   # drift: *.g.dart is gitignored
+
+      - name: Real playback test (builds the Windows app, then drives it)
+        id: test
+        run: |
+          set -o pipefail
+          flutter test integration_test -d windows --reporter expanded \
+            --dart-define=FIXTURES="$MARQUEE_FIXTURES" 2>&1 | tee build/playback-out/flutter-test.log
+
+      - name: Summary
+        if: always()
+        env:
+          OUTCOME: ${{ steps.test.outcome }}
+          BLOCKING: ${{ inputs.blocking }}
+        run: |
+          log=build/playback-out/flutter-test.log
+          clean() { sed 's/\x1b\[[0-9;]*[A-Za-z]//g' "$@"; }
+          {
+            echo "## Real playback (libmpv on windows-latest)"
+            echo
+            case "$OUTCOME" in
+              success) echo "**Passed.** Real films were decoded, sought, subtitled, closed and resumed in the real app." ;;
+              failure)
+                if [ "$BLOCKING" = "true" ]; then echo "**FAILED.**"
+                else echo "**FAILED** (advisory: this job does not hold the run back, but playback is broken or the test is)."
+                fi ;;
+              *) echo "**Did not run** (\`$OUTCOME\`): an earlier step failed (fixtures, pub get, code generation). Open the job log." ;;
+            esac
+            if [ -f "$log" ]; then
+              notes="$(clean "$log" | grep -F '[playback] NOTE: ' | sed 's/^.*\[playback\] NOTE: /- /' | sort -u || true)"
+              if [ -n "$notes" ]; then
+                echo
+                echo "### Notes from the test (not failures, worth a look)"
+                echo "$notes"
+              fi
+              echo
+              if [ "$OUTCOME" = "success" ]; then
+                echo "### Result"
+                echo '```text'
+                clean "$log" | grep -E '^[0-9]+:[0-9]+ \+[0-9]+' | tail -n 12 || true
+                echo '```'
+              else
+                echo "### Last 150 lines of the test log"
+                echo '```text'
+                clean "$log" | tail -n 150
+                echo '```'
+              fi
+            fi
+            echo
+            echo "Artifact \`playback-evidence\`: the full log, mpv's own logs per test, \`frame.jpg\` (a decoded frame) and screenshots of the app."
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$OUTCOME" = "failure" ] && [ "$BLOCKING" != "true" ]; then
+            echo "::warning title=Real playback test failed (advisory)::See the job summary and the playback-evidence artifact."
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playback-evidence
+          path: build/playback-out/
+          retention-days: 14
+          if-no-files-found: ignore

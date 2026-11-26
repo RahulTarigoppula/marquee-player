@@ -90,7 +90,7 @@ jobs:
         with: { flutter-version: '${{ env.FLUTTER_VERSION }}', channel: stable, cache: true }
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
-      # Media fixtures (scripts/make-fixtures.sh) join this job once the ffmpeg-built corpus exists.
+      # Playback fixtures are made per run by scripts/make-playback-fixtures.sh (windows-playback).
       - run: flutter pub get                       # dart format needs the package config
       - name: Design tokens in sync (G9)
         run: node scripts/tokens.mjs && git diff --exit-code web/src/styles/tokens.css lib/theme/tokens.dart
@@ -104,6 +104,14 @@ jobs:
         run: |
           dart run build_runner build --delete-conflicting-outputs
           dart run tool/check_licences.dart
+
+  # Real libmpv in the real Windows app, on films ffmpeg makes in the job. ADVISORY while it is
+  # new: playback.yml marks its job continue-on-error unless `blocking` is passed, so a red
+  # result shows in the run summary (and as a warning annotation) without failing the run.
+  # Make it a gate once it has a green history: add `with: { blocking: true }`.
+  windows-playback:
+    name: real playback
+    uses: ./.github/workflows/playback.yml
 
   lighthouse:
     name: lighthouse budgets

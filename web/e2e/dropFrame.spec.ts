@@ -28,6 +28,6 @@ test.describe('drop frame', () => {
       mimeType: 'text/plain',
       buffer: Buffer.from('1\n00:00:01,000 --> 00:00:02,000\nHi\n'),
     })
-    await expect(page.getByRole('status').first()).toContainText('open the film first')
+    await expect(page.getByRole('status').first()).toContainText('Open the film first')
   })
 })

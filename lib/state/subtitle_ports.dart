@@ -100,7 +100,16 @@ class SubtitlePorts {
     final key = OpenSubtitlesClient.cacheKey(req);
     final cached = await db.cachedSearch(key);
     if (cached != null) return OpenSubtitlesClient.parseSearch(cached);
-    final body = await os.searchRaw(req);
+    String body;
+    try {
+      body = await os.searchRaw(req);
+    } on ThreadingException catch (e) {
+      // An expired sign-in must not block search, which only needs the API key: forget the
+      // token and ask again anonymously.
+      if (e.failure != ThreadingFailure.unauthorized || os.jwt == null) rethrow;
+      ref.read(accountProvider.notifier).markExpired();
+      body = await os.searchRaw(req);
+    }
     await db.putSearch(key, body);
     return OpenSubtitlesClient.parseSearch(body);
   }

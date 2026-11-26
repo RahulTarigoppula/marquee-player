@@ -778,6 +778,8 @@ If the install prompt never appears, it is almost always `scope`/`start_url` dis
 
 ## 7. CI and the native release pipeline
 
+> **Read §7.3 and §7.4 first.** The two listings below are the original design and have drifted; §7.3 describes what `release.yml` does today (asset names, the gate, the installer) and §7.4 the real-playback job.
+
 Both workflows pin one Flutter version. `media_kit`'s changelog names no Flutter version and the "3.38" attribution in RESEARCH is unverified (verification log, last row), so the pin is whatever TESTING §13 #14 proves builds cleanly, and it moves only in a deliberate commit.
 
 ### 7.1 `.github/workflows/ci.yml` — the gate on every push
@@ -1084,6 +1086,48 @@ jobs:
 ```
 
 **Why a matrix rather than two hand-written jobs:** the checkout, the version derivation, the Flutter pin and the `--dart-define` set are identical on both platforms and must stay identical — a matrix makes drift between them impossible. The platform-specific halves are guarded with `if: matrix.target == …` rather than duplicated.
+
+### 7.3 What the pipeline does today (v2)
+
+The listings in §7.1 and §7.2 are the original design. The workflow files are the truth; this is what they do now.
+
+**`release.yml`, by trigger**
+
+| Trigger | Runs | Result |
+|---|---|---|
+| tag `v*` pushed | `gate` (analyze + unit tests on Windows) → `build` (Windows + Android) → `publish` | a GitHub Release |
+| `workflow_dispatch` (Actions tab → release → Run workflow, on `main`) | `gate` → `build` | the same files as run artifacts, kept 14 days, version `0.0.<run number>`; nothing is published. Use it to try a build before tagging |
+| weekly schedule | `playback` only | red when real playback broke on the runner image |
+
+`playback` (the real-libmpv test, §7.4) also runs beside `gate` on a tag or a manual run, but nothing `needs` it: a flaky integration test cannot hold a release back. `publish` only runs for a pushed tag, and first checks that every file below exists and matches its checksum.
+
+**Release files**
+
+| File | What it is |
+|---|---|
+| **`Marquee-Windows-Setup.exe`** | the Windows installer, under the name the release notes lead with |
+| **`Marquee-Android.apk`** | the arm64-v8a APK, under the name the release notes lead with |
+| `marquee-windows-x64-setup.exe` | the same installer, old name (README links use it) |
+| `marquee-windows-x64-portable.zip` | the app folder, no install |
+| `marquee-android-arm64-v8a.apk`, `-armeabi-v7a.apk`, `-x86_64.apk` | the split-per-ABI APKs |
+| `SHA256SUMS-windows.txt`, `SHA256SUMS-android.txt` | checksums of all of the above (LF line ends, `sha256sum -c` works) |
+
+**No secrets are required.** Without `OS_API_KEY` the build has no baked-in OpenSubtitles key and the release notes say so. Without the four `ANDROID_KEYSTORE_*` secrets the APKs are debug-signed with the runner's throwaway key: they install, but never over a differently signed Marquee, and the release notes say that too. With the secrets set (they are, since v1.1.0) the build fails if an APK comes out debug-signed.
+
+**Windows build extras.** The whole Visual C++ runtime folder (`Microsoft.VC*.CRT\*.dll`) is copied beside `marquee.exe`, so a PC without the redistributable runs it. After Inno Setup compiles the installer, `scripts/installer-smoke.ps1` installs it on the runner, starts the installed app, installs again over the running app (the upgrade path, `CloseApplications=force`), starts it again and uninstalls it, checking files and HKCU keys at each step. That step is advisory (`continue-on-error`, 6 minute cap): a failure is a warning annotation, a line in the run summary and an `installer-smoke-log` artifact, and the files are still built.
+
+**The installer** (`windows/installer/marquee.iss`): per-user, no admin and no "all users?" dialog; the `AppId` never changes, so a newer Setup upgrades the older install in place; video types are added to "Open with" and Default apps without writing any type's default; an optional "Open with Marquee" right-click verb for everything Windows classes as video; the uninstaller ends a running Marquee first and removes every key it wrote. The library and settings live in app data and survive both.
+
+### 7.4 `.github/workflows/playback.yml`: real playback
+
+A reusable workflow (also runnable alone from the Actions tab) with one `windows-latest` job:
+
+1. restore `build/playback-fixtures` from the cache, or install ffmpeg (chocolatey, pinned by `FFMPEG_VERSION`) and run `scripts/make-playback-fixtures.sh`;
+2. `flutter pub get`, `build_runner`;
+3. `flutter test integration_test -d windows` (TESTING §6), which builds the real Windows app and drives libmpv in it;
+4. write the verdict, the test's own `NOTE:` lines and the log tail to the run summary, and upload `playback-evidence` (the log, mpv's log per test, a decoded frame, screenshots of the app).
+
+`ci.yml` calls it as `windows-playback` on every push and PR, advisory for now: the job is `continue-on-error` unless the caller passes `blocking: true`. Make it a gate in `ci.yml` once it has a green history.
 
 ---
 

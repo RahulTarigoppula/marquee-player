@@ -18,6 +18,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:marquee/db/database.dart';
 import 'package:marquee/engine/models/media.dart';
 import 'package:marquee/engine/models/settings.dart';
+import 'package:marquee/player/thumbnailer.dart' show FrameProbe;
+import 'package:marquee/state/library.dart';
 import 'package:marquee/state/providers.dart';
 import 'package:marquee/state/thumbnails.dart';
 import 'package:marquee/theme/house.dart';
@@ -228,24 +230,268 @@ Future<void> _precacheFrames(WidgetTester tester, Directory dir) async {
   });
 }
 
+// ───────────────────────────── the device library ─────────────────────────────
+
+/// The device library as a fixed value: no scan, no permission dialog, no folder picker.
+class FakeDeviceLibrary extends DeviceLibraryNotifier {
+  final DeviceLibrary initial;
+  FakeDeviceLibrary(this.initial);
+  @override
+  Future<DeviceLibrary> build() async => initial;
+  @override
+  Future<void> refresh() async {}
+  @override
+  Future<void> requestAccess() async {}
+  @override
+  void wentAway() {}
+  @override
+  void cameBack() {}
+  @override
+  void applyProbe(String locator, FrameProbe probe) {}
+  @override
+  Future<void> addLibraryFolder(String path) async {}
+  @override
+  Future<void> removeLibraryFolder(String path) async {}
+  @override
+  Future<bool> pickAndAddFolder() async => false;
+  @override
+  Future<void> forgetResume(LobbyCard card) async {}
+}
+
+class FakeLobbyView extends LobbyViewNotifier {
+  final LobbyView initial;
+  FakeLobbyView(this.initial);
+  @override
+  Future<LobbyView> build() async => initial;
+  @override
+  void setTab(LobbyTab tab) =>
+      state = AsyncData(LobbyView(tab: tab, allVideos: state.value?.allVideos ?? false));
+  @override
+  void setAllVideos(bool all) =>
+      state = AsyncData(LobbyView(tab: state.value?.tab ?? LobbyTab.home, allVideos: all));
+}
+
+/// The frames that "exist" are the `<key>.jpg` files of the frame folder, known from the start.
+class FakeLibraryThumbs extends LibraryThumbsNotifier {
+  final Set<String> keys;
+  FakeLibraryThumbs(this.keys);
+  @override
+  LibraryThumbs build() => LibraryThumbs(keys, const {}, loaded: true);
+}
+
+class _NoThumbRequests implements LibraryThumbRequests {
+  const _NoThumbRequests();
+  @override
+  void request(LibraryItem item) {}
+  @override
+  void cancel(LibraryItem item) {}
+}
+
+/// A believable device library: films, a season of a show, phone clips and downloads. The
+/// Windows flavour lives in folders on D: and C:; the Android one in MediaStore. Half of it
+/// has been played (see [sampleLibraryHistory]); two arrived this week.
+List<LibraryItem> sampleDeviceLibrary({bool android = false}) {
+  final now = DateTime(2026, 10, 17, 21);
+  const gb = 1024 * 1024 * 1024, mb = 1024 * 1024;
+  var id = 100;
+  LibraryItem video(
+    String windowsFolder,
+    String androidFolder,
+    String name, {
+    required int size,
+    int? minutes,
+    int? width,
+    int? height,
+    required int daysAgo,
+  }) {
+    id++;
+    final modified = now.subtract(Duration(days: daysAgo, hours: 3));
+    final durationMs = minutes == null ? null : minutes * 60000 + 14000;
+    if (!android) {
+      return LibraryItem.fromPath(
+        '$windowsFolder\\$name',
+        sizeBytes: size,
+        modifiedAt: modified,
+        durationMs: durationMs,
+        width: width,
+        height: height,
+      );
+    }
+    return LibraryItem(
+      locator: 'content://media/external/video/media/$id',
+      name: name,
+      folderPath: androidFolder,
+      folderName: androidFolder.split('/').last,
+      sizeBytes: size,
+      durationMs: durationMs,
+      width: width,
+      height: height,
+      modifiedAt: modified,
+    );
+  }
+
+  const films = r'D:\Films', show = r'D:\Shows\Severance';
+  const clips = r'C:\Users\me\Videos\Holiday', downloads = r'C:\Users\me\Downloads';
+  LibraryItem film(String name, double gigabytes, int minutes, int w, int h, int daysAgo) => video(
+    films,
+    'Movies',
+    name,
+    size: (gigabytes * gb).round(),
+    minutes: minutes,
+    width: w,
+    height: h,
+    daysAgo: daysAgo,
+  );
+  return [
+    film('The.Third.Man.1949.1080p.BluRay.x264.mkv', 1.9, 104, 1920, 1080, 40),
+    film('Spirited.Away.2001.1080p.mkv', 2.3, 125, 1920, 1038, 90),
+    film('Chungking.Express.1994.720p.mkv', 1.1, 102, 1280, 720, 61),
+    film('Paprika.2006.2160p.UHD.BluRay.x265.mkv', 14.2, 90, 3840, 2160, 2),
+    for (var e = 1; e <= 6; e++)
+      video(
+        show,
+        'Movies/Severance',
+        'Severance.S02E0$e.1080p.WEB.h264.mkv',
+        size: (1.2 * gb).round() + e * 37 * mb,
+        minutes: 44 + e * 2,
+        width: 1920,
+        height: 1080,
+        daysAgo: e == 6 ? 1 : 30 - e * 4,
+      ),
+    video(
+      clips,
+      'DCIM/Camera',
+      'holiday_2024_beach.mp4',
+      size: 220 * mb,
+      minutes: 6,
+      width: 1920,
+      height: 1080,
+      daysAgo: 120,
+    ),
+    video(
+      clips,
+      'DCIM/Camera',
+      'birthday cake.mov',
+      size: 890 * mb,
+      minutes: 2,
+      width: 3840,
+      height: 2160,
+      daysAgo: 12,
+    ),
+    video(
+      downloads,
+      'Download',
+      'How.To.Splice.Film.720p.WEB-DL.mp4',
+      size: 310 * mb,
+      minutes: 18,
+      width: 1280,
+      height: 720,
+      daysAgo: 15,
+    ),
+    // Never probed: no length, no picture size, no frame.
+    video(downloads, 'Download', 'screen recording 12 Oct.mp4', size: 48 * mb, daysAgo: 5),
+  ];
+}
+
+/// The play history that matches [sampleDeviceLibrary] by locator: two films in progress, one
+/// watched, and the first three episodes of the season (two watched, the third part-way).
+List<LobbyCard> sampleLibraryHistory({bool android = false}) {
+  final items = sampleDeviceLibrary(android: android);
+  final now = DateTime(2026, 10, 17, 21);
+  LibraryItem named(String start) => items.firstWhere((i) => i.name.startsWith(start));
+  LobbyCard card(
+    int id,
+    String start,
+    String title, {
+    int? year,
+    double fraction = 0,
+    bool finished = false,
+    int daysAgo = 0,
+  }) {
+    final item = named(start);
+    return LobbyCard(
+      id: id,
+      locator: item.locator,
+      displayName: item.name,
+      title: title,
+      year: year,
+      container: 'matroska,webm',
+      durationMs: item.durationMs,
+      resumeFraction: fraction,
+      finished: finished,
+      subtitleLanguage: 'en',
+      lastPlayedAt: now.subtract(Duration(days: daysAgo)),
+    );
+  }
+
+  return [
+    card(1, 'The.Third.Man', 'The Third Man', year: 1949, fraction: 0.42),
+    card(3, 'Severance.S02E03', 'Severance', fraction: 0.81, daysAgo: 1),
+    card(2, 'Spirited.Away', 'Spirited Away', year: 2001, finished: true, daysAgo: 2),
+    card(6, 'Severance.S02E02', 'Severance', finished: true, daysAgo: 3),
+    card(7, 'Severance.S02E01', 'Severance', finished: true, daysAgo: 4),
+    card(5, 'Chungking', 'Chungking Express', year: 1994, fraction: 0.12, daysAgo: 12),
+  ];
+}
+
+/// Writes device-library frames (`<thumbKey>.jpg`) for [items] into [dir], beside the played
+/// frames of [fakeThumbnails]. Items without a known length keep their title card, as a file
+/// the thumbnailer has not reached yet would.
+void fakeLibraryThumbnails(Directory dir, List<LibraryItem> items) {
+  const scenes = [
+    (0xFF2B3A55, 0xFF0C0B10, 0xFFF2D7A0, 0.30, 0.35),
+    (0xFF6D8FB3, 0xFF2F4B3A, 0xFFFFF4D6, 0.70, 0.25),
+    (0xFF3A2A44, 0xFF100D14, 0xFFE0525C, 0.55, 0.50),
+    (0xFFD9E3E6, 0xFF4E7C78, 0xFFFFFFFF, 0.45, 0.20),
+    (0xFF473222, 0xFF140E0A, 0xFFFFC56E, 0.25, 0.45),
+    (0xFF1D3B3A, 0xFF0A1112, 0xFF8FE3C8, 0.65, 0.40),
+  ];
+  for (var i = 0; i < items.length; i++) {
+    if (items[i].durationMs == null) continue;
+    final (top, bottom, light, lx, ly) = scenes[i % scenes.length];
+    File(
+      libraryThumbPath(dir, thumbKey(items[i])),
+    ).writeAsBytesSync(_scene(320, 180, top, bottom, light, lx, ly));
+  }
+}
+
 // ───────────────────────────── the room ─────────────────────────────
 
 /// Overrides that keep every plugin and the database out of a screenshot. [thumbnails] is the
-/// frame folder (see [fakeThumbnails]); an empty temp folder by default.
+/// frame folder (see [fakeThumbnails] and [fakeLibraryThumbnails]); an empty temp folder by
+/// default. The device library is a fixed value too ([deviceLibrary]; an empty folder library
+/// with no folders by default), shown on the tab [lobbyView] names.
 List<Override> screenOverrides({
   List<LobbyCard> library = const [],
   Settings settings = const Settings(),
   Directory? thumbnails,
+  DeviceLibrary? deviceLibrary,
+  List<String> libraryFolders = const [],
+  List<String> librarySuggestions = const [],
+  LobbyView lobbyView = const LobbyView(),
   List<Override> extra = const [],
 }) {
   FlutterSecureStorage.setMockInitialValues({});
   final db = MarqueeDatabase(NativeDatabase.memory());
   final thumbs = thumbnails ?? Directory.systemTemp.createTempSync('marquee-thumbs');
+  final device = deviceLibrary ?? const DeviceLibrary(source: LibrarySource.folders, scanned: true);
+  final frames = {
+    for (final f in thumbs.listSync().whereType<File>())
+      if (f.path.endsWith('.jpg')) f.uri.pathSegments.last.replaceAll('.jpg', ''),
+  };
   return [
     databaseProvider.overrideWithValue(db),
     libraryProvider.overrideWith((ref) => Stream.value(library)),
     settingsProvider.overrideWith(() => FakeSettings(settings)),
     thumbnailDirProvider.overrideWith((ref) async => thumbs),
+    librarySourceProvider.overrideWithValue(device.source),
+    deviceLibraryProvider.overrideWith(() => FakeDeviceLibrary(device)),
+    libraryFoldersProvider.overrideWith((ref) => Stream.value(libraryFolders)),
+    librarySuggestionsProvider.overrideWith((ref) async => librarySuggestions),
+    lobbyViewProvider.overrideWith(() => FakeLobbyView(lobbyView)),
+    libraryThumbDirProvider.overrideWith((ref) async => thumbs),
+    libraryThumbsProvider.overrideWith(() => FakeLibraryThumbs(frames)),
+    libraryThumbQueueProvider.overrideWithValue(const _NoThumbRequests()),
     ...extra,
   ];
 }

@@ -1,17 +1,28 @@
 package com.rahul.marquee
 
+import android.Manifest
 import android.app.Activity
 import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.ComponentName
+import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.database.Cursor
+import android.graphics.Bitmap
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
+import android.provider.MediaStore
 import android.provider.OpenableColumns
+import android.util.Size
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileNotFoundException
@@ -34,6 +45,17 @@ import java.util.concurrent.Executors
  * pickVideo never copies the film: it returns the document's content:// URI and takes a
  * PERSISTABLE read grant, so a Lobby card can reopen the same URI after a restart.
  *
+ * The device library (MediaStore; needs the video permission, nothing leaves the device):
+ *
+ *   videoPermission                     -> "granted" | "partial" | "denied"  (never asks)
+ *   requestVideoPermission              -> the same, after the system dialog (one at a time)
+ *   scanVideos                          -> List of {uri, name, size, durationMs, width, height,
+ *                                          modified (epoch ms), folder, folderPath}
+ *   videoThumbnail {uri, width: Int}    -> JPEG ByteArray, or null when there is none
+ *   shareVideo {uri, name}              -> opens the system share sheet
+ *
+ * "partial" is Android 14's "selected photos and videos": MediaStore then lists only those.
+ *
  * Dart -> is also told `uriChanged` (String) when a new file arrives while the app is running.
  */
 class ContentChannel(
@@ -50,6 +72,9 @@ class ContentChannel(
 
     /** The Dart call waiting for the picker's answer (one picker at a time). */
     private var pickResult: MethodChannel.Result? = null
+
+    /** The Dart call waiting for the permission dialog's answer (one request at a time). */
+    private var permissionResult: MethodChannel.Result? = null
 
     @Volatile
     private var pending: String? = null
@@ -75,6 +100,12 @@ class ContentChannel(
             // The engine is already gone: nobody is waiting any more.
         }
         pickResult = null
+        try {
+            permissionResult?.success(videoPermissionState())
+        } catch (e: RuntimeException) {
+            // As above: the engine is gone.
+        }
+        permissionResult = null
         activity = null
         io.shutdown()
     }
@@ -158,6 +189,20 @@ class ContentChannel(
                 background(result) { read(Uri.parse(uri), offset, length) }
             }
             "pickVideo" -> pickVideo(result)
+            "videoPermission" -> result.success(videoPermissionState())
+            "requestVideoPermission" -> requestVideoPermission(result)
+            "scanVideos" -> background(result) { scanVideos() }
+            "videoThumbnail" -> {
+                val uri = call.argument<String>("uri")
+                    ?: return result.error("bad-args", "videoThumbnail needs a uri", null)
+                val width = (call.argument<Number>("width")?.toInt() ?: 320).coerceIn(64, 1024)
+                background(result) { videoThumbnail(Uri.parse(uri), width) }
+            }
+            "shareVideo" -> {
+                val uri = call.argument<String>("uri")
+                    ?: return result.error("bad-args", "shareVideo needs a uri", null)
+                shareVideo(Uri.parse(uri), call.argument<String>("name") ?: "video", result)
+            }
             else -> result.notImplemented()
         }
     }
@@ -256,9 +301,199 @@ class ContentChannel(
         }
     }
 
+    // ───────────────────────── the device library (MediaStore) ─────────────────────────
+
+    private fun holds(permission: String): Boolean =
+        context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+
+    /** What MediaStore will show us right now. Never opens a dialog. */
+    private fun videoPermissionState(): String {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (holds(Manifest.permission.READ_MEDIA_VIDEO)) return "granted"
+            // Android 14+: "Select photos and videos" grants only this one.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+                holds(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
+            ) {
+                return "partial"
+            }
+            return "denied"
+        }
+        return if (holds(Manifest.permission.READ_EXTERNAL_STORAGE)) "granted" else "denied"
+    }
+
+    private fun requestVideoPermission(result: MethodChannel.Result) {
+        if (videoPermissionState() == "granted") return result.success("granted")
+        val host = activity ?: return result.error("no-activity", "no activity to ask from", null)
+        if (permissionResult != null) {
+            return result.error("busy", "a permission request is already open", null)
+        }
+        // On Android 14+ asking for both lets the user choose "all" or "selected"; asking again
+        // while access is partial reopens the selection.
+        val wanted: Array<String> = when {
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> arrayOf(
+                Manifest.permission.READ_MEDIA_VIDEO,
+                Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED,
+            )
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU ->
+                arrayOf(Manifest.permission.READ_MEDIA_VIDEO)
+            else -> arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+        permissionResult = result
+        try {
+            host.requestPermissions(wanted, REQUEST_VIDEO)
+        } catch (e: RuntimeException) {
+            permissionResult = null
+            result.error("io", e.message, null)
+        }
+    }
+
+    /** From MainActivity.onRequestPermissionsResult; true when the request was ours. */
+    fun onRequestPermissionsResult(requestCode: Int): Boolean {
+        if (requestCode != REQUEST_VIDEO) return false
+        val result = permissionResult ?: return true
+        permissionResult = null
+        // Read the state back instead of trusting grantResults: a cancelled dialog delivers an
+        // empty array, and "selected videos" is a grant of a different permission.
+        result.success(videoPermissionState())
+        return true
+    }
+
+    private fun text(c: Cursor, column: Int): String? =
+        if (column >= 0 && !c.isNull(column)) c.getString(column) else null
+
+    private fun number(c: Cursor, column: Int): Long =
+        if (column >= 0 && !c.isNull(column)) c.getLong(column) else 0L
+
+    /** Every video MediaStore lists for us, newest first. Empty without permission. */
+    @Suppress("DEPRECATION") // MediaColumns.DATA: the only folder path there is before API 29
+    private fun scanVideos(): List<Map<String, Any>> {
+        if (videoPermissionState() == "denied") return emptyList()
+        val hasRelativePath = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+        val pathColumn =
+            if (hasRelativePath) MediaStore.Video.Media.RELATIVE_PATH else MediaStore.Video.Media.DATA
+        val collection: Uri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        val projection = arrayOf(
+            MediaStore.Video.Media._ID,
+            MediaStore.Video.Media.DISPLAY_NAME,
+            MediaStore.Video.Media.SIZE,
+            MediaStore.Video.Media.DURATION,
+            MediaStore.Video.Media.WIDTH,
+            MediaStore.Video.Media.HEIGHT,
+            MediaStore.Video.Media.DATE_MODIFIED,
+            MediaStore.Video.Media.DATE_ADDED,
+            MediaStore.Video.Media.BUCKET_DISPLAY_NAME,
+            pathColumn,
+        )
+        val out = ArrayList<Map<String, Any>>()
+        context.contentResolver.query(
+            collection,
+            projection,
+            null,
+            null,
+            MediaStore.Video.Media.DATE_MODIFIED + " DESC",
+        )?.use { c ->
+            val idCol = c.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
+            val nameCol = c.getColumnIndex(MediaStore.Video.Media.DISPLAY_NAME)
+            val sizeCol = c.getColumnIndex(MediaStore.Video.Media.SIZE)
+            val durationCol = c.getColumnIndex(MediaStore.Video.Media.DURATION)
+            val widthCol = c.getColumnIndex(MediaStore.Video.Media.WIDTH)
+            val heightCol = c.getColumnIndex(MediaStore.Video.Media.HEIGHT)
+            val modifiedCol = c.getColumnIndex(MediaStore.Video.Media.DATE_MODIFIED)
+            val addedCol = c.getColumnIndex(MediaStore.Video.Media.DATE_ADDED)
+            val bucketCol = c.getColumnIndex(MediaStore.Video.Media.BUCKET_DISPLAY_NAME)
+            val pathCol = c.getColumnIndex(pathColumn)
+            while (out.size < MAX_VIDEOS && c.moveToNext()) {
+                val id = c.getLong(idCol)
+                val path = text(c, pathCol)
+                val folderPath = when {
+                    path == null -> ""
+                    hasRelativePath -> path.trimEnd('/')
+                    else -> File(path).parent ?: ""
+                }
+                // Both are in SECONDS. A file with no modified time still has an added time.
+                val modified = number(c, modifiedCol)
+                val seconds = if (modified > 0L) modified else number(c, addedCol)
+                out.add(
+                    mapOf<String, Any>(
+                        "uri" to ContentUris.withAppendedId(collection, id).toString(),
+                        "name" to (text(c, nameCol) ?: "video"),
+                        "size" to number(c, sizeCol),
+                        "durationMs" to number(c, durationCol),
+                        "width" to number(c, widthCol),
+                        "height" to number(c, heightCol),
+                        "modified" to seconds * 1000L,
+                        "folder" to (text(c, bucketCol) ?: ""),
+                        "folderPath" to folderPath,
+                    ),
+                )
+            }
+        }
+        return out
+    }
+
+    /** The system's own thumbnail as JPEG bytes; null when it has none for this video. */
+    private fun videoThumbnail(uri: Uri, width: Int): ByteArray? {
+        val bitmap: Bitmap? = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                context.contentResolver.loadThumbnail(uri, Size(width, width * 9 / 16), null)
+            } else {
+                legacyThumbnail(uri)
+            }
+        } catch (e: IOException) {
+            null // no thumbnail for this file
+        } catch (e: RuntimeException) {
+            null // access revoked, or not a MediaStore id: the card keeps its title card
+        }
+        if (bitmap == null) return null
+        val out = ByteArrayOutputStream()
+        val written = bitmap.compress(Bitmap.CompressFormat.JPEG, 82, out)
+        bitmap.recycle()
+        return if (written) out.toByteArray() else null
+    }
+
+    @Suppress("DEPRECATION") // the only thumbnail API before ContentResolver.loadThumbnail (29)
+    private fun legacyThumbnail(uri: Uri): Bitmap? =
+        MediaStore.Video.Thumbnails.getThumbnail(
+            context.contentResolver,
+            ContentUris.parseId(uri),
+            MediaStore.Video.Thumbnails.MINI_KIND,
+            null,
+        )
+
+    private fun shareVideo(uri: Uri, name: String, result: MethodChannel.Result) {
+        val host = activity ?: return result.error("no-activity", "no activity to share from", null)
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "video/*"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            // The read grant travels with the ClipData through the chooser to the chosen app.
+            clipData = ClipData.newRawUri(name, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        val chooser = Intent.createChooser(send, name).apply {
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            // Marquee accepts shared videos itself; sharing one back to Marquee is no use.
+            putExtra(
+                Intent.EXTRA_EXCLUDE_COMPONENTS,
+                arrayOf(ComponentName(context, MainActivity::class.java)),
+            )
+        }
+        try {
+            host.startActivity(chooser)
+            result.success(null)
+        } catch (e: ActivityNotFoundException) {
+            result.error("no-share", "nothing on this device can share a video", null)
+        } catch (e: SecurityException) {
+            result.error("permission-denied", e.message, null)
+        }
+    }
+
     private companion object {
         const val NAME = "marquee/content"
         const val MAX_READ = 16 * 1024 * 1024
         const val PICK_VIDEO = 0x4D51
+        const val REQUEST_VIDEO = 0x4D52
+
+        /** A scan stops here (the Dart side caps its lists at the same number). */
+        const val MAX_VIDEOS = 20000
     }
 }

@@ -125,6 +125,8 @@ Text fixtures: `sample.srt` (4 cues, includes `<i>` and a two-line cue), `sample
 
 `ffmpeg` is preinstalled on `ubuntu-24.04`; the script runs as a CI check (`make-fixtures.sh && git diff --exit-code test/fixtures`) so a drifted fixture fails loudly. The Windows runner never regenerates fixtures — it consumes the committed bytes.
 
+> **Today (v2):** this bit-exact corpus has not been generated or committed yet. The real-playback test (§6) uses its own throwaway films instead, made per run by `scripts/make-playback-fixtures.sh`; nothing about them needs to be bit-exact.
+
 ### 2.3 Golden data — filename grammar (`filename.dart` / `filename.ts`)
 
 Expected output of *our* parser (a Dart/TS port of MIT `parse-torrent-title`, extended for anime brackets). These names also appear in the DESIGN wireframes, so the same strings show up in goldens.
@@ -528,6 +530,15 @@ Behavioural widget tests (not goldens) in the same folder: the gate exposes slid
 
 Run with `flutter test integration_test -d windows` on `windows-latest` (the `test` job of `release.yml`, plus a weekly cron). They use the committed fixtures from §2.2 — never a network stream — and a fake OpenSubtitles transport, so CI never spends a ticket.
 
+**What exists today (v2).** One file, `integration_test/playback_test.dart`, run by `.github/workflows/playback.yml` (DEPLOYMENT §7.4): on every push and PR through `ci.yml` (advisory), beside every release build, and alone on the weekly schedule (blocking). The table below is still the plan; the rows marked ✔ are covered.
+
+- **Fixtures are made in the job, not committed**: `bash scripts/make-playback-fixtures.sh [dir]` (ffmpeg; default `build/playback-fixtures`) writes `marquee-test.mkv` (12 s, 640x360 H.264, AAC `eng` + AAC `hin`, an embedded SRT, chapters Intro / Middle / Credits), the same as `.mp4`, an HEVC `.mkv` when ffmpeg has libx265, `marquee-test.en.srt`, and `marquee-long.mkv` (60 s) with `marquee-long.en.srt`. The long film exists because of the resume rule: a film resumes only more than 10 s in and more than 30 s from its end, which a 12 s clip can never be.
+- **The test finds them** through `--dart-define=FIXTURES=<dir>`, then `MARQUEE_FIXTURES`, then `build/playback-fixtures`. Without fixtures every test skips with one clear line; CI sets `MARQUEE_REQUIRE_FIXTURES=1`, which makes that a failure.
+- **Engine tests** (one `PlayerEngine(hwdec: 'no')` and a real `Video` widget each): load and length ✔I1, both audio tracks, the embedded subtitle and the three chapters ✔I7; play, pause, absolute and relative seek, volume, 2x, end of film; audio switching, `attachSubtitle` (once, and again without a duplicate), selecting the embedded track ✔I5; `screenshotTo` writes a JPEG; MP4; HEVC ✔I2 (video only).
+- **App test** (the real `MarqueeApp`, an in-memory drift database, secure storage mocked, every dart:io HTTP request refused and counted): `openLocator` on the long film with its sidecar → Auditorium, the sidecar attached with **zero requests**, the film starts and advances; seek to 0:15, close → Lobby, the player disposed, a resumable row in the database; open again → libmpv starts **at** the saved position; close → the Lobby frame was written ✔I12 (in part).
+- **The runner has no GPU and no sound card.** Decoding and rendering are software (`hwdec: 'no'`). The engine tests select mpv's null audio output, because mpv deselects the audio track when no device opens and track switching could not be checked; `MARQUEE_TEST_AUDIO=1` plays aloud on a real PC.
+- **Evidence.** `MARQUEE_TEST_OUT` (CI: `build/playback-out`, uploaded as `playback-evidence`) receives the test log, one verbose mpv log per test, `frame.jpg`, and `auditorium.png` / `lobby-after.png` drawn from the running app. Lines the test prints as `NOTE:` are lifted into the run summary: things worth a look that are not this test's to fail on.
+
 | # | File | Given | When | Then |
 |---|---|---|---|---|
 | I1 | `player_test` | `testsrc-10s-h264-aac.mkv` | `player.open` | a first frame is presented within **1.5 s** (GOAL §5.5) and `player.state.duration ≈ 10 s ± 40 ms` |
@@ -871,10 +882,11 @@ Machine: the owner's Windows 11 PC, running **the tag's own zip**, extracted to 
 
 | Workflow | Trigger | Jobs |
 |---|---|---|
-| `ci.yml` | every push and PR | `analyze` (`flutter analyze`, `dart format --set-exit-if-changed`, Biome on `web/` and `worker/`) · `dart-test` on `ubuntu-24.04` (`flutter test` incl. goldens, coverage gates) · `web-test` (Vitest, `size-limit`) · `worker-test` (`@cloudflare/vitest-pool-workers`) · `e2e` (Playwright, 3 projects, uploads the HTML report and any diff images) · `checks` (§11 G1–G10, `make-fixtures.sh` diff, `scripts/check-parity.mjs`) · `lighthouse` |
+| `ci.yml` | every push and PR | `analyze` (`flutter analyze`, `dart format --set-exit-if-changed`, Biome on `web/` and `worker/`) · `dart-test` on `ubuntu-24.04` (`flutter test` incl. goldens, coverage gates) · `web-test` (Vitest, `size-limit`) · `worker-test` (`@cloudflare/vitest-pool-workers`) · `e2e` (Playwright, 3 projects, uploads the HTML report and any diff images) · `checks` (§11 G1–G10, `make-fixtures.sh` diff, `scripts/check-parity.mjs`) · `windows-playback` (real libmpv, §6; advisory) · `lighthouse` |
 | `pages.yml` | push to `main` touching `web/**` | build + deploy Marquee Lite (DEPLOYMENT §5); runs `npm test -- --run` first so a broken Lite never reaches the live URL |
 | `worker.yml` | push to `main` touching `worker/**` | `worker-test` then `wrangler deploy` (DEPLOYMENT §4) |
-| `release.yml` | tag `v*` (and `workflow_dispatch` for a dry run) | `test` (Windows integration, §6) → `build` matrix (Windows exe + split-per-ABI APKs) → `publish` (GitHub Release). Size gates N9–N11 and the 25-minute budget N17 live here (DEPLOYMENT §7) |
+| `playback.yml` | called by `ci.yml` and `release.yml`; `workflow_dispatch` | the real-playback test of §6 on `windows-latest` (DEPLOYMENT §7.4) |
+| `release.yml` | tag `v*` (and `workflow_dispatch` for a dry run; weekly schedule = playback only) | `gate` (analyze + unit tests on Windows) → `build` matrix (Windows installer + zip, split-per-ABI APKs, installer smoke test) → `publish` (GitHub Release); `playback` runs beside it and never blocks. Size gates N9–N11 and the 25-minute budget N17 live here (DEPLOYMENT §7) |
 | `contract.yml` | nightly cron + `workflow_dispatch` | §7.2 against the real API with `OS_API_KEY`; opens an issue on a shape change instead of failing a branch |
 
 A pull request may merge when `ci.yml` is green. A tag may be cut when `ci.yml` is green **and** §14 and §15 have been walked on the actual artifacts.

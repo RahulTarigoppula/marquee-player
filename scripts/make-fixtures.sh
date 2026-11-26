@@ -2,6 +2,8 @@
 # Bit-exact media fixtures (§10.3). Same command, any ffmpeg 6/7 build → same bytes → same
 # moviehash. Run on ubuntu-24.04 (the reference) and commit test/fixtures/media + hashes.json
 # together: a fixture change moves every hash golden.
+# (The real-playback test does not use these: its throwaway films come from
+# scripts/make-playback-fixtures.sh, made per CI run and never committed.)
 #
 #   bash scripts/make-fixtures.sh            # writes test/fixtures/media/*
 #   BREAKDANCE=1 bash scripts/make-fixtures.sh   # also fetches breakdance.avi to a temp dir

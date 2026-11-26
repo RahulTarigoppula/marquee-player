@@ -163,6 +163,9 @@ The same map drives the `?` cue-sheet overlay; both come from `design/cue-sheet.
 | `F` | Fullscreen (or double-click the picture) |
 | `S` | Subtitle booth |
 | `A` | Next audio track |
+| `Enter` | Skip the intro, recap or credits (while the button shows) |
+| `I` | Video details |
+| `T` | Keep the window on top |
 | `Ctrl+O` | Open a film |
 | `MediaPlayPause` / `MediaTrackNext` / `MediaTrackPrevious` | Media keys: play / pause, next, previous film |
 | `?` | This cue sheet |

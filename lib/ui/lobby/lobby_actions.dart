@@ -62,7 +62,7 @@ bool isInProgress(LobbyCard c) => c.inProgress;
 /// The resume position of [c], when it will resume.
 int? resumeMs(LobbyCard c) => c.inProgress ? c.positionMs : null;
 
-/// Removals wait out the Undo window before they touch the library, so "Remove" is never one
+/// Removals wait out the Undo window before they touch the history, so "Remove" is never one
 /// slip of a finger: the card hides at once and a notice offers Undo.
 class PendingRemovals extends Notifier<Set<int>> {
   final _timers = <int, Timer>{};
@@ -84,7 +84,7 @@ class PendingRemovals extends Notifier<Set<int>> {
     ref
         .read(noticeProvider.notifier)
         .show(
-          'Removed ${cardTitle(card)} from your library.',
+          'Removed ${cardTitle(card)} from your history.',
           actionLabel: 'Undo',
           onAction: () => undo(card.id),
           duration: kUndoWindow,
@@ -316,7 +316,7 @@ Future<void> showCardMenu(
       item(
         CardAction.remove,
         'trash-2',
-        'Remove from library',
+        'Remove from history',
         color: house.matinee ? p.danger : p.accent2Lit,
       ),
     ],

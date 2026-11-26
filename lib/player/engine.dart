@@ -1,15 +1,17 @@
 // The single media_kit Player + VideoController, and the mpv property bridge (§8.1).
 // Load-bearing: never set vo=mediacodec_embed (it silently disables libass on Android).
 import 'dart:async';
-import 'dart:io' show Directory, File, Platform;
+import 'dart:io' show Directory, File, FileSystemEntityType, Platform;
 import 'dart:typed_data';
 
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:path/path.dart' as p;
 
+import '../engine/audio_fx.dart';
 import '../engine/models/media.dart';
 import '../engine/models/settings.dart';
+import '../engine/picture.dart';
 import '../engine/playback.dart';
 
 const Duration kStreamThrottle = Duration(milliseconds: 100); // 10 Hz, never 60
@@ -31,6 +33,9 @@ class PlaybackState {
   /// engine observes these instead: they are the truth, auto-selection included.
   final String? audioId;
   final String? subtitleId;
+
+  /// mpv's `secondary-sid`: a second text subtitle drawn at the top ('no' when off).
+  final String? secondarySubtitleId;
   final int width, height;
   final String? error;
 
@@ -48,6 +53,7 @@ class PlaybackState {
     this.subtitleTracks = const [],
     this.audioId,
     this.subtitleId,
+    this.secondarySubtitleId,
     this.width = 0,
     this.height = 0,
     this.error,
@@ -56,8 +62,11 @@ class PlaybackState {
   AudioTrack? get audio => audioTracks.where((t) => t.id == audioId).firstOrNull;
   SubtitleTrack? get subtitle => subtitleTracks.where((t) => t.id == subtitleId).firstOrNull;
 
-  bool get hasSubtitle =>
-      subtitleId != null && subtitleId!.isNotEmpty && subtitleId != 'no' && subtitleId != 'auto';
+  bool get hasSubtitle => _isTrack(subtitleId);
+
+  bool get hasSecondarySubtitle => _isTrack(secondarySubtitleId);
+
+  static bool _isTrack(String? id) => id != null && id.isNotEmpty && id != 'no' && id != 'auto';
 }
 
 /// A subtitle drawn as a bitmap (PGS, VobSub, DVB): libass is not involved.
@@ -79,7 +88,14 @@ class PlayerEngine {
   String? _lastError;
   String? _aid;
   String? _sid;
+  String? _sid2;
   bool _muted = false;
+
+  /// What mpv was last sent, so a slider drag sets one property, not seven.
+  final _pictureSent = {...PictureAdjust.neutral.mpvProperties};
+
+  /// The `af` chain mpv accepted ('' = none).
+  String _audioFx = '';
 
   /// path → mpv track id of every external file we `sub-add`ed, so a second attach of the
   /// same file selects the existing track instead of adding a duplicate.
@@ -168,6 +184,7 @@ class PlayerEngine {
       subtitleTracks: _subtitleTracks,
       audioId: _aid,
       subtitleId: _sid,
+      secondarySubtitleId: _sid2,
       width: st.width ?? 0,
       height: st.height ?? 0,
       error: _lastError,
@@ -233,6 +250,14 @@ class PlayerEngine {
     if (s.audioLanguages.isNotEmpty) {
       await _set('alang', mpvLanguageList(s.audioLanguages).join(','));
     }
+    // Marquee attaches the file beside the film itself (rung 0): left on, mpv would add the
+    // same file a second time. An embedded track is only worth showing in a wanted language.
+    // media_kit asks mpv to fall back to ANY first track (a commentary, signs and songs).
+    // mpv's own default is kinder: a wanted language, else only a track the file itself
+    // marks as its default (which also covers the usual single untagged track).
+    await _set('sub-auto', 'no');
+    await _set('subs-fallback', 'default');
+    if (s.languages.isNotEmpty) await _set('slang', mpvLanguageList(s.languages).join(','));
     if (Platform.isWindows) {
       // The installed app ships Noto Sans beside the exe; libass finds the rest of the world's
       // scripts through DirectWrite's fallback.
@@ -255,6 +280,10 @@ class PlayerEngine {
       await n.observeProperty('sid', (v) async {
         _sid = v;
         await _syncSubtitleVisibility();
+        _markDirty();
+      });
+      await n.observeProperty('secondary-sid', (v) async {
+        _sid2 = v;
         _markDirty();
       });
       await n.observeProperty('mute', (v) async {
@@ -319,8 +348,11 @@ class PlayerEngine {
   }
 
   Future<void> setRate(double rate) async {
-    if (!_disposed) await player.setRate(rate.clamp(0.25, 4));
+    if (!_disposed) await player.setRate(rate.clamp(kMinSpeed, kMaxSpeed));
   }
+
+  /// "Repeat this video": mpv starts the file again by itself and never reports an end.
+  Future<void> setLoopFile(bool on) => _set('loop-file', on ? 'inf' : 'no');
 
   Future<void> setVolume(double v) async {
     if (_disposed) return;
@@ -349,6 +381,21 @@ class PlayerEngine {
   }
 
   Future<void> subtitlesOff() => _set('sid', 'no');
+
+  /// A second text subtitle (mpv draws it at the top), or null for none. On Android the
+  /// Flutter-drawn path (system_subtitles.dart) only ever draws the primary: a second one in
+  /// a script the bundled font lacks stays with libass and shows boxes. That is the trade.
+  Future<void> setSecondarySubtitle(String? id) => _set('secondary-sid', id ?? 'no');
+
+  /// The ids mpv itself lists for [type] ('audio' or 'sub'), asked directly: media_kit's own
+  /// track list arrives a moment after the file loads, too late for restoring a remembered one.
+  Future<Set<String>> trackIds(String type) async {
+    final count = int.tryParse(await property('track-list/count') ?? '') ?? 0;
+    return {
+      for (var i = 0; i < count; i++)
+        if (await property('track-list/$i/type') == type) ?await property('track-list/$i/id'),
+    };
+  }
 
   /// The mpv track id an external file was added as, if it was.
   String? externalIdFor(String path) => _external[path];
@@ -384,9 +431,68 @@ class PlayerEngine {
 
   Future<void> setAudioDelayMs(int ms) => _set('audio-delay', (ms / 1000).toStringAsFixed(2));
 
-  /// Size, look and placement for every text subtitle of every film.
+  // ───────────────────────────── picture and sound ─────────────────────────────
+
+  /// Levels, rotation, zoom and deinterlacing. Only what changed is sent; a property this
+  /// libmpv build lacks is skipped and the picture stays as it was.
+  Future<void> applyPicture(PictureAdjust picture) async {
+    for (final MapEntry(key: name, :value) in picture.mpvProperties.entries) {
+      if (_pictureSent[name] == value) continue;
+      _pictureSent[name] = value;
+      await _set(name, value);
+    }
+  }
+
+  /// The equaliser preset and loudness evening as mpv's `af` chain. False when this libmpv
+  /// build refused it (a filter it was built without): the chain is then cleared, so the film
+  /// keeps its sound, and the caller says so. Call it once the file has loaded: a chain set
+  /// before the audio output exists is only checked later, and a refusal then costs the sound.
+  Future<bool> applyAudioFx(({bool normalize, EqPreset preset}) fx) =>
+      // One at a time: two quick taps must not interleave their clear / set / read back.
+      _audioFxTail = _audioFxTail.then((_) => _applyAudioFx(fx));
+
+  Future<bool> _audioFxTail = Future.value(true);
+
+  Future<bool> _applyAudioFx(({bool normalize, EqPreset preset}) fx) async {
+    final want = audioFilterChain(normalize: fx.normalize, preset: fx.preset);
+    if (_disposed || _native == null || want == _audioFx) return true;
+    // mpv keeps the previous chain when it refuses a new one, so clear first: whatever is
+    // read back afterwards is the new chain or nothing.
+    if (_audioFx.isNotEmpty) await _set('af', '');
+    _audioFx = '';
+    if (want.isEmpty) return true;
+    await _set('af', want);
+    final got = await property('af');
+    if (got != null && got.trim().isNotEmpty) {
+      _audioFx = want;
+      return true;
+    }
+    await _set('af', '');
+    return false;
+  }
+
+  /// "Fill (crop)" cuts [percent] of the picture off the top and bottom: the subtitle line
+  /// moves in by as much (see [subtitleOffsets]). Zero puts it back.
+  Future<void> setSubtitleCrop(double percent) async {
+    if (percent == _subtitleCrop) return;
+    _subtitleCrop = percent;
+    await _placeSubtitles();
+  }
+
+  double _subtitleCrop = 0;
+  SubtitlePlacement _placement = SubtitlePlacement.bottom;
+
+  Future<void> _placeSubtitles() async {
+    final at = subtitleOffsets(_placement, _subtitleCrop);
+    await _set('sub-align-y', _placement == SubtitlePlacement.top ? 'top' : 'bottom');
+    await _set('sub-pos', '${at.subPos}');
+    await _set('sub-margin-y', '${at.marginY}');
+  }
+
+  /// Size, look, placement and colour for every text subtitle of every film.
   Future<void> applySubtitleStyle(Settings s) async {
     await _set('sub-scale', s.subtitleScale.toStringAsFixed(2));
+    await _set('sub-color', s.subtitleTint.mpvColor);
     switch (s.subtitleLook) {
       case SubtitleLook.outline:
         await _set('sub-border-style', 'outline-and-shadow');
@@ -403,17 +509,8 @@ class PlayerEngine {
         await _set('sub-border-color', '#C0000000');
         await _set('sub-back-color', '#C0000000');
     }
-    switch (s.subtitlePlacement) {
-      case SubtitlePlacement.bottom:
-        await _set('sub-align-y', 'bottom');
-        await _set('sub-pos', '100');
-      case SubtitlePlacement.lowerThird:
-        await _set('sub-align-y', 'bottom');
-        await _set('sub-pos', '82');
-      case SubtitlePlacement.top:
-        await _set('sub-align-y', 'top');
-        await _set('sub-pos', '100');
-    }
+    _placement = s.subtitlePlacement;
+    await _placeSubtitles();
   }
 
   /// Android: hand text subtitles to Flutter (system fonts). Bitmap subtitles stay with mpv.
@@ -463,6 +560,17 @@ class PlayerEngine {
     ];
   }
 
+  /// Raw values for the video details overlay ([kDetailProperties] by name). Whatever mpv
+  /// does not know (no audio track, an older build) is left out.
+  Future<Map<String, String>> stats() async {
+    final out = <String, String>{};
+    for (final name in kDetailProperties) {
+      final v = await property(name);
+      if (v != null && v.isNotEmpty) out[name] = v;
+    }
+    return out;
+  }
+
   /// What the Lobby card shows: container, width × height.
   Future<({String? container, int? width, int? height})> probe() async {
     final container = await property('file-format');
@@ -485,13 +593,32 @@ class PlayerEngine {
   /// mpv writes the frame itself (format from the extension): no Dart-side encoding and no
   /// player lock, and media_kit sends it as an async command, so the UI never waits on the
   /// JPEG encoder. [subtitles] burns the visible subtitle in.
+  ///
+  /// With hardware decoding straight to the surface (Android) mpv cannot read the frame back
+  /// and `video` fails: the one retry asks for `window`, which is what is on screen.
   Future<bool> screenshotTo(String path, {bool subtitles = false}) async {
-    if (_disposed) return false;
+    final file = File(path);
+    // The Lobby frame is rewritten in place, so "the file exists" proves nothing by itself.
+    final before = await _stamp(file);
+    for (final what in [subtitles ? 'subtitles' : 'video', 'window']) {
+      if (_disposed) return false;
+      try {
+        await _native?.command(['screenshot-to-file', path, what]);
+        final after = await _stamp(file);
+        if (after != null && after != before) return true;
+      } on Object {
+        // Try the other source, then give up.
+      }
+    }
+    return false;
+  }
+
+  static Future<(DateTime, int)?> _stamp(File f) async {
     try {
-      await _native?.command(['screenshot-to-file', path, subtitles ? 'subtitles' : 'video']);
-      return await File(path).exists();
+      final s = await f.stat();
+      return s.type == FileSystemEntityType.notFound ? null : (s.modified, s.size);
     } on Object {
-      return false;
+      return null;
     }
   }
 

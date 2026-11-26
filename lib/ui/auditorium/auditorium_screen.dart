@@ -3,9 +3,13 @@
 // design/cue-sheet.json.
 //
 // Layers, bottom to top: bias-light walls · the picture · Flutter subtitles (Android, other
-// scripts) · the gesture surface · the controls · menus, readouts, "Up next" · the Booth, the
-// threading overlay and the cue sheet. Overlays are SIBLINGS of the gesture surface, never its
-// children, so a tap on the threading overlay can never pause or seek the hidden film.
+// scripts) · the gesture surface · the controls · video details, "Skip intro" · menus,
+// readouts, "Up next" · the Booth, the threading overlay and the cue sheet. Overlays are
+// SIBLINGS of the gesture surface, never its children, so a tap on the threading overlay can
+// never pause or seek the hidden film.
+//
+// This file holds the room's state, its keys and its gestures. The layers themselves live in
+// layers.dart, the menus in menu_panel.dart, the pure widgets in controls/.
 import 'dart:async';
 import 'dart:io' show Platform;
 import 'dart:ui' as ui;
@@ -14,30 +18,27 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:media_kit_video/media_kit_video.dart';
+import 'package:path/path.dart' as p;
 import 'package:screen_brightness/screen_brightness.dart';
 
 import '../../engine/bias_light.dart';
-import '../../engine/detents.dart';
-import '../../engine/models/models.dart';
 import '../../engine/playback.dart';
 import '../../engine/sync_rule.dart';
-import '../../platform/files.dart';
 import '../../platform/pip.dart';
+import '../../platform/window.dart';
 import '../../player/engine.dart';
 import '../../state/providers.dart';
 import '../../state/session.dart';
-import '../../theme/house.dart';
 import '../../theme/tokens.dart';
 import '../booth/booth_sheet.dart';
-import '../components/primitives.dart';
 import '../components/room.dart';
-import '../components/sync_rule.dart';
 import '../threading/threading_overlay.dart';
 import 'controls/controls_bar.dart';
 import 'controls/system_subtitles.dart';
 import 'controls/widgets.dart';
 import 'cue_sheet.dart';
+import 'layers.dart';
+import 'menu_panel.dart';
 
 enum _Drag { brightness, volume }
 
@@ -51,6 +52,7 @@ class AuditoriumScreen extends ConsumerStatefulWidget {
 class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
   bool _controls = true;
   bool _syncOpen = false;
+  bool _details = false;
   AuditoriumMenu? _menu;
   final _menuTrail = <AuditoriumMenu>[];
   Timer? _idle;
@@ -232,16 +234,27 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _refocus());
   }
 
+  /// Through the session: it keeps Android from taking the picker for a trip Home (which
+  /// would shrink the film into picture in picture behind it).
   Future<void> _pickSubtitle() async {
     _closeMenu();
-    final path = await pickSubtitleFile();
-    if (path != null) await _notifier.loadSubtitleFile(path);
+    await _notifier.pickAndLoadSubtitle();
   }
 
   void _openBooth() {
     _closeMenu();
     ref.read(boothOpenProvider.notifier).set(true);
   }
+
+  void _toggleDetails() => setState(() => _details = !_details);
+
+  /// Windows: the film stays above the other windows.
+  void _togglePinned() {
+    ref.read(pinnedProvider.notifier).toggle();
+    _showReadout('pin', ref.read(pinnedProvider) ? 'Kept on top' : 'No longer on top');
+  }
+
+  int get _seekStep => ref.read(settingsValueProvider).seekStepSeconds;
 
   Future<void> _enterPip() async {
     final pb = _session?.engine.snapshot;
@@ -271,6 +284,10 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
     }
     if (_syncOpen) {
       setState(() => _syncOpen = false);
+      return;
+    }
+    if (_details) {
+      setState(() => _details = false);
       return;
     }
     final s = _session;
@@ -376,8 +393,22 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
       if (tracks.isNotEmpty) {
         final i = tracks.indexWhere((t) => t.id == pb.audioId);
         final t = tracks[(i + 1) % tracks.length];
-        unawaited(engine.selectAudio(t.id));
-        _showReadout('audio-lines', _trackName(t.language, t.title, fallback: 'Track ${t.id}'));
+        unawaited(_notifier.selectAudio(t.id));
+        _showReadout('audio-lines', trackName(t.language, t.title, fallback: 'Track ${t.id}'));
+      }
+    } else if (k == LogicalKeyboardKey.keyI) {
+      if (!repeat) _toggleDetails();
+    } else if (k == LogicalKeyboardKey.keyT) {
+      // The cue sheet is the Windows keyboard map; elsewhere T is not a key the app knows.
+      if (!Platform.isWindows) return KeyEventResult.ignored;
+      if (!repeat) _togglePinned();
+    } else if (k == LogicalKeyboardKey.enter || k == LogicalKeyboardKey.numpadEnter) {
+      // Only while "Skip intro" is offered; otherwise Enter is not ours to swallow.
+      final skip = _notifier.skippable;
+      if (skip == null) return KeyEventResult.ignored;
+      if (!repeat) {
+        unawaited(_notifier.skipChapter());
+        _showReadout('skip-forward', skip.label);
       }
     } else {
       return KeyEventResult.ignored;
@@ -440,12 +471,13 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
     final at = _doubleTapAt;
     final w = MediaQuery.sizeOf(context).width;
     if (at == null) return;
+    final step = _seekStep;
     if (at.dx < w / 3) {
-      unawaited(_seekBy(const Duration(seconds: -10)));
-      _showReadout('rotate-ccw', '10 s back');
+      unawaited(_seekBy(Duration(seconds: -step)));
+      _showReadout('rotate-ccw', '$step s back');
     } else if (at.dx > w * 2 / 3) {
-      unawaited(_seekBy(const Duration(seconds: 10)));
-      _showReadout('rotate-cw', '10 s forward');
+      unawaited(_seekBy(Duration(seconds: step)));
+      _showReadout('rotate-cw', '$step s forward');
     } else {
       unawaited(_playPause());
     }
@@ -555,15 +587,14 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
     if (session == null) return const SizedBox.shrink();
     final engine = session.engine;
     if (ref.watch(pipProvider)) {
-      return _Picture(engine: engine, fit: session.fit, transparent: false);
+      return PictureLayer(engine: engine, fit: session.fit, transparent: false);
     }
+    // One rule decides the end of a film (repeat, "play the next one", the sleep timer): the
+    // card shows only when that rule starts another film. A looping film never completes.
+    final upNext = session.upNextFor(settings);
     final showUpNext =
-        _completed &&
-        !_upNextCancelled &&
-        settings.autoplayNext &&
-        session.nextName != null &&
-        session.sleep != SleepTimer.endOfFilm &&
-        !session.threadingVisible;
+        _completed && !_upNextCancelled && upNext != null && !session.threadingVisible;
+    final pad = MediaQuery.paddingOf(context);
     final hideCursor = _desktop && !_controls && _playing && _menu == null;
     final actions = ControlsActions(
       onBack: () => unawaited(_back()),
@@ -577,10 +608,16 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
       onScrubEnd: _poke,
       onVolume: (v) => unawaited(_notifier.setVolume(v)),
       onMenu: _openMenu,
-      onPrevious: _desktop ? () => unawaited(_notifier.playNeighbour(next: false)) : null,
-      onNext: _desktop ? () => unawaited(_notifier.playNeighbour(next: true)) : null,
+      // Phones too: the buttons only draw when the folder or the device library has a neighbour.
+      onPrevious: () => unawaited(_notifier.playNeighbour(next: false)),
+      onNext: () => unawaited(_notifier.playNeighbour(next: true)),
       onPip: Platform.isAndroid ? () => unawaited(_enterPip()) : null,
       onCueSheet: () => ref.read(cueSheetProvider.notifier).toggle(),
+      onToggleClock: () => unawaited(
+        ref
+            .read(settingsProvider.notifier)
+            .edit((s) => s.copyWith(showRemaining: !s.showRemaining)),
+      ),
     );
 
     return PopScope(
@@ -598,7 +635,7 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
             fit: StackFit.expand,
             children: [
               if (settings.biasLight) Walls(stops: _stops),
-              _Picture(
+              PictureLayer(
                 engine: engine,
                 fit: session.fit,
                 transparent: settings.biasLight && _stops != null,
@@ -643,7 +680,7 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
                 ),
               ),
               if (session.error != null)
-                _Undecodable(sentence: session.error!, onBack: () => unawaited(_back())),
+                Undecodable(sentence: session.error!, onBack: () => unawaited(_back())),
               RepaintBoundary(
                 child: IgnorePointer(
                   ignoring: !_controls,
@@ -655,7 +692,7 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
                       onHover: (_) => _idle?.cancel(),
                       onExit: (_) => _poke(),
                       opaque: false,
-                      child: _ControlsLayer(
+                      child: ControlsLayer(
                         session: session,
                         desktop: _desktop,
                         fullscreen: fullscreen,
@@ -667,17 +704,43 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
                   ),
                 ),
               ),
+              // Under the title, clear of the bottom bar; it stays while the controls hide.
+              if (_details && !session.threadingVisible)
+                Positioned(
+                  left: Tokens.space4,
+                  right: Tokens.space4,
+                  top: pad.top + 60,
+                  child: Align(
+                    alignment: Alignment.topLeft,
+                    child: LiveVideoDetails(
+                      key: ValueKey(engine),
+                      engine: engine,
+                      onClose: _toggleDetails,
+                    ),
+                  ),
+                ),
+              // "Skip intro": there even when the controls are not. A menu or the "Up next"
+              // card takes the same corner, so it steps aside for them.
+              if (_menu == null && !showUpNext && !booth)
+                Positioned(
+                  right: Tokens.space4,
+                  bottom: pad.bottom + (_desktop ? 104 : 132),
+                  child: SkipChapterButton(
+                    desktop: _desktop,
+                    onSkipped: (label) => _showReadout('skip-forward', label),
+                  ),
+                ),
               if (_menu != null) ...[
                 Positioned.fill(
                   child: GestureDetector(behavior: HitTestBehavior.opaque, onTap: _closeMenu),
                 ),
                 Positioned(
                   right: Tokens.space4,
-                  bottom: MediaQuery.paddingOf(context).bottom + (_desktop ? 104 : 132),
+                  bottom: pad.bottom + (_desktop ? 104 : 132),
                   left: _desktop ? null : Tokens.space4,
                   child: Align(
                     alignment: Alignment.bottomRight,
-                    child: _MenuPanel(
+                    child: MenuPanel(
                       menu: _menu!,
                       canGoBack: _menuTrail.isNotEmpty,
                       maxHeight: MediaQuery.sizeOf(context).height * 0.6,
@@ -689,6 +752,10 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
                       onCueSheet: () {
                         _closeMenu();
                         ref.read(cueSheetProvider.notifier).set(true);
+                      },
+                      onDetails: () {
+                        _closeMenu();
+                        _toggleDetails();
                       },
                       desktop: _desktop,
                     ),
@@ -709,11 +776,12 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
               if (showUpNext)
                 Positioned(
                   right: Tokens.space5,
-                  bottom: MediaQuery.paddingOf(context).bottom + 120,
+                  bottom: pad.bottom + 120,
                   child: UpNextCard(
-                    key: ValueKey(session.nextPath),
-                    name: session.nextName!,
-                    onPlay: () => unawaited(_notifier.playNeighbour(next: true)),
+                    key: ValueKey(upNext),
+                    // A phone's library film is a content:// URI: it has no name to show.
+                    name: upNext.startsWith('content://') ? 'The next video' : p.basename(upNext),
+                    onPlay: () => unawaited(_notifier.playUpNext()),
                     onCancel: () => setState(() => _upNextCancelled = true),
                   ),
                 ),
@@ -722,362 +790,6 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
               if (cue) const CueSheet(),
             ],
           ),
-        ),
-      ),
-    );
-  }
-}
-
-String _trackName(String? language, String? title, {required String fallback}) {
-  final lang = language == null || language.isEmpty ? null : language.toUpperCase();
-  final parts = [?lang, if (title != null && title.isNotEmpty) title];
-  return parts.isEmpty ? fallback : parts.join('  ');
-}
-
-/// The picture alone. Rebuilt only when the fit changes — never by the 10 Hz playback stream.
-class _Picture extends StatelessWidget {
-  final PlayerEngine engine;
-  final PictureFit fit;
-  final bool transparent;
-  const _Picture({required this.engine, required this.fit, required this.transparent});
-
-  @override
-  Widget build(BuildContext context) => RepaintBoundary(
-    child: Video(
-      controller: engine.controller,
-      controls: NoVideoControls,
-      fill: transparent ? const Color(0x00000000) : Tokens.pictureBg,
-      fit: switch (fit) {
-        PictureFit.fill => BoxFit.cover,
-        PictureFit.stretch => BoxFit.fill,
-        _ => BoxFit.contain,
-      },
-      aspectRatio: fit.forcedAspect,
-      // Keep-awake only while the film actually plays (released on pause).
-      wakelock: true,
-    ),
-  );
-}
-
-/// The controls at 10 Hz: the only part of the room the playback stream rebuilds.
-class _ControlsLayer extends ConsumerStatefulWidget {
-  final FilmSession session;
-  final bool desktop, fullscreen, syncOpen;
-  final AuditoriumMenu? menu;
-  final ControlsActions actions;
-  const _ControlsLayer({
-    required this.session,
-    required this.desktop,
-    required this.fullscreen,
-    required this.syncOpen,
-    required this.menu,
-    required this.actions,
-  });
-
-  @override
-  ConsumerState<_ControlsLayer> createState() => _ControlsLayerState();
-}
-
-class _ControlsLayerState extends ConsumerState<_ControlsLayer> {
-  double? _scrub;
-
-  @override
-  Widget build(BuildContext context) {
-    final s = widget.session;
-    final pb = ref.watch(playbackProvider).value ?? const PlaybackState();
-    final dur = pb.duration.inMilliseconds / 1000;
-    final a = widget.actions;
-    final attached = s.threading.attached;
-    return AuditoriumControls(
-      data: ControlsData(
-        title: s.displayTitle,
-        position: _scrub ?? pb.position.inMilliseconds / 1000,
-        duration: dur,
-        buffered: pb.buffer.inMilliseconds / 1000,
-        buffering: pb.buffering,
-        playing: pb.playing,
-        volume: pb.volume,
-        muted: pb.muted,
-        rate: pb.rate,
-        delayMs: s.delayMs,
-        hasSubtitle: pb.hasSubtitle,
-        matched: attached is ExternalSubtitle && attached.syncedByHash,
-        detents: detentsFor(s.chapters, dur),
-        chapterTitles: {
-          for (final c in s.chapters)
-            if (c.title != null) c.startSeconds: c.title!,
-        },
-        loopA: s.loopA == null ? null : s.loopA!.inMilliseconds / 1000,
-        loopB: s.loopB == null ? null : s.loopB!.inMilliseconds / 1000,
-        hasPrevious: s.previousPath != null,
-        hasNext: s.nextPath != null,
-        fullscreen: widget.fullscreen,
-        desktop: widget.desktop,
-        showPip: Platform.isAndroid,
-        sleeping: s.sleep != SleepTimer.off,
-        fit: s.fit,
-        openMenu: widget.menu,
-        syncOpen: widget.syncOpen,
-      ),
-      actions: ControlsActions(
-        onBack: a.onBack,
-        onPlayPause: a.onPlayPause,
-        onMute: a.onMute,
-        onFullscreen: a.onFullscreen,
-        onToggleSync: a.onToggleSync,
-        onSeekBy: a.onSeekBy,
-        onSeek: (v) {
-          setState(() => _scrub = null);
-          a.onSeek(v);
-        },
-        onScrub: (v) {
-          setState(() => _scrub = v);
-          a.onScrub(v);
-        },
-        onScrubEnd: () {
-          setState(() => _scrub = null);
-          a.onScrubEnd();
-        },
-        onVolume: a.onVolume,
-        onMenu: a.onMenu,
-        onPrevious: a.onPrevious,
-        onNext: a.onNext,
-        onPip: a.onPip,
-        onCueSheet: a.onCueSheet,
-      ),
-      syncRule: widget.syncOpen
-          ? Padding(
-              padding: const EdgeInsets.only(bottom: Tokens.space2),
-              child: SyncRule(
-                delayMs: s.delayMs,
-                onChanged: (v) => unawaited(ref.read(sessionProvider.notifier).setDelay(v)),
-              ),
-            )
-          : null,
-    );
-  }
-}
-
-/// The open menu's rows, from the live track lists.
-class _MenuPanel extends ConsumerWidget {
-  final AuditoriumMenu menu;
-  final bool canGoBack, desktop;
-  final double maxHeight;
-  final VoidCallback onBack, onClose, onPickSubtitle, onBooth, onCueSheet;
-  final ValueChanged<AuditoriumMenu> onOpen;
-  const _MenuPanel({
-    required this.menu,
-    required this.canGoBack,
-    required this.desktop,
-    required this.maxHeight,
-    required this.onBack,
-    required this.onClose,
-    required this.onOpen,
-    required this.onPickSubtitle,
-    required this.onBooth,
-    required this.onCueSheet,
-  });
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final s = ref.watch(sessionProvider);
-    if (s == null) return const SizedBox.shrink();
-    final pb = ref.watch(playbackProvider).value ?? s.engine.snapshot;
-    final n = ref.read(sessionProvider.notifier);
-    final e = s.engine;
-    void then(Future<void> Function() f) {
-      unawaited(f());
-      onClose();
-    }
-
-    final (title, entries) = switch (menu) {
-      AuditoriumMenu.subtitles => ('Subtitles', _subtitleEntries(s, pb, then)),
-      AuditoriumMenu.audio => (
-        'Audio',
-        [
-          for (final t in pb.audioTracks)
-            MenuEntry(
-              _trackName(t.language, t.title, fallback: 'Track ${t.id}'),
-              detail: [
-                if (t.channels != null) t.channels!,
-                if (t.codec != null) t.codec!.toUpperCase(),
-              ].join(' · '),
-              selected: t.id == pb.audioId,
-              onTap: () => then(() => e.selectAudio(t.id)),
-            ),
-          if (pb.audioTracks.isEmpty) const MenuEntry('No audio tracks'),
-          MenuEntry('Audio delay…', icon: 'settings-2', onTap: onBooth),
-        ],
-      ),
-      AuditoriumMenu.speed => (
-        'Speed',
-        [
-          for (final r in kSpeeds)
-            MenuEntry(
-              r == 1 ? 'Normal' : speedLabel(r),
-              detail: r == 1 ? '1×' : null,
-              selected: (pb.rate - r).abs() < 0.01,
-              onTap: () => then(() => e.setRate(r)),
-            ),
-        ],
-      ),
-      AuditoriumMenu.picture => (
-        'Picture',
-        [
-          for (final f in PictureFit.values)
-            MenuEntry(
-              f.label,
-              selected: s.fit == f,
-              onTap: () {
-                n.setFit(f);
-                onClose();
-              },
-            ),
-        ],
-      ),
-      AuditoriumMenu.chapters => (
-        'Chapters',
-        [
-          for (final c in s.chapters)
-            MenuEntry(
-              c.title?.trim().isNotEmpty ?? false ? c.title! : 'Chapter ${c.index + 1}',
-              detail: clockOf(c.startSeconds),
-              selected: _currentChapter(s.chapters, pb.position) == c.index,
-              onTap: () =>
-                  then(() => e.seekTo(Duration(milliseconds: (c.startSeconds * 1000).round()))),
-            ),
-        ],
-      ),
-      AuditoriumMenu.sleep => (
-        'Sleep timer',
-        [
-          for (final t in SleepTimer.values)
-            MenuEntry(
-              t.label,
-              selected: s.sleep == t,
-              onTap: () {
-                n.setSleep(t);
-                onClose();
-              },
-            ),
-        ],
-      ),
-      AuditoriumMenu.more => (
-        'More',
-        [
-          if (s.chapters.isNotEmpty)
-            MenuEntry(
-              'Chapters',
-              icon: 'list',
-              detail: '${s.chapters.length}',
-              opens: true,
-              onTap: () => onOpen(AuditoriumMenu.chapters),
-            ),
-          MenuEntry(
-            s.looping
-                ? 'Clear the A-B loop'
-                : (s.loopA != null ? 'Set loop end (B)' : 'Set loop start (A)'),
-            icon: 'repeat',
-            detail: desktop ? 'L' : null,
-            onTap: () => then(n.toggleLoop),
-          ),
-          MenuEntry('Screenshot', icon: 'camera', onTap: () => then(n.screenshot)),
-          MenuEntry(
-            'Sleep timer',
-            icon: 'timer',
-            detail: s.sleep == SleepTimer.off ? null : s.sleep.label,
-            opens: true,
-            onTap: () => onOpen(AuditoriumMenu.sleep),
-          ),
-          MenuEntry(
-            'Picture',
-            icon: 'scan',
-            detail: s.fit.label,
-            opens: true,
-            onTap: () => onOpen(AuditoriumMenu.picture),
-          ),
-          MenuEntry('Load subtitle file…', icon: 'file-plus', onTap: onPickSubtitle),
-          MenuEntry(
-            'Subtitle booth',
-            icon: 'captions',
-            detail: desktop ? 'S' : null,
-            onTap: onBooth,
-          ),
-          if (desktop)
-            MenuEntry('Keyboard shortcuts', icon: 'info', detail: '?', onTap: onCueSheet),
-        ],
-      ),
-    };
-    return ControlMenu(
-      title: title,
-      entries: entries,
-      onBack: canGoBack ? onBack : null,
-      onClose: onClose,
-      maxHeight: maxHeight,
-    );
-  }
-
-  List<MenuEntry> _subtitleEntries(
-    FilmSession s,
-    PlaybackState pb,
-    void Function(Future<void> Function()) then,
-  ) {
-    final e = s.engine;
-    final attached = s.threading.attached;
-    final attachedId = attached is ExternalSubtitle ? e.externalIdFor(attached.path) : null;
-    return [
-      MenuEntry('Off', selected: !pb.hasSubtitle, onTap: () => then(e.subtitlesOff)),
-      if (attached is ExternalSubtitle)
-        MenuEntry(
-          '${attached.language.toUpperCase()}  ${attached.provider == SubtitleProvider.sidecar ? 'beside the film' : 'downloaded'}',
-          detail: attached.syncedByHash ? 'MATCH' : 'BY NAME',
-          selected: attachedId != null && pb.subtitleId == attachedId,
-          onTap: () => then(() => e.attachSubtitle(attached.path, language: attached.language)),
-        ),
-      for (final t in pb.subtitleTracks.where((t) => t.id != attachedId))
-        MenuEntry(
-          _trackName(t.language, t.title, fallback: 'Track ${t.id}'),
-          detail: isBitmapSubtitle(t)
-              ? 'IMAGE'
-              : e.isExternal(t.id)
-              ? 'FILE'
-              : null,
-          selected: t.id == pb.subtitleId,
-          onTap: () => then(() => e.selectSubtitle(t.id)),
-        ),
-      MenuEntry('Load subtitle file…', icon: 'file-plus', onTap: onPickSubtitle),
-      MenuEntry('Find, sync and style…', icon: 'search', onTap: onBooth),
-    ];
-  }
-
-  static int? _currentChapter(List<Chapter> chapters, Duration pos) {
-    int? cur;
-    final s = pos.inMilliseconds / 1000;
-    for (final c in chapters) {
-      if (c.startSeconds <= s) cur = c.index;
-    }
-    return cur;
-  }
-}
-
-class _Undecodable extends StatelessWidget {
-  final String sentence;
-  final VoidCallback onBack;
-  const _Undecodable({required this.sentence, required this.onBack});
-
-  @override
-  Widget build(BuildContext context) {
-    final p = Tokens.auditorium;
-    return ColoredBox(
-      color: p.bg,
-      child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(sentence, style: Txt.body(Tokens.textLg, p.ink)),
-            const SizedBox(height: Tokens.space3),
-            TextAction('Open another file', primary: true, onTap: onBack),
-          ],
         ),
       ),
     );

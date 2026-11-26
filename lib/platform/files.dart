@@ -1,5 +1,6 @@
 // File picking, sidecar detection and sidecar writing. Never overwrite an existing sidecar:
 // add a `.1` suffix. If the folder is not writable, fall back to app storage — honestly.
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -64,7 +65,7 @@ Future<OpenedFile?> pickVideo() async {
       return OpenedFile(
         locator: uri,
         displayName: r['name'] as String? ?? 'video',
-        sizeBytes: (r['size'] as num?)?.toInt() ?? 0,
+        sizeBytes: _size(r['size']),
       );
     } on PlatformException {
       return null;
@@ -168,6 +169,9 @@ Future<String?> initialIntentUri() async {
   }
 }
 
+/// Providers that do not know a document's size answer -1: that is "unknown", i.e. 0 here.
+int _size(Object? v) => v is num && v > 0 ? v.toInt() : 0;
+
 Future<OpenedFile?> contentFile(String uri) async {
   try {
     final info = await _content.invokeMapMethod<String, Object?>('stat', {'uri': uri});
@@ -175,7 +179,7 @@ Future<OpenedFile?> contentFile(String uri) async {
     return OpenedFile(
       locator: uri,
       displayName: info['name'] as String? ?? 'video',
-      sizeBytes: (info['size'] as num?)?.toInt() ?? 0,
+      sizeBytes: _size(info['size']),
     );
   } on PlatformException {
     return null;
@@ -270,11 +274,21 @@ Future<WrittenSidecar> writeSidecar(
 
 Future<bool> fileExists(String path) async => File(path).exists();
 
-Future<String?> pickSaveLocation(String suggestedName) => FilePicker.platform.saveFile(
-  fileName: suggestedName,
-  type: FileType.custom,
-  allowedExtensions: const ['json'],
-);
+/// "Export library…": asks where, then writes [text] there. False when the dialog was
+/// cancelled. On Android the destination is a SAF document that only the picker itself can
+/// write (it REQUIRES the bytes up front); on Windows it returns a path and the app writes.
+Future<bool> saveJsonFile(String suggestedName, String text) async {
+  final bytes = Uint8List.fromList(utf8.encode(text));
+  final path = await FilePicker.platform.saveFile(
+    fileName: suggestedName,
+    type: FileType.custom,
+    allowedExtensions: const ['json'],
+    bytes: bytes,
+  );
+  if (path == null) return false;
+  if (!Platform.isAndroid) await File(path).writeAsBytes(bytes, flush: true);
+  return true;
+}
 
 Future<String?> pickJson() async {
   final res = await FilePicker.platform.pickFiles(

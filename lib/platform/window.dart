@@ -2,9 +2,11 @@
 // window controls, and geometry that persists between runs (app_state.window_bounds).
 import 'dart:async';
 import 'dart:io' show Platform;
+import 'dart:ui' show PlatformDispatcher;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../db/database.dart';
@@ -29,24 +31,80 @@ Future<void> initWindow(MarqueeDatabase db) async {
     backgroundColor: Tokens.bg,
     titleBarStyle: TitleBarStyle.hidden,
   );
+  // waitUntilReadyToShow calls its callback without waiting for it: the Completer is what
+  // makes "the first frame is held until the window is in place" true.
+  final placed = Completer<void>();
+  var maximized = false;
   await windowManager.waitUntilReadyToShow(opts, () async {
-    if (b is Map) {
-      final x = (b['x'] as num?)?.toDouble();
-      final y = (b['y'] as num?)?.toDouble();
-      final w = (b['w'] as num?)?.toDouble();
-      final h = (b['h'] as num?)?.toDouble();
-      if (x != null && y != null && w != null && h != null && w >= 720 && h >= 480) {
-        await windowManager.setBounds(Rect.fromLTWH(x, y, w, h));
+    try {
+      if (b is Map) {
+        final x = (b['x'] as num?)?.toDouble();
+        final y = (b['y'] as num?)?.toDouble();
+        final w = (b['w'] as num?)?.toDouble();
+        final h = (b['h'] as num?)?.toDouble();
+        if (x != null && y != null && w != null && h != null && w >= 720 && h >= 480) {
+          final saved = Rect.fromLTWH(x, y, w, h);
+          // A window last used on a monitor that is gone stays at the centred default.
+          if (boundsReachable(saved, _displaySizes())) await windowManager.setBounds(saved);
+        }
+        maximized = b['maximized'] == true;
+        if (maximized) await windowManager.maximize();
       }
-      if (b['maximized'] == true) await windowManager.maximize();
+      await windowManager.show();
+      await windowManager.focus();
+    } on Object {
+      // A window at its default size is better than no window.
+    } finally {
+      placed.complete();
     }
-    await windowManager.show();
-    await windowManager.focus();
   });
+  await placed.future;
+  if (maximized) {
+    // The runner shows the window again on the first frame (SW_SHOWNORMAL), which undoes a
+    // maximise made before it. Put it back once that frame is out.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Timer(const Duration(milliseconds: 200), () async {
+        try {
+          if (!await windowManager.isMaximized()) await windowManager.maximize();
+        } on Object {
+          // It stays a normal window.
+        }
+      });
+    });
+  }
   windowManager.addListener(_BoundsSaver(db));
   // Closing the window saves the resume point first (see [onWindowClosing]).
   await windowManager.setPreventClose(true);
   windowManager.addListener(_CloseGuard());
+}
+
+/// The connected displays, in logical pixels. Flutter knows their sizes, not where they sit.
+List<Size> _displaySizes() => [
+  for (final d in PlatformDispatcher.instance.displays)
+    if (d.devicePixelRatio > 0) d.size / d.devicePixelRatio,
+];
+
+/// Whether a window at [bounds] could be reached with the mouse: enough of its title strip
+/// must lie on a display. With ONE display that is exact (it sits at the origin). With
+/// several, their arrangement is unknown here, so only bounds no arrangement of them could
+/// contain are refused. No display list at all (an embedder that sends none) refuses nothing.
+bool boundsReachable(Rect bounds, List<Size> displays) {
+  if (displays.isEmpty) return true;
+  const grip = Size(160, 40); // this much of the title strip must be on screen
+  final Rect desk;
+  if (displays.length == 1) {
+    desk = Offset.zero & displays.single;
+  } else {
+    var w = 0.0, h = 0.0;
+    for (final d in displays) {
+      w += d.width;
+      h += d.height;
+    }
+    desk = Rect.fromLTRB(-w, -h, w, h);
+  }
+  final strip = Rect.fromLTWH(bounds.left, bounds.top, bounds.width, grip.height);
+  final seen = strip.intersect(desk);
+  return seen.width >= grip.width && seen.height >= grip.height;
 }
 
 /// Runs before the window closes (the resume point, the session); the window is destroyed
@@ -89,16 +147,32 @@ class _BoundsSaver with WindowListener {
   void _save() {
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 400), () async {
-      // Fullscreen bounds are the monitor's: restoring them would trap the next launch.
-      if (await windowManager.isFullScreen()) return;
-      final r = await windowManager.getBounds();
-      await db.writeState('window_bounds', {
-        'x': r.left,
-        'y': r.top,
-        'w': r.width,
-        'h': r.height,
-        'maximized': await windowManager.isMaximized(),
-      });
+      try {
+        // Fullscreen bounds are the monitor's: restoring them would trap the next launch.
+        if (await windowManager.isFullScreen()) return;
+        if (await windowManager.isMaximized()) {
+          // Only the flag: the saved rectangle stays the NORMAL window's, so un-maximising
+          // after the next launch goes back to a window, not to a screen-sized one.
+          final old = await db.readState('window_bounds');
+          await db.writeState('window_bounds', {
+            if (old is Map) ...old.cast<String, Object?>(),
+            'maximized': true,
+          });
+          return;
+        }
+        // A minimised window reports a parking position far off screen.
+        if (await windowManager.isMinimized()) return;
+        final r = await windowManager.getBounds();
+        await db.writeState('window_bounds', {
+          'x': r.left,
+          'y': r.top,
+          'w': r.width,
+          'h': r.height,
+          'maximized': false,
+        });
+      } on Object {
+        // The window is closing: the last saved place stands.
+      }
     });
   }
 
@@ -121,6 +195,33 @@ Future<void> setFullscreen(bool full) async {
     );
   }
 }
+
+/// Windows: the film stays above every other window (a film in the corner while you work).
+/// Nothing to do elsewhere: Android has picture in picture for that.
+Future<void> setAlwaysOnTop(bool on) async {
+  if (!_desktop) return;
+  try {
+    await windowManager.setAlwaysOnTop(on);
+  } on Object {
+    // The window is going away, or the plugin is missing: it simply stays as it was.
+  }
+}
+
+/// "Keep on top". The session turns it off when the film closes, so the Lobby never floats.
+class PinnedNotifier extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  void set(bool on) {
+    if (on == state) return;
+    state = on;
+    unawaited(setAlwaysOnTop(on));
+  }
+
+  void toggle() => set(!state);
+}
+
+final pinnedProvider = NotifierProvider<PinnedNotifier, bool>(PinnedNotifier.new);
 
 /// The title bar: a thin strip that drags the window, with minimise / maximise / close bulbs.
 class WindowBar extends StatelessWidget {

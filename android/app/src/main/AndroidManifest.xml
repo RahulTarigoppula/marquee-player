@@ -8,6 +8,10 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- MediaStore library scan only. SAF ("Open with", the file picker) needs NONE of these. -->
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <!-- Android 14+: "Select photos and videos". Declared so Marquee can tell partial access
+         from none and say so (the library then lists only the videos the user picked) instead
+         of the system silently re-asking. Grants nothing beyond READ_MEDIA_VIDEO. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
     <!-- No READ_MEDIA_AUDIO: Marquee is a video player with no audio-library feature.
          PLAN 4.1, DESIGN §14 and TESTING M-F3 all list the video permission only. If an
          "external audio track" feature ever lands, add it back here WITH the feature named,

@@ -127,11 +127,18 @@ void main() {
         final h = Harness()..hash = () async => throw const FileTooSmall(100);
         h.open(a, display: 'Paddington.2014.720p.WEB-DL.H264-NTb.mkv', size: 100);
         a.elapse(const Duration(milliseconds: 100));
-        expect(h.states.every((s) => s.event is! Stalled), isTrue);
+        expect(
+          h.states.every((s) => s.phase != LeaderPhase.hashing || s.event is! Stalled),
+          isTrue,
+        );
         expect(h.m.state.hash, isNull);
         expect(h.searches.single.hash, isNull);
         expect(h.searches.single.parsed!.title, 'Paddington');
-        expect(h.m.state.phase, LeaderPhase.done);
+        // Rows found by name are a guess: listed for a pick, never downloaded on their own.
+        expect(stalledOf(h).at, LeaderPhase.searching);
+        expect(stalledOf(h).sentence, kPickASubtitle);
+        expect(h.m.state.candidates, isNotEmpty);
+        expect(h.downloads, isEmpty);
       });
     });
 
@@ -150,7 +157,7 @@ void main() {
         h.open(a);
         a.elapse(const Duration(milliseconds: 100));
         expect(h.searches.single.hash, isNull);
-        expect(h.states.any((s) => s.event is Stalled), isFalse);
+        expect(h.states.any((s) => s.phase == LeaderPhase.hashing && s.event is Stalled), isFalse);
       });
     });
 
@@ -517,6 +524,11 @@ void main() {
         h.m.manualSearch('third man');
         a.elapse(const Duration(milliseconds: 100));
         expect(h.searches.last.query, 'third man');
+        // The typed search lists its rows; the ticket is spent only on the tap.
+        expect(h.m.state.stalled, isTrue);
+        expect(h.downloads, isEmpty);
+        h.m.pick(h.m.state.candidates.first);
+        a.elapse(const Duration(milliseconds: 100));
         expect(h.m.state.phase, LeaderPhase.done);
         expect(h.downloads, hasLength(1));
       });

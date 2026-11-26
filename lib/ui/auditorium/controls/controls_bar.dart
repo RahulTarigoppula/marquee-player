@@ -12,8 +12,20 @@ import '../../components/film_gate.dart';
 import '../../components/primitives.dart';
 import 'widgets.dart';
 
-/// The menus the bar opens.
-enum AuditoriumMenu { subtitles, audio, speed, picture, more, chapters, sleep }
+/// The menus the bar opens, and the lists those open in turn.
+enum AuditoriumMenu {
+  subtitles,
+  audio,
+  speed,
+  picture,
+  more,
+  chapters,
+  sleep,
+  secondSubtitle,
+  sound,
+  adjust,
+  repeat,
+}
 
 @immutable
 class ControlsData {
@@ -36,6 +48,18 @@ class ControlsData {
   final bool showPip;
   final bool sleeping;
   final PictureFit fit;
+
+  /// Rotated, zoomed, deinterlaced or with a slider off centre: the picture button lights.
+  final bool pictureAdjusted;
+
+  /// The window is kept above the others (Windows).
+  final bool pinned;
+
+  /// Seconds the back / forward buttons jump (Settings).
+  final int seekStep;
+
+  /// The clock counts down to the end instead of showing the film's length.
+  final bool showRemaining;
   final AuditoriumMenu? openMenu;
   final bool syncOpen;
 
@@ -63,14 +87,28 @@ class ControlsData {
     this.showPip = false,
     this.sleeping = false,
     this.fit = PictureFit.fit,
+    this.pictureAdjusted = false,
+    this.pinned = false,
+    this.seekStep = 10,
+    this.showRemaining = false,
     this.openMenu,
     this.syncOpen = false,
   });
+
+  /// `45:35 / 1:44:00`, or with [showRemaining] `45:35 / -58:25`.
+  String get clock {
+    if (duration <= 0) return clockOf(position);
+    final end = showRemaining ? '-${clockOf(duration - position)}' : clockOf(duration);
+    return '${clockOf(position)} / $end';
+  }
 }
 
 class ControlsActions {
   final VoidCallback onBack, onPlayPause, onMute, onFullscreen, onToggleSync;
   final VoidCallback? onPrevious, onNext, onPip, onCueSheet;
+
+  /// A tap on the time readout: total length or time remaining.
+  final VoidCallback? onToggleClock;
   final ValueChanged<Duration> onSeekBy;
   final ValueChanged<double> onSeek, onScrub, onVolume;
   final VoidCallback onScrubEnd;
@@ -91,6 +129,7 @@ class ControlsActions {
     this.onNext,
     this.onPip,
     this.onCueSheet,
+    this.onToggleClock,
   });
 
   /// For previews and tests.
@@ -209,6 +248,10 @@ class _TopBar extends StatelessWidget {
                 LucideIcon('timer', size: 18, color: p.accent),
                 const SizedBox(width: Tokens.space3),
               ],
+              if (d.pinned) ...[
+                LucideIcon('pin', size: 18, color: p.accent),
+                const SizedBox(width: Tokens.space3),
+              ],
               if (d.showPip && actions.onPip != null)
                 CtlButton(
                   icon: 'picture-in-picture-2',
@@ -225,7 +268,9 @@ class _TopBar extends StatelessWidget {
   }
 }
 
-/// Phones (and narrow windows): back 10, play, forward 10 in the middle of the picture.
+/// Phones (and narrow windows): back, play, forward in the middle of the picture, with the
+/// previous / next film either side when the folder (or the device library) has one. With
+/// both present the row is 348 px: it fits a 360 px phone.
 class _CentreTransport extends StatelessWidget {
   final ControlsData data;
   final ControlsActions actions;
@@ -238,11 +283,21 @@ class _CentreTransport extends StatelessWidget {
       if (actions.onPrevious != null && data.hasPrevious)
         CtlButton(icon: 'skip-back', label: 'Previous file', onTap: actions.onPrevious),
       const SizedBox(width: Tokens.space4),
-      _Jump(back: true, onTap: () => actions.onSeekBy(const Duration(seconds: -10)), size: 56),
+      _Jump(
+        back: true,
+        seconds: data.seekStep,
+        onTap: () => actions.onSeekBy(Duration(seconds: -data.seekStep)),
+        size: 56,
+      ),
       const SizedBox(width: Tokens.space6),
       PlayButton(playing: data.playing, onTap: actions.onPlayPause, size: 68),
       const SizedBox(width: Tokens.space6),
-      _Jump(back: false, onTap: () => actions.onSeekBy(const Duration(seconds: 10)), size: 56),
+      _Jump(
+        back: false,
+        seconds: data.seekStep,
+        onTap: () => actions.onSeekBy(Duration(seconds: data.seekStep)),
+        size: 56,
+      ),
       const SizedBox(width: Tokens.space4),
       if (actions.onNext != null && data.hasNext)
         CtlButton(icon: 'skip-forward', label: 'Next file', onTap: actions.onNext),
@@ -250,19 +305,26 @@ class _CentreTransport extends StatelessWidget {
   );
 }
 
-/// ±10 s: a circular arrow with the number inside (plain digits — every font has them).
+/// Back / forward by the seek step: a circular arrow with the number inside (plain digits:
+/// every font has them).
 class _Jump extends StatelessWidget {
   final bool back;
+  final int seconds;
   final VoidCallback onTap;
   final double size;
-  const _Jump({required this.back, required this.onTap, this.size = Tokens.targetMin});
+  const _Jump({
+    required this.back,
+    required this.seconds,
+    required this.onTap,
+    this.size = Tokens.targetMin,
+  });
 
   @override
   Widget build(BuildContext context) {
     final p = House.paletteOf(context);
     return Pressable(
-      label: back ? 'Back 10 seconds' : 'Forward 10 seconds',
-      tooltip: back ? 'Back 10 s' : 'Forward 10 s',
+      label: back ? 'Back $seconds seconds' : 'Forward $seconds seconds',
+      tooltip: back ? 'Back $seconds s' : 'Forward $seconds s',
       onTap: onTap,
       radius: size / 2,
       builder: (context, s) => AnimatedContainer(
@@ -276,7 +338,7 @@ class _Jump extends StatelessWidget {
             LucideIcon(back ? 'rotate-ccw' : 'rotate-cw', size: size * 0.6, color: p.ink),
             Padding(
               padding: EdgeInsets.only(top: size * 0.04),
-              child: Text('10', style: Txt.mono(size * 0.2, p.ink, weight: FontWeight.w600)),
+              child: Text('$seconds', style: Txt.mono(size * 0.2, p.ink, weight: FontWeight.w600)),
             ),
           ],
         ),
@@ -302,17 +364,40 @@ class _BottomBar extends StatelessWidget {
     final p = House.paletteOf(context);
     final d = data;
     final a = actions;
-    final time = Text(
-      d.duration > 0 ? '${clockOf(d.position)} / ${clockOf(d.duration)}' : clockOf(d.position),
-      softWrap: false,
-      style: Txt.mono(Tokens.textSm, p.ink),
-    );
+    final clock = Text(d.clock, softWrap: false, style: Txt.mono(Tokens.textSm, p.ink));
+    // A tap swaps the film's length for the time left (remembered in Settings).
+    final time = a.onToggleClock == null || d.duration <= 0
+        ? clock
+        : Pressable(
+            label: d.showRemaining ? 'Show the total length' : 'Show the time remaining',
+            tooltip: d.showRemaining ? 'Show the total length' : 'Show the time remaining',
+            onTap: a.onToggleClock,
+            radius: Tokens.radiusFull,
+            builder: (context, s) => AnimatedContainer(
+              duration: Tokens.durFast,
+              constraints: const BoxConstraints(minHeight: Tokens.targetMin),
+              padding: const EdgeInsets.symmetric(horizontal: Tokens.space2),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(Tokens.radiusFull),
+                color: pressWash(p, s),
+              ),
+              child: Center(widthFactor: 1, child: clock),
+            ),
+          );
     final transport = <Widget>[
       if (!compact && d.desktop) ...[
         PlayButton(playing: d.playing, onTap: a.onPlayPause),
         const SizedBox(width: Tokens.space1),
-        _Jump(back: true, onTap: () => a.onSeekBy(const Duration(seconds: -10))),
-        _Jump(back: false, onTap: () => a.onSeekBy(const Duration(seconds: 10))),
+        _Jump(
+          back: true,
+          seconds: d.seekStep,
+          onTap: () => a.onSeekBy(Duration(seconds: -d.seekStep)),
+        ),
+        _Jump(
+          back: false,
+          seconds: d.seekStep,
+          onTap: () => a.onSeekBy(Duration(seconds: d.seekStep)),
+        ),
         if (a.onPrevious != null)
           CtlButton(
             icon: 'skip-back',
@@ -340,7 +425,8 @@ class _BottomBar extends StatelessWidget {
           label: d.muted ? 'Unmute' : 'Mute',
           onTap: a.onMute,
         ),
-      const SizedBox(width: Tokens.space2),
+      // The pressable clock brings its own side padding.
+      if (identical(time, clock)) const SizedBox(width: Tokens.space2),
       time,
     ];
     final tools = <Widget>[
@@ -361,13 +447,16 @@ class _BottomBar extends StatelessWidget {
       CtlButton(
         icon: 'captions',
         label: 'Subtitles (S)',
-        active: d.hasSubtitle || d.openMenu == AuditoriumMenu.subtitles,
+        active:
+            d.hasSubtitle ||
+            d.openMenu == AuditoriumMenu.subtitles ||
+            d.openMenu == AuditoriumMenu.secondSubtitle,
         onTap: () => a.onMenu(AuditoriumMenu.subtitles),
       ),
       CtlButton(
         icon: 'audio-lines',
         label: 'Audio track (A)',
-        active: d.openMenu == AuditoriumMenu.audio,
+        active: d.openMenu == AuditoriumMenu.audio || d.openMenu == AuditoriumMenu.sound,
         onTap: () => a.onMenu(AuditoriumMenu.audio),
       ),
       CtlText(
@@ -380,7 +469,11 @@ class _BottomBar extends StatelessWidget {
         CtlButton(
           icon: 'scan',
           label: 'Picture: ${d.fit.label}',
-          active: d.fit != PictureFit.fit || d.openMenu == AuditoriumMenu.picture,
+          active:
+              d.fit != PictureFit.fit ||
+              d.pictureAdjusted ||
+              d.openMenu == AuditoriumMenu.picture ||
+              d.openMenu == AuditoriumMenu.adjust,
           onTap: () => a.onMenu(AuditoriumMenu.picture),
         ),
       CtlButton(

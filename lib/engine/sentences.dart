@@ -5,6 +5,9 @@ import 'tickets.dart';
 /// The sign-in token stopped working (a 401).
 const String kTicketExpired = 'Your ticket expired. Sign in again.';
 
+/// Subtitles were found by name, not by the file's fingerprint: the viewer chooses.
+const String kPickASubtitle = 'No exact match for this file. Pick the subtitles that fit.';
+
 String sentenceFor(ThreadingFailure f, {int? retryAfterSeconds}) => switch (f) {
   ThreadingFailure.fileTooSmall => '',
   ThreadingFailure.offline => "You're offline, so the film plays without new subtitles.",

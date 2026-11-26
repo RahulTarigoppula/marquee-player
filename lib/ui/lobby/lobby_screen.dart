@@ -1,6 +1,7 @@
-// The Lobby: the room you come home to. The last film on the marquee with Resume, the films you
-// are part-way through, everything you have played, and two clear ways in — Open file, Open URL
-// (or drop a file anywhere on desktop).
+// The Lobby: the room you come home to. Two tabs. Home: the last film on the marquee with
+// Resume, the films you are part-way through, everything you have played, and two clear ways in
+// — Open file, Open URL (or drop a file anywhere on desktop). Library: every video on the device
+// (library_view.dart).
 import 'dart:async';
 
 import 'package:clock/clock.dart';
@@ -10,6 +11,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../engine/models/media.dart';
 import '../../engine/models/settings.dart';
+import '../../state/library.dart';
 import '../../state/providers.dart';
 import '../../theme/house.dart';
 import '../../theme/tokens.dart';
@@ -19,6 +21,7 @@ import '../components/primitives.dart';
 import '../components/room.dart';
 import '../components/theme_choice.dart';
 import 'film_card.dart';
+import 'library_view.dart';
 import 'lobby_actions.dart';
 import 'lobby_hero.dart';
 
@@ -74,8 +77,15 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
     final p = h.palette;
     final pending = ref.watch(pendingRemovalsProvider);
     final library = ref.watch(libraryProvider);
+    // Which tab was open last is read from the database too; until it is known (a frame or
+    // two) the room is bare, so the Lobby never opens on Home and jumps to the Library.
+    final view = ref.watch(lobbyViewProvider);
+    final tab = view.value?.tab ?? LobbyTab.home;
+    final onLibrary = tab == LobbyTab.library;
     // The first read of the library takes a moment: show the bare room, not "empty".
-    final loading = !library.hasValue && !library.hasError;
+    final loading =
+        (!view.hasValue && !view.hasError) ||
+        (!onLibrary && !library.hasValue && !library.hasError);
     final cards = [
       for (final c in library.value ?? const <LobbyCard>[])
         if (!pending.contains(c.id)) c,
@@ -91,7 +101,7 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
       now: _now,
       wide: wide,
       filmCount: cards.length,
-      showOpen: cards.isNotEmpty && wide,
+      showOpen: (cards.isNotEmpty || onLibrary) && wide,
       theme: settings.lobbyTheme,
       onTheme: (t) =>
           unawaited(ref.read(settingsProvider.notifier).edit((s) => s.copyWith(lobbyTheme: t))),
@@ -99,10 +109,30 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
       onOpenUrl: () => unawaited(openUrl(context, ref)),
       onSettings: () => ref.read(roomProvider.notifier).go(Room.ticketOffice),
     );
+    // The bar and the tab switch travel together at the top of whichever tab is showing.
+    final header = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        bar,
+        _Tabs(
+          tab: tab,
+          margin: margin,
+          onChanged: (t) => ref.read(lobbyViewProvider.notifier).setTab(t),
+        ),
+      ],
+    );
 
     final Widget body;
     if (loading) {
       body = Align(alignment: Alignment.topCenter, child: bar);
+    } else if (onLibrary) {
+      body = LibraryPane(
+        header: header,
+        footer: _Footer(margin: margin),
+        wide: wide,
+        margin: margin,
+      );
     } else if (cards.isEmpty) {
       body = LayoutBuilder(
         builder: (context, c) => SingleChildScrollView(
@@ -112,7 +142,7 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                bar,
+                header,
                 _EmptyLobby(
                   wide: wide,
                   night: night,
@@ -120,6 +150,7 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
                   dragOver: widget.dragOver,
                   onOpenFile: () => unawaited(openPickedFile(ref)),
                   onOpenUrl: () => unawaited(openUrl(context, ref)),
+                  onLibrary: () => ref.read(lobbyViewProvider.notifier).setTab(LobbyTab.library),
                 ),
                 _Footer(margin: margin),
               ],
@@ -143,7 +174,7 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
               minHeight: wide
                   ? (size.height * 0.62).clamp(320.0, 560.0)
                   : (size.height * 0.5).clamp(380.0, 520.0),
-              top: bar,
+              top: header,
               onPlay: () => unawaited(openCard(ref, latest)),
               onMenu: (at) => _menu(latest, at),
             ),
@@ -218,7 +249,7 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
         IgnorePointer(
           child: AnimatedOpacity(
             duration: h.reducedMotion ? Duration.zero : Tokens.durBase,
-            opacity: widget.dragOver && cards.isNotEmpty ? 1 : 0,
+            opacity: widget.dragOver && (cards.isNotEmpty || onLibrary) ? 1 : 0,
             child: ColoredBox(
               color: p.bg.withValues(alpha: 0.72),
               child: Center(
@@ -324,6 +355,32 @@ class _TopBar extends StatelessWidget {
           IconMark(icon: 'settings-2', label: 'Settings', onTap: onSettings),
         ],
       ),
+    );
+  }
+}
+
+/// Home | Library, under the top bar, in line with the title above it.
+class _Tabs extends StatelessWidget {
+  final LobbyTab tab;
+  final double margin;
+  final ValueChanged<LobbyTab> onChanged;
+  const _Tabs({required this.tab, required this.margin, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    final choice = SegmentedChoice<LobbyTab>(
+      key: const ValueKey('lobby-tabs'),
+      groupLabel: 'Show',
+      value: tab,
+      onChanged: onChanged,
+      segments: const [
+        Segment(LobbyTab.home, 'Home', icon: 'house'),
+        Segment(LobbyTab.library, 'Library', icon: 'library'),
+      ],
+    );
+    return Padding(
+      padding: EdgeInsets.fromLTRB(margin, Tokens.space4, margin, Tokens.space2),
+      child: Align(alignment: Alignment.centerLeft, child: choice),
     );
   }
 }
@@ -477,6 +534,7 @@ class _EmptyLobby extends StatelessWidget {
   final bool dragOver;
   final VoidCallback onOpenFile;
   final VoidCallback onOpenUrl;
+  final VoidCallback onLibrary;
   const _EmptyLobby({
     required this.wide,
     required this.night,
@@ -484,6 +542,7 @@ class _EmptyLobby extends StatelessWidget {
     required this.dragOver,
     required this.onOpenFile,
     required this.onOpenUrl,
+    required this.onLibrary,
   });
 
   @override
@@ -531,6 +590,9 @@ class _EmptyLobby extends StatelessWidget {
             style: Txt.body(Tokens.textSm, dragOver ? p.accent : p.inkMuted),
           ),
         ],
+        // Nothing played yet: the videos already on the device are one tap away.
+        const SizedBox(height: Tokens.space3),
+        TextAction('Browse the videos on this device', onTap: onLibrary),
       ],
     );
     return Padding(

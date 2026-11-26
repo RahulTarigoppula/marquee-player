@@ -153,7 +153,9 @@ class ThreadingMachine {
             filenameSearchDone: _filenameSearchDone,
             at: _state.phase,
           ),
-          sentence: sentenceFor(f, retryAfterSeconds: retryAfterSeconds),
+          sentence: f == ThreadingFailure.noResults && _state.candidates.isNotEmpty
+              ? kPickASubtitle
+              : sentenceFor(f, retryAfterSeconds: retryAfterSeconds),
           stalledAt: clock.now(),
         ),
       ),
@@ -273,9 +275,20 @@ class ThreadingMachine {
     _emit(_state.copyWith(candidates: ranked));
 
     final hashHit = ranked.isNotEmpty && ranked.first.candidate.moviehashMatch;
-    if (!byName && !hashHit) {
-      // No exact print. Search by name now (free — search is unlimited) so the rows are
-      // already there when the numeral stalls; never spend a ticket on a guess without a tap.
+    if (!byName && hashHit) {
+      // The exact print, found by its fingerprint: the one case worth a ticket without a tap.
+      final pick = autoPickOf(ranked);
+      if (pick != null) {
+        await _download(gen, pick);
+        return;
+      }
+      // Only machine translations matched: nothing worth a ticket, the rungs stay on offer.
+      _stall(ThreadingFailure.noResults);
+      return;
+    }
+    if (!byName) {
+      // No exact print. Search by name now (free, search is unlimited) so the rows are already
+      // there when the numeral stalls.
       _filenameSearchDone = true;
       try {
         final named = await _guard(() => ports.search(_nameRequest()), config.searchDeadline);
@@ -284,16 +297,10 @@ class ThreadingMachine {
       } on ThreadingException {
         if (gen != _generation) return;
       }
-      _stall(ThreadingFailure.noResults);
-      return;
     }
-
-    final pick = autoPickOf(ranked);
-    if (pick == null) {
-      _stall(ThreadingFailure.noResults);
-      return;
-    }
-    await _download(gen, pick);
+    // Rows found by name are guesses: they are listed for the viewer to choose from. A ticket
+    // is never spent, and a `.1.srt` never written, without a tap.
+    _stall(ThreadingFailure.noResults);
   }
 
   /// [first] in order, then every row of [rest] not already listed (same provider and id).

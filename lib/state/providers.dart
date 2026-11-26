@@ -135,9 +135,8 @@ class AccountNotifier extends Notifier<Account> {
         ref.read(quotaProvider.notifier).set(await _client.userInfo());
       }
     } on ThreadingException catch (e) {
-      if (e.failure == ThreadingFailure.unauthorized) {
-        state = const Account(status: AccountStatus.expired, sentence: kTicketExpired);
-      }
+      // A dead token must leave the client and storage too, or every later search sends it.
+      if (e.failure == ThreadingFailure.unauthorized) markExpired();
     } on Object {
       // Secure storage unavailable (e.g. a locked keyring): stay signed out, quietly.
     } finally {
@@ -175,6 +174,13 @@ class AccountNotifier extends Notifier<Account> {
           ThreadingFailure.rateLimited => 'OpenSubtitles asked us to wait a moment.',
           _ => "OpenSubtitles didn't answer. Try again in a moment.",
         },
+      );
+    } on Object {
+      // A malformed answer or a locked keystore: never leave the form on "signing in".
+      state = Account(
+        status: AccountStatus.error,
+        username: username,
+        sentence: "Couldn't sign in. Try again in a moment.",
       );
     }
   }

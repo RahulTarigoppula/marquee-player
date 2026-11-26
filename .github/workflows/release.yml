@@ -1,10 +1,16 @@
 name: release
 
+# What each trigger does:
+#   tag v*             gate -> build (Windows + Android) -> publish a GitHub Release
+#   workflow_dispatch  gate -> build; the files are run artifacts (14 days), nothing is published.
+#                      Use it on main to try a build before tagging.
+#   schedule           the real-playback test alone (catches a runner image or libmpv drift)
+# The real-playback job never holds a release back: it is new, and a flaky test must not cost a tag.
 on:
   push:
     tags: ['v*']
   schedule:
-    - cron: '0 4 * * 1'          # Mondays 04:00 UTC: integration tests only
+    - cron: '0 4 * * 1'          # Mondays 04:00 UTC: the playback test only (no analyze, no builds)
   workflow_dispatch:             # manual run: artifacts only, no Release
 
 permissions:
@@ -18,10 +24,12 @@ env:
   FLUTTER_VERSION: '3.47.5'
 
 jobs:
-  # ---------------------------------------------------------------- integration
-  test:
-    name: integration (real libmpv, windows)
-    runs-on: windows-latest      # VS 2022 + C++ workload preinstalled
+  # ---------------------------------------------------------------- gate
+  # What a release waits for. Not on the schedule: ci.yml already runs these on every push.
+  gate:
+    name: analyze + unit tests (windows)
+    if: github.event_name != 'schedule'
+    runs-on: windows-latest      # Visual Studio + C++ workload preinstalled
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
@@ -33,14 +41,20 @@ jobs:
       - run: flutter analyze --fatal-infos
       - name: Unit + widget tests (goldens are Linux-only)
         run: flutter test --exclude-tags golden,screenshot --reporter github
-      - name: Integration tests against the committed fixtures
-        if: hashFiles('integration_test/**') != ''
-        run: flutter test integration_test -d windows
+
+  # ---------------------------------------------------------------- real playback
+  # Its own job, beside the gate and never in `needs`: advisory for a tag or a manual run,
+  # blocking on the schedule (where it is the only job, and a red run is how we hear of it).
+  playback:
+    name: real playback
+    uses: ./.github/workflows/playback.yml
+    with:
+      blocking: ${{ github.event_name == 'schedule' }}
 
   # ---------------------------------------------------------------- build matrix
   build:
     name: ${{ matrix.label }}
-    needs: test
+    needs: gate
     if: github.event_name != 'schedule'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25          # N17: tag -> artifacts in under 25 min
@@ -101,9 +115,19 @@ jobs:
           $dlls = 'msvcp140.dll','msvcp140_1.dll','msvcp140_2.dll','vcruntime140.dll','vcruntime140_1.dll'
           $redist = Get-Item "${env:ProgramFiles}\Microsoft Visual Studio\*\*\VC\Redist\MSVC\*\x64\Microsoft.VC*.CRT" -ErrorAction SilentlyContinue |
             Sort-Object FullName -Descending | Select-Object -First 1
+          # The whole CRT folder, which is the supported way to deploy app-local: a plugin built
+          # with a newer toolset may want msvcp140_atomic_wait.dll or vcruntime140_threads.dll,
+          # and a hand-picked list would only fail on a friend's PC.
+          if ($redist) {
+            foreach ($f in Get-ChildItem $redist.FullName -Filter '*.dll') {
+              if (-not (Test-Path "$src/$($f.Name)")) { Copy-Item $f.FullName "$src/$($f.Name)"; Write-Host "bundled $($f.Name) from $($redist.FullName)" }
+            }
+          } else {
+            Write-Host "::warning::No Visual C++ redistributable folder under Visual Studio; falling back to System32 for the runtime DLLs"
+          }
           foreach ($dll in $dlls) {
             if (Test-Path "$src/$dll") { continue }
-            $from = if ($redist -and (Test-Path "$($redist.FullName)/$dll")) { "$($redist.FullName)/$dll" } else { "$env:WINDIR/System32/$dll" }
+            $from = "$env:WINDIR/System32/$dll"
             if (Test-Path $from) { Copy-Item $from "$src/$dll"; Write-Host "bundled $dll from $from" }
           }
 
@@ -142,11 +166,46 @@ jobs:
           $src = (Resolve-Path 'build/windows/x64/runner/Release').Path
           $out = (Resolve-Path 'out').Path
           & $iscc "/DAppVersion=${{ steps.v.outputs.name }}" "/DSourceDir=$src" "/DOutputDir=$out" 'windows/installer/marquee.iss'
-          if ($LASTEXITCODE -ne 0) { Write-Host "::error::ISCC failed ($LASTEXITCODE)"; exit 1 }
-          Get-ChildItem out/*.zip, out/*.exe | Get-FileHash -Algorithm SHA256 |
-            ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" } |
-            Out-File -Encoding ascii out/SHA256SUMS-windows.txt
-          Get-Content out/SHA256SUMS-windows.txt
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error title=Installer::ISCC could not compile windows/installer/marquee.iss (exit $LASTEXITCODE): the line it names is in the log above"; exit 1 }
+          if (-not (Test-Path out/marquee-windows-x64-setup.exe)) { Write-Host "::error title=Installer::ISCC succeeded but out/marquee-windows-x64-setup.exe is missing"; exit 1 }
+
+      # Advisory: a red result is reported, the files are still built and published.
+      - name: Installer smoke test (install, launch, upgrade over the running app, uninstall)
+        if: matrix.target == 'windows'
+        id: smoke
+        continue-on-error: true
+        timeout-minutes: 6       # a hung Setup must cost this step, never the build
+        shell: pwsh
+        run: ./scripts/installer-smoke.ps1 -Installer out/marquee-windows-x64-setup.exe -LogDir "$env:RUNNER_TEMP/installer-smoke"
+
+      - name: Name the installer for people, checksum
+        if: matrix.target == 'windows'
+        shell: pwsh
+        env:
+          SMOKE: ${{ steps.smoke.outcome }}
+        run: |
+          if ($env:SMOKE -ne 'success') {
+            Write-Host "::warning title=Installer smoke test failed (advisory)::The installer was built and will be published, but installing, upgrading or uninstalling it misbehaved on the runner. See the 'Installer smoke test' step and the installer-smoke-log artifact."
+          }
+          # The same file under the name a friend looks for. The old name stays: README links use it.
+          Copy-Item out/marquee-windows-x64-setup.exe out/Marquee-Windows-Setup.exe
+          $sums = Get-ChildItem out/*.zip, out/*.exe | Sort-Object Name | Get-FileHash -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" }
+          # LF line ends: to `sha256sum -c` a CRLF file names files that end in a carriage return.
+          $sumsFile = Join-Path (Resolve-Path out).Path 'SHA256SUMS-windows.txt'
+          [IO.File]::WriteAllText($sumsFile, (($sums -join "`n") + "`n"))
+          Get-Content $sumsFile
+          $rows = Get-ChildItem out | Sort-Object Name | ForEach-Object { "| ``$($_.Name)`` | $([math]::Round($_.Length / 1MB, 1)) MB |" }
+          @("### Windows files (${{ steps.v.outputs.name }})", '', '| File | Size |', '|---|---|') + $rows |
+            Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - uses: actions/upload-artifact@v4
+        if: matrix.target == 'windows' && steps.smoke.outcome == 'failure'
+        with:
+          name: installer-smoke-log
+          path: ${{ runner.temp }}/installer-smoke/
+          retention-days: 14
+          if-no-files-found: ignore
 
       # ------------------------------------------------------------- Android
       - name: Decode keystore
@@ -203,8 +262,12 @@ jobs:
             fi
             cp "$src" "out/marquee-android-$abi.apk"
           done
+          # The same file under the name a friend looks for ("arm64-v8a" means nothing to them).
+          cp out/marquee-android-arm64-v8a.apk out/Marquee-Android.apk
           if [ -z "${ANDROID_KEYSTORE_FILE:-}" ]; then
-            echo "SIGNING=debug" >> "$GITHUB_ENV"
+            SIGNED="DEBUG key (no ANDROID_KEYSTORE_* secrets): it cannot be installed over a release-signed Marquee"
+          else
+            SIGNED="release key ($(grep -m1 'certificate DN' <<<"$certs" | sed 's/^.*certificate DN: //'))"
           fi
           # No universal APK: libmpv is ~30-40 MB per ABI (N11)
           test ! -f build/app/outputs/flutter-apk/app-release.apk
@@ -215,6 +278,15 @@ jobs:
           fi
           (cd out && sha256sum *.apk > SHA256SUMS-android.txt)
           ls -la out
+          {
+            echo "### Android files (${{ steps.v.outputs.name }}, versionCode base ${{ steps.v.outputs.code }})"
+            echo
+            echo "Signed with the $SIGNED."
+            echo
+            echo "| File | Size |"
+            echo "|---|---|"
+            for f in out/*.apk; do echo "| \`$(basename "$f")\` | $(( $(stat -c%s "$f") / 1024 / 1024 )) MB |"; done
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -225,46 +297,89 @@ jobs:
   # ---------------------------------------------------------------- publish
   publish:
     needs: build
-    if: github.ref_type == 'tag'
+    # A pushed tag only: a manual run started ON a tag builds artifacts like any other manual run.
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4
-        with: { path: dist, merge-multiple: true }
-      - run: ls -la dist
+        # Only the build outputs: the playback evidence and installer logs are not release files.
+        with: { path: dist, pattern: 'marquee-*', merge-multiple: true }
+      - name: Every file a friend is told to download is here
+        run: |
+          set -euo pipefail
+          ls -la dist
+          missing=0
+          for f in Marquee-Windows-Setup.exe Marquee-Android.apk \
+                   marquee-windows-x64-setup.exe marquee-windows-x64-portable.zip \
+                   marquee-android-arm64-v8a.apk marquee-android-armeabi-v7a.apk marquee-android-x86_64.apk \
+                   SHA256SUMS-windows.txt SHA256SUMS-android.txt; do
+            if [ ! -s "dist/$f" ]; then echo "::error title=Release file missing::$f is not among the build artifacts"; missing=1; fi
+          done
+          [ "$missing" = 0 ]
+          # What was built is what gets published (the artifacts crossed two jobs to get here).
+          (cd dist && cat SHA256SUMS-android.txt SHA256SUMS-windows.txt | tr -d '\r' | sha256sum -c -)
       - name: Release notes
+        env:
+          HAS_OS_KEY: ${{ secrets.OS_API_KEY != '' }}
         run: |
           cat > notes.md <<'NOTES'
           ## Install
 
           | You have | Download |
           |---|---|
-          | **Windows 10/11** | `marquee-windows-x64-setup.exe`: installs for your user only (no admin), adds Start-menu entry and "Open with → Marquee" for video files |
-          | Windows, no install | `marquee-windows-x64-portable.zip`: extract anywhere, run `marquee.exe` |
-          | **Android 8+ phone** | `marquee-android-arm64-v8a.apk` (every phone since ~2019) · `armeabi-v7a` for very old phones · `x86_64` for emulators |
+          | **Windows 10 or 11** | **`Marquee-Windows-Setup.exe`**: installs for you only (no admin needed), adds a Start menu entry and "Open with Marquee" for video files |
+          | **Android 8 or newer** | **`Marquee-Android.apk`**: open it on the phone and allow "install unknown apps" once |
+
+          The other files are for the few who need them:
+
+          | File | What it is |
+          |---|---|
+          | `marquee-windows-x64-portable.zip` | Windows without installing: extract anywhere, run `marquee.exe` |
+          | `marquee-windows-x64-setup.exe` | the same installer as `Marquee-Windows-Setup.exe`, under its old name |
+          | `marquee-android-arm64-v8a.apk` | the same file as `Marquee-Android.apk`, under its old name |
+          | `marquee-android-armeabi-v7a.apk` | for an old 32-bit phone that refuses `Marquee-Android.apk` |
+          | `marquee-android-x86_64.apk` | for emulators and Intel Chromebooks |
 
           **Windows:** the installer is not code-signed (certificates cost money), so SmartScreen says
-          "Windows protected your PC" → **More info → Run anyway**.
+          "Windows protected your PC". Choose **More info**, then **Run anyway**. Installing over an
+          older Marquee keeps your library, settings and resume points.
 
-          **Android:** open the APK on the phone and allow "install unknown apps" once.
-
-          **Subtitles:** sign in with a free OpenSubtitles.com account in the Ticket Office (gear icon).
-          If this build has no API key baked in, paste a free consumer key there too (OpenSubtitles →
-          Profile → API Consumers).
-
-          Subtitles by OpenSubtitles.com. Playback by libmpv / FFmpeg / libass (LGPL, see
-          the Ticket Office for notices and source links). Verify downloads against `SHA256SUMS-*.txt`.
-          No telemetry, no accounts of our own: only the file's hash, size and a title query ever leave the device.
           NOTES
           APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -rV | while read -r d; do "$d/apksigner" --version >/dev/null 2>&1 && { echo "$d/apksigner"; break; }; done)
-          if [ -n "$APKSIGNER" ] && "$APKSIGNER" verify --print-certs dist/marquee-android-arm64-v8a.apk 2>&1 | grep -qi "CN=Android Debug"; then
+          if [ -n "$APKSIGNER" ] && "$APKSIGNER" verify --print-certs dist/Marquee-Android.apk 2>&1 | grep -qi "CN=Android Debug"; then
             cat >> notes.md <<'NOTES'
+          **Android:** this build is signed with a throwaway key (the repository has no release
+          keystore), so it will not install over an earlier Marquee. Uninstall the old one first;
+          that also clears its library.
 
-          > **Android update note:** this build is signed with a throwaway CI key (the repo has no
-          > release keystore secret yet), so it will not install over an earlier Marquee APK ,
-          > uninstall the old one first. Once the owner adds `ANDROID_KEYSTORE_*` secrets, every
-          > later release updates in place.
+          NOTES
+          else
+            cat >> notes.md <<'NOTES'
+          **Android:** it installs over an earlier Marquee and keeps your library, settings and
+          resume points.
+
           NOTES
           fi
+          if [ "$HAS_OS_KEY" = "true" ]; then
+            cat >> notes.md <<'NOTES'
+          **Subtitles:** a subtitle file beside the film and subtitles inside the film work at once.
+          To search online, sign in with a free OpenSubtitles.com account in Settings (the gear icon).
+
+          NOTES
+          else
+            cat >> notes.md <<'NOTES'
+          **Subtitles:** a subtitle file beside the film and subtitles inside the film work at once.
+          Searching online needs a free OpenSubtitles.com account and a free API key of your own
+          (OpenSubtitles.com, Profile, API Consumers): add both in Settings (the gear icon).
+
+          NOTES
+          fi
+          cat >> notes.md <<'NOTES'
+          Subtitles by OpenSubtitles.com. Playback by libmpv / FFmpeg / libass (LGPL, see
+          Settings for notices and source links). Verify downloads against `SHA256SUMS-*.txt`.
+          No telemetry, no accounts of our own: only the file's hash, size and a title query ever
+          leave the device.
+          NOTES
           cat notes.md
       - uses: softprops/action-gh-release@v2
         with:

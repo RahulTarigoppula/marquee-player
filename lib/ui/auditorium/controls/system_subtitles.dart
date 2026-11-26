@@ -7,7 +7,9 @@
 // own subtitle rendering and this widget draws mpv's `sub-text` with Flutter, whose text
 // stack falls back to the phone's system fonts for every script. Bitmap subtitles (PGS,
 // VobSub) never come here — mpv keeps drawing them. Styling follows Settings (size, look,
-// placement); ASS positioning is lost for these tracks, which is the honest trade.
+// placement, colour); ASS positioning is lost for these tracks, which is the honest trade.
+// Only the PRIMARY subtitle comes here: a second subtitle (mpv `secondary-sid`) stays with
+// libass at the top of the picture.
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -15,6 +17,12 @@ import 'package:flutter/material.dart';
 import '../../../engine/models/settings.dart';
 import '../../../player/engine.dart';
 import '../../../theme/tokens.dart';
+
+/// mpv's `#RRGGBB` as a Flutter colour (white if it is ever anything else).
+Color _tintOf(SubtitleTint tint) {
+  final rgb = int.tryParse(tint.mpvColor.replaceFirst('#', ''), radix: 16);
+  return rgb == null ? const Color(0xFFFFFFFF) : Color(0xFF000000 | rgb);
+}
 
 class SystemFontSubtitles extends StatefulWidget {
   final PlayerEngine engine;
@@ -74,7 +82,7 @@ class _SystemFontSubtitlesState extends State<SystemFontSubtitles> {
           fontFamily: Tokens.fontSubtitle,
           fontSize: size,
           height: 1.25,
-          color: const Color(0xFFFFFFFF),
+          color: _tintOf(s.subtitleTint),
           fontWeight: FontWeight.w500,
           shadows: box
               ? null

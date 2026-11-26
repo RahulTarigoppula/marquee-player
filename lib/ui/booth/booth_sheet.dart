@@ -1,6 +1,10 @@
 // The Subtitle Booth: everything about subtitles (and the audio delay), never above 70 %.
 // The film keeps playing behind the glass. Style choices are Settings — they persist and
 // apply to every film.
+//
+// Once the film has started, the subtitle search lives HERE, not over the picture: what was
+// found by name (pick one), why a search stalled and what to try next, and the progress of a
+// search or download asked for from this sheet.
 import 'dart:async';
 import 'dart:ui' as ui;
 
@@ -8,7 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../engine/models/models.dart';
-import '../../platform/files.dart';
+import '../../engine/sentences.dart';
 import '../../player/engine.dart';
 import '../../state/providers.dart';
 import '../../state/session.dart';
@@ -45,9 +49,85 @@ class _BoothSheetState extends ConsumerState<BoothSheet> {
   void _edit(Settings Function(Settings) f) =>
       unawaited(ref.read(settingsProvider.notifier).edit(f));
 
-  Future<void> _loadFile() async {
-    final path = await pickSubtitleFile();
-    if (path != null) await ref.read(sessionProvider.notifier).loadSubtitleFile(path);
+  /// Through the session: it keeps Android from taking the picker for a trip Home (which
+  /// would shrink the film into picture in picture behind it).
+  Future<void> _loadFile() => ref.read(sessionProvider.notifier).pickAndLoadSubtitle();
+
+  /// The search as it stands: a status line while it runs, the sentence it stalled on, the
+  /// prints it found (a tap downloads that one: the only thing here that spends a ticket)
+  /// and the ways on from a stall.
+  List<Widget> _searchRows(FilmSession s, HousePalette p) {
+    final t = s.threading;
+    final n = ref.read(sessionProvider.notifier);
+    final stalled = t.event is Stalled ? t.event! as Stalled : null;
+    final notice = t.event is Notice ? (t.event! as Notice).sentence : null;
+    bool same(ScoredCandidate? a, ScoredCandidate b) =>
+        a != null &&
+        a.candidate.provider == b.candidate.provider &&
+        a.candidate.id == b.candidate.id;
+    return [
+      if (s.subtitlesBusy)
+        Padding(
+          padding: const EdgeInsets.only(bottom: Tokens.space2),
+          child: Semantics(
+            liveRegion: true,
+            child: Text(
+              t.phase == LeaderPhase.downloading
+                  ? 'DOWNLOADING ${languageName(t.picked?.candidate.language ?? 'en').toUpperCase()} SUBTITLES'
+                  : 'LOOKING FOR SUBTITLES',
+              style: Txt.label(p.accent),
+            ),
+          ),
+        ),
+      if (stalled != null && stalled.sentence.isNotEmpty) ...[
+        Sentence(stalled.sentence),
+        const SizedBox(height: Tokens.space2),
+      ],
+      if (notice != null) ...[
+        Sentence(notice, color: p.warning),
+        const SizedBox(height: Tokens.space2),
+      ],
+      for (final c in t.candidates.take(8))
+        _PrintRow(
+          scored: c,
+          picked: same(t.picked, c),
+          downloading: t.phase == LeaderPhase.downloading && !t.stalled && same(t.picked, c),
+          onTap: () => unawaited(n.pick(c)),
+        ),
+      if (stalled != null)
+        Wrap(
+          children: [
+            for (final a in stalled.next)
+              ...switch (a) {
+                FallbackAction.signIn => [
+                  TextAction(
+                    switch (stalled.failure) {
+                      ThreadingFailure.noApiKey => 'Add your free API key…',
+                      ThreadingFailure.unauthorized => 'Sign in again…',
+                      _ => 'Sign in for more downloads (free)…',
+                    },
+                    primary: true,
+                    onTap: () {
+                      _close();
+                      ref.read(roomProvider.notifier).go(Room.ticketOffice);
+                    },
+                  ),
+                ],
+                FallbackAction.retry => [
+                  TextAction('Try again', onTap: () => unawaited(n.retrySubtitles())),
+                ],
+                FallbackAction.filenameSearch => [
+                  TextAction('Search by filename', onTap: () => unawaited(n.searchByFilename())),
+                ],
+                FallbackAction.subdl => [
+                  TextAction('Use the Subdl slot', onTap: () => unawaited(n.searchSubdl())),
+                ],
+                // The title field is just below; the film is already playing.
+                FallbackAction.manualSearch || FallbackAction.skip => const <Widget>[],
+              },
+          ],
+        ),
+    ];
   }
 
   @override
@@ -59,6 +139,8 @@ class _BoothSheetState extends ConsumerState<BoothSheet> {
     final pb = ref.watch(playbackProvider).value ?? s.engine.snapshot;
     final attached = s.threading.attached;
     final engine = s.engine;
+    // Track choices go through the session, which remembers them for this film.
+    final notifier = ref.read(sessionProvider.notifier);
     final attachedId = attached is ExternalSubtitle ? engine.externalIdFor(attached.path) : null;
     final h = MediaQuery.sizeOf(context).height;
     // The on-screen keyboard (Android) must never cover the search field.
@@ -137,7 +219,7 @@ class _BoothSheetState extends ConsumerState<BoothSheet> {
                                     _TrackRow(
                                       title: 'Off',
                                       selected: !pb.hasSubtitle,
-                                      onTap: () => unawaited(engine.subtitlesOff()),
+                                      onTap: () => unawaited(notifier.subtitlesOff()),
                                     ),
                                     if (attached is ExternalSubtitle)
                                       _TrackRow(
@@ -153,12 +235,7 @@ class _BoothSheetState extends ConsumerState<BoothSheet> {
                                             ? 'saved beside the file'
                                             : 'saved in app storage',
                                         selected: attachedId != null && pb.subtitleId == attachedId,
-                                        onTap: () => unawaited(
-                                          engine.attachSubtitle(
-                                            attached.path,
-                                            language: attached.language,
-                                          ),
-                                        ),
+                                        onTap: () => unawaited(notifier.useAttachedSubtitle()),
                                       ),
                                     for (final t in pb.subtitleTracks.where(
                                       (t) => t.id != attachedId,
@@ -168,7 +245,7 @@ class _BoothSheetState extends ConsumerState<BoothSheet> {
                                             '${(t.language ?? '—').toUpperCase()}  ${t.title ?? (engine.isExternal(t.id) ? 'file' : 'embedded')}',
                                         chip: isBitmapSubtitle(t) ? 'IMAGE' : null,
                                         selected: pb.subtitleId == t.id,
-                                        onTap: () => unawaited(engine.selectSubtitle(t.id)),
+                                        onTap: () => unawaited(notifier.selectSubtitle(t.id)),
                                       ),
                                     Align(
                                       alignment: Alignment.centerLeft,
@@ -207,6 +284,19 @@ class _BoothSheetState extends ConsumerState<BoothSheet> {
                                           ),
                                       ],
                                     ),
+                                    const SectionLabel('Colour'),
+                                    Wrap(
+                                      spacing: Tokens.space2,
+                                      children: [
+                                        for (final tint in SubtitleTint.values)
+                                          _Choice(
+                                            label: tint.label.toLowerCase(),
+                                            on: settings.subtitleTint == tint,
+                                            onTap: () =>
+                                                _edit((x) => x.copyWith(subtitleTint: tint)),
+                                          ),
+                                      ],
+                                    ),
                                     const SectionLabel('Position'),
                                     Wrap(
                                       spacing: Tokens.space2,
@@ -238,6 +328,7 @@ class _BoothSheetState extends ConsumerState<BoothSheet> {
                                       ),
                                     ),
                                     const SectionLabel('Find another print'),
+                                    ..._searchRows(s, p),
                                     TextField(
                                       controller: _search,
                                       style: Txt.body(Tokens.textBase, p.ink),
@@ -346,6 +437,83 @@ class _AudioDelay extends StatelessWidget {
         const SizedBox(width: Tokens.space2),
         if (ms != 0) TextAction('Reset', onTap: () => onChanged(0)),
       ],
+    );
+  }
+}
+
+/// One subtitle the search found. Tapping it downloads and attaches it.
+class _PrintRow extends StatelessWidget {
+  final ScoredCandidate scored;
+  final bool picked, downloading;
+  final VoidCallback onTap;
+  const _PrintRow({
+    required this.scored,
+    required this.picked,
+    required this.downloading,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = House.paletteOf(context);
+    final c = scored.candidate;
+    final meta = [
+      if (!c.moviehashMatch) 'BY NAME · CHECK SYNC',
+      '${c.downloadCount} dl',
+      if (c.fps != null) '${c.fps!.toStringAsFixed(3)} fps',
+      if (c.hearingImpaired) 'HI',
+      if (c.machineTranslated || c.aiTranslated) 'MACHINE',
+      if (c.provider == SubtitleProvider.subdl) 'SUBDL',
+    ].join(' · ');
+    return Pressable(
+      label:
+          '${languageName(c.language)}, ${c.release ?? 'untitled'}, ${c.moviehashMatch ? 'exact match' : 'by name, check sync'}',
+      selected: picked,
+      inMutuallyExclusiveGroup: true,
+      onTap: onTap,
+      radius: Tokens.radiusSm,
+      builder: (context, s) => AnimatedContainer(
+        duration: Tokens.durFast,
+        constraints: const BoxConstraints(minHeight: Tokens.targetMin),
+        padding: const EdgeInsets.symmetric(horizontal: Tokens.space2, vertical: Tokens.space1),
+        color: pressWash(p, s, active: picked),
+        child: ExcludeSemantics(
+          child: Row(
+            children: [
+              Bulb(lit: c.moviehashMatch, color: p.success, size: 7),
+              const SizedBox(width: Tokens.space3),
+              Text(c.language.toUpperCase(), style: Txt.mono(Tokens.textSm, p.ink)),
+              const SizedBox(width: Tokens.space3),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      c.moviehashMatch
+                          ? 'MATCH  ${c.release ?? ''}'
+                          : c.release ?? 'Untitled release',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Txt.body(Tokens.textSm, picked ? p.accent : p.ink),
+                    ),
+                    Text(
+                      meta,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Txt.mono(Tokens.textXs, c.moviehashMatch ? p.inkMuted : p.warning),
+                    ),
+                  ],
+                ),
+              ),
+              if (downloading) ...[
+                const SizedBox(width: Tokens.space2),
+                LucideIcon('download', size: 16, color: p.accent),
+              ],
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

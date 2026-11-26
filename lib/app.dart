@@ -13,6 +13,7 @@ import 'engine/models/settings.dart';
 import 'platform/files.dart';
 import 'platform/pip.dart';
 import 'platform/window.dart';
+import 'state/library.dart';
 import 'state/notice.dart';
 import 'state/providers.dart';
 import 'state/session.dart';
@@ -84,18 +85,34 @@ class _HouseLightsState extends ConsumerState<HouseLights> with SingleTickerProv
     super.initState();
     HardwareKeyboard.instance.addHandler(_globalKeys);
     // Backgrounded (Home, the app switcher, a call) or hidden: keep the resume point honest.
+    // The device library notes when the app left, and looks for new videos after a while away.
     _lifecycle = AppLifecycleListener(
       onPause: _paused,
-      onHide: _saveResume,
-      onInactive: Platform.isAndroid ? _saveResume : null,
+      onHide: () {
+        _saveResume();
+        _away();
+      },
+      onInactive: () {
+        if (Platform.isAndroid) _saveResume();
+        _away();
+      },
+      onResume: () => ref.read(deviceLibraryProvider.notifier).cameBack(),
     );
     onWindowClosing = () => ref.read(sessionProvider.notifier).close(toLobby: false);
+    // The library's start-up scan begins once the Lobby's first frame is on screen, whichever
+    // tab is open (the player asks it for the next episode too).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) ref.read(deviceLibraryProvider);
+    });
   }
+
+  void _away() => ref.read(deviceLibraryProvider.notifier).wentAway();
 
   /// Android: stopped (Home without PiP, the screen off, a closed PiP window) means unseen, so
   /// the film pauses. A PiP window only makes the app inactive, never paused.
   void _paused() {
     _saveResume();
+    _away();
     if (Platform.isAndroid && !ref.read(pipProvider)) {
       ref.read(sessionProvider.notifier).pauseUnseen();
     }
@@ -178,10 +195,17 @@ class _HouseLightsState extends ConsumerState<HouseLights> with SingleTickerProv
           ),
     );
 
-    // Android Back: the Lobby lets the app close; the Auditorium (overlays, then the film) and
-    // the Ticket Office (a section, then the room) each handle their own.
+    // Android Back: the Lobby lets the app close, once it has stepped out of a library search
+    // or folder; the Auditorium (overlays, then the film) and the Ticket Office (a section,
+    // then the room) each handle their own.
+    final lobbyStep = ref.watch(lobbyCanGoBackProvider);
     return PopScope(
-      canPop: room == Room.lobby,
+      canPop: room == Room.lobby && !lobbyStep,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && ref.read(roomProvider) == Room.lobby) {
+          ref.read(libraryBrowseProvider.notifier).back();
+        }
+      },
       child: House(
         palette: palette,
         matinee: widget.matinee && !inAuditorium,

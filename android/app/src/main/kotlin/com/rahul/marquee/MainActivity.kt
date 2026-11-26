@@ -27,6 +27,16 @@ class MainActivity : FlutterActivity() {
         super.onActivityResult(requestCode, resultCode, data)
     }
 
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        // Plugins first (they share this callback), then the device library's video permission.
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        content?.onRequestPermissionsResult(requestCode)
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)

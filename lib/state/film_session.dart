@@ -3,6 +3,7 @@
 import 'package:path/path.dart' as p;
 
 import '../engine/models/models.dart';
+import '../engine/picture.dart';
 import '../engine/playback.dart';
 import '../platform/files.dart';
 import '../player/engine.dart';
@@ -19,13 +20,21 @@ class FilmSession {
   final String? title;
   final String? error; // "This print can't be projected.", never a code
 
-  /// The folder's neighbours (desktop paths only), for N / P and "Up next".
+  /// The folder's neighbours, for N / P and "Up next": files beside this one on desktop, the
+  /// device library's order for a phone's content:// film.
   final String? previousPath, nextPath;
+
+  /// The folder's first film, for "Repeat the folder" (null when this IS the first, or the
+  /// only one).
+  final String? firstPath;
 
   /// A-B loop points; both set means looping.
   final Duration? loopA, loopB;
   final SleepTimer sleep;
   final PictureFit fit;
+
+  /// Levels, rotation, zoom and deinterlacing: remembered per film.
+  final PictureAdjust picture;
 
   /// The film has been told to play (threading finished or was skipped).
   final bool started;
@@ -43,15 +52,26 @@ class FilmSession {
     this.error,
     this.previousPath,
     this.nextPath,
+    this.firstPath,
     this.loopA,
     this.loopB,
     this.sleep = SleepTimer.off,
     this.fit = PictureFit.fit,
+    this.picture = PictureAdjust.neutral,
     this.started = false,
   });
 
+  /// The leader covers the picture: only BEFORE the film starts. A search or a pick made
+  /// from the Booth mid-film shows in the Booth, never over the playing picture.
   bool get threadingVisible =>
-      threading.phase != LeaderPhase.done && threading.phase != LeaderPhase.idle;
+      !started && threading.phase != LeaderPhase.done && threading.phase != LeaderPhase.idle;
+
+  /// A subtitle search or download is running right now (for the Booth's status line).
+  bool get subtitlesBusy =>
+      !threading.stalled &&
+      (threading.phase == LeaderPhase.hashing ||
+          threading.phase == LeaderPhase.searching ||
+          threading.phase == LeaderPhase.downloading);
 
   String get displayTitle => title ?? parsed?.title ?? file.displayName;
 
@@ -59,6 +79,22 @@ class FilmSession {
   String? get previousName => previousPath == null ? null : p.basename(previousPath!);
 
   bool get looping => loopA != null && loopB != null;
+
+  /// What the end of this film does under [s] (see [endAction]).
+  EndAction endActionFor(Settings s) => endAction(
+    repeat: s.repeat,
+    autoplayNext: s.autoplayNext,
+    hasNext: nextPath != null,
+    hasFirst: firstPath != null,
+    sleepAtEnd: sleep == SleepTimer.endOfFilm,
+  );
+
+  /// The film the "Up next" card counts down to, if the end of this one starts another.
+  String? upNextFor(Settings s) => switch (endActionFor(s)) {
+    EndAction.next => nextPath,
+    EndAction.wrap => firstPath,
+    _ => null,
+  };
 
   FilmSession copyWith({
     ThreadingState? threading,
@@ -70,11 +106,13 @@ class FilmSession {
     String? error,
     String? previousPath,
     String? nextPath,
+    String? firstPath,
     Duration? loopA,
     Duration? loopB,
     bool clearLoop = false,
     SleepTimer? sleep,
     PictureFit? fit,
+    PictureAdjust? picture,
     bool? started,
   }) => FilmSession(
     file: file,
@@ -89,10 +127,12 @@ class FilmSession {
     error: error ?? this.error,
     previousPath: previousPath ?? this.previousPath,
     nextPath: nextPath ?? this.nextPath,
+    firstPath: firstPath ?? this.firstPath,
     loopA: clearLoop ? null : (loopA ?? this.loopA),
     loopB: clearLoop ? null : (loopB ?? this.loopB),
     sleep: sleep ?? this.sleep,
     fit: fit ?? this.fit,
+    picture: picture ?? this.picture,
     started: started ?? this.started,
   );
 }
