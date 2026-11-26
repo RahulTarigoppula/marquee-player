@@ -39,7 +39,11 @@ bool FlutterWindow::OnCreate() {
   ::SetPropW(GetHandle(), kMarqueeWindowProp, reinterpret_cast<HANDLE>(static_cast<INT_PTR>(1)));
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
-    this->Show();
+    // window_manager normally shows the window itself, placed and (maybe) maximised, before
+    // the first frame. Show() is SW_SHOWNORMAL: on a visible window it would only undo that.
+    if (!::IsWindowVisible(GetHandle())) {
+      this->Show();
+    }
   });
 
   // Flutter can complete the first frame before the "show window" callback is

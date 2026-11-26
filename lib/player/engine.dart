@@ -310,7 +310,12 @@ class PlayerEngine {
       await player.stream.duration.firstWhere((d) => d > Duration.zero).timeout(timeout);
       return !_disposed;
     } on Object {
-      return false; // timed out, or the stream closed because the player was disposed
+      // Timed out, or the stream closed because the player was disposed. A live stream never
+      // has a length: it counts as loaded once mpv lists its tracks ("auto" and "no" are
+      // always there, so more than two means real ones).
+      if (_disposed) return false;
+      final t = player.state.tracks;
+      return t.video.length > 2 || t.audio.length > 2;
     }
   }
 
@@ -456,18 +461,20 @@ class PlayerEngine {
   Future<bool> _applyAudioFx(({bool normalize, EqPreset preset}) fx) async {
     final want = audioFilterChain(normalize: fx.normalize, preset: fx.preset);
     if (_disposed || _native == null || want == _audioFx) return true;
-    // mpv keeps the previous chain when it refuses a new one, so clear first: whatever is
-    // read back afterwards is the new chain or nothing.
-    if (_audioFx.isNotEmpty) await _set('af', '');
+    // Through the `af` COMMAND, never the property: a property write only checks the outer
+    // syntax and keeps a chain the build cannot make (which costs the sound at the next audio
+    // re-init), while the command builds the chain now and rolls back when it cannot. So clear
+    // first: whatever is read back afterwards is the new chain or nothing.
+    if (_audioFx.isNotEmpty) await _command(['af', 'clr', '']);
     _audioFx = '';
     if (want.isEmpty) return true;
-    await _set('af', want);
+    await _command(['af', 'set', want]);
     final got = await property('af');
     if (got != null && got.trim().isNotEmpty) {
       _audioFx = want;
       return true;
     }
-    await _set('af', '');
+    await _command(['af', 'clr', '']);
     return false;
   }
 

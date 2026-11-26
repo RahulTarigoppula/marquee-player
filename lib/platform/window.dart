@@ -45,7 +45,12 @@ Future<void> initWindow(MarqueeDatabase db) async {
         if (x != null && y != null && w != null && h != null && w >= 720 && h >= 480) {
           final saved = Rect.fromLTWH(x, y, w, h);
           // A window last used on a monitor that is gone stays at the centred default.
-          if (boundsReachable(saved, _displaySizes())) await windowManager.setBounds(saved);
+          if (boundsReachable(saved, _displaySizes())) {
+            await windowManager.setBounds(saved);
+          } else {
+            await windowManager.setSize(saved.size);
+            await windowManager.center();
+          }
         }
         maximized = b['maximized'] == true;
         if (maximized) await windowManager.maximize();
@@ -104,7 +109,9 @@ bool boundsReachable(Rect bounds, List<Size> displays) {
   }
   final strip = Rect.fromLTWH(bounds.left, bounds.top, bounds.width, grip.height);
   final seen = strip.intersect(desk);
-  return seen.width >= grip.width && seen.height >= grip.height;
+  // Half the strip's height is enough: a window snapped to the top edge sits a few pixels
+  // above it.
+  return seen.width >= grip.width && seen.height >= grip.height / 2;
 }
 
 /// Runs before the window closes (the resume point, the session); the window is destroyed

@@ -324,6 +324,13 @@ class SessionNotifier extends Notifier<FilmSession?> {
     if (!_isCurrent(engine)) return;
     // No hash (unknown size, a slow or unreadable source): the film still resumes, and keeps
     // its own choices, by where it lives.
+    if (hash == null) {
+      // The read missed its deadline (a sleeping disk, a busy phone). A film opened before
+      // still has its fingerprint on record: without it the film would start at 0:00 and then
+      // write that over the saved place once the late hash arrived.
+      hash = await ref.read(databaseProvider).hashForLocator(file.locator);
+      if (!_isCurrent(engine)) return;
+    }
     if (hash == null) _locatorKey = urlResumeKey(file.locator);
     await _loadResume(hash ?? _locatorKey!);
     if (!_isCurrent(engine)) return;
@@ -441,6 +448,7 @@ class SessionNotifier extends Notifier<FilmSession?> {
     // Closed or replaced while libmpv was opening: the timers belong to the next film.
     if (!_isCurrent(engine)) return;
     if (state?.started ?? false) await engine.play(); // threading finished before the open did
+    if (!_isCurrent(engine)) return; // closed during that play(): arm nothing
     _undecodable?.cancel();
     _undecodable = Timer(kUndecodableAfter, () => unawaited(_failIfStuck(engine)));
     _resumeTimer?.cancel();

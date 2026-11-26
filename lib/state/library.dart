@@ -12,8 +12,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../engine/library.dart';
 import '../engine/models/media.dart';
 import '../engine/models/settings.dart';
+import '../platform/cloud_files.dart';
 import '../platform/library_scan.dart';
 import '../player/thumbnailer.dart';
+import 'notice.dart';
 import 'providers.dart';
 import 'session.dart';
 import 'thumbnails.dart';
@@ -238,6 +240,16 @@ class DeviceLibraryNotifier extends AsyncNotifier<DeviceLibrary> {
     final access = await requestVideoPermission();
     if (!ref.mounted) return;
     final asked = access == VideoAccess.denied;
+    // Refused twice, Android stops showing the question: the button would do nothing at all.
+    if (asked && before.asked) {
+      ref
+          .read(noticeProvider.notifier)
+          .show(
+            'Android no longer asks. Allow videos for Marquee in Settings, Apps, Marquee, '
+            'Permissions.',
+            duration: const Duration(seconds: 8),
+          );
+    }
     state = AsyncData((state.value ?? before).copyWith(access: access, asked: asked));
     try {
       await ref.read(databaseProvider).writeState(_askedKey, asked);
@@ -279,7 +291,9 @@ class DeviceLibraryNotifier extends AsyncNotifier<DeviceLibrary> {
   void applyProbe(String locator, FrameProbe probe) {
     if (probe.durationMs == null && probe.width == null && probe.height == null) return;
     _probes[locator] = probe;
-    _probeFlush ??= Timer(const Duration(seconds: 3), _flushProbes);
+    // Each flush re-sorts the list and re-writes the start-up cache on the UI isolate: batch
+    // a good many frames' worth, not every three seconds of a long thumbnail run.
+    _probeFlush ??= Timer(const Duration(seconds: 20), _flushProbes);
   }
 
   void _flushProbes() {
@@ -635,6 +649,9 @@ class LibraryThumbQueue implements LibraryThumbRequests {
   Future<void> _grab(LibraryItem item, String key) async {
     final thumbs = _ref.read(libraryThumbsProvider.notifier);
     final dir = await _ref.read(libraryThumbDirProvider.future);
+    // An online-only cloud file would be downloaded just to draw its card: leave it alone
+    // (no "failed" mark either; it gets its frame once it is on this disk).
+    if (isCloudOnlyFile(item.locator)) return;
     final grabber = _grabber ??= FrameGrabber();
     final result = await grabber.grab(
       item.locator,

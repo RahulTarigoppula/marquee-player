@@ -105,6 +105,15 @@ class MarqueeDatabase extends _$MarqueeDatabase {
 
   Future<void> removeMedia(int id) => (delete(mediaFiles)..where((t) => t.id.equals(id))).go();
 
+  /// The fingerprint this locator had the last time it was opened, if it was hashed then.
+  Future<MovieHash?> hashForLocator(String locator) async {
+    final row = await (select(
+      mediaFiles,
+    )..where((t) => t.locator.equals(locator))).getSingleOrNull();
+    final h = row?.moviehash;
+    return h == null || h.isEmpty ? null : MovieHash(h);
+  }
+
   Future<int?> mediaIdFor(String locator) async =>
       (await (select(mediaFiles)..where((t) => t.locator.equals(locator))).getSingleOrNull())?.id;
 

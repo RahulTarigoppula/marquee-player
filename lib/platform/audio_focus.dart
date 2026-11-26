@@ -24,10 +24,13 @@ class AudioFocus {
 
   static bool get supported => Platform.isAndroid;
 
-  Future<AudioSession?> _ready() async {
+  Future<AudioSession?>? _opening;
+
+  /// One session and ONE pair of listeners, however many calls race for the first.
+  Future<AudioSession?> _ready() => _opening ??= _open();
+
+  Future<AudioSession?> _open() async {
     if (!supported || _disposed) return null;
-    final existing = _session;
-    if (existing != null) return existing;
     try {
       final s = await AudioSession.instance;
       await s.configure(const AudioSessionConfiguration.music());

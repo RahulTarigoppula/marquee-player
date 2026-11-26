@@ -153,16 +153,10 @@ Future<VideoAccess> requestVideoPermission() async {
 }
 
 /// Every video MediaStore knows (all of them, or the ones the user selected). Empty without
-/// permission.
+/// permission. THROWS when the scan itself failed: a failure must never be taken for an empty
+/// library (the caller keeps the list it has).
 Future<List<LibraryItem>> scanMediaStore() async {
-  final List<Object?>? rows;
-  try {
-    rows = await _content.invokeListMethod<Object?>('scanVideos');
-  } on PlatformException {
-    return const [];
-  } on MissingPluginException {
-    return const [];
-  }
+  final rows = await _content.invokeListMethod<Object?>('scanVideos');
   if (rows == null) return const [];
   final out = <LibraryItem>[];
   for (final r in rows) {
@@ -192,18 +186,14 @@ Future<List<LibraryItem>> scanMediaStore() async {
 }
 
 /// The system's own thumbnail for a MediaStore video as JPEG bytes; null when there is none.
+/// THROWS on a channel error (a revoked grant, a busy system): that is "not now", which the
+/// caller must not remember as "this video has no thumbnail".
 Future<Uint8List?> videoThumbnail(String uri, {int width = 320}) async {
-  try {
-    final bytes = await _content.invokeMethod<Uint8List>('videoThumbnail', {
-      'uri': uri,
-      'width': width,
-    });
-    return bytes == null || bytes.isEmpty ? null : bytes;
-  } on PlatformException {
-    return null;
-  } on MissingPluginException {
-    return null;
-  }
+  final bytes = await _content.invokeMethod<Uint8List>('videoThumbnail', {
+    'uri': uri,
+    'width': width,
+  });
+  return bytes == null || bytes.isEmpty ? null : bytes;
 }
 
 /// Copies a JPEG the app wrote (a screenshot at [path]) into the shared Pictures/Marquee album

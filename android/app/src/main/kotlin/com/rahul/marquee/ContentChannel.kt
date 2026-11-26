@@ -70,6 +70,9 @@ class ContentChannel(
 
     private val channel = MethodChannel(messenger, NAME)
     private val io: ExecutorService = Executors.newSingleThreadExecutor()
+
+    /** `stat` and `read` only: opening a film never queues behind a library scan or a thumbnail. */
+    private val quick: ExecutorService = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
 
     /** Set by MainActivity: the picker needs an Activity to start from. */
@@ -113,6 +116,7 @@ class ContentChannel(
         permissionResult = null
         activity = null
         io.shutdown()
+        quick.shutdown()
     }
 
     private fun pickVideo(result: MethodChannel.Result) {
@@ -176,7 +180,7 @@ class ContentChannel(
             "stat" -> {
                 val uri = call.argument<String>("uri")
                     ?: return result.error("bad-args", "stat needs a uri", null)
-                background(result) { stat(Uri.parse(uri)) }
+                background(result, quick) { stat(Uri.parse(uri)) }
             }
             "read" -> {
                 val uri = call.argument<String>("uri")
@@ -191,7 +195,7 @@ class ContentChannel(
                         null,
                     )
                 }
-                background(result) { read(Uri.parse(uri), offset, length) }
+                background(result, quick) { read(Uri.parse(uri), offset, length) }
             }
             "pickVideo" -> pickVideo(result)
             "videoPermission" -> result.success(videoPermissionState())
@@ -220,9 +224,13 @@ class ContentChannel(
         }
     }
 
-    private fun background(result: MethodChannel.Result, work: () -> Any?) {
+    private fun background(
+        result: MethodChannel.Result,
+        on: ExecutorService = io,
+        work: () -> Any?,
+    ) {
         try {
-            io.execute {
+            on.execute {
                 try {
                     val value = work()
                     main.post { result.success(value) }
@@ -234,6 +242,9 @@ class ContentChannel(
                     main.post { result.error("io", e.message, null) }
                 } catch (e: RuntimeException) {
                     main.post { result.error("io", e.message, null) }
+                } catch (e: Throwable) {
+                    // An OutOfMemoryError from a bitmap must not take the whole app down.
+                    main.post { result.error("io", e.toString(), null) }
                 }
             }
         } catch (e: java.util.concurrent.RejectedExecutionException) {

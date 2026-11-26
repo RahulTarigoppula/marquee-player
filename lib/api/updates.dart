@@ -4,6 +4,7 @@
 // fixed User-Agent. Which download suits this device is worked out here, from the answer.
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ffi' show Abi;
 import 'dart:io' show HttpException, Platform, SocketException;
 
 import 'package:http/http.dart' as http;
@@ -25,6 +26,8 @@ const int kNotesLength = 600;
 enum UpdateTarget {
   windows('marquee-windows-x64-setup.exe'),
   android('marquee-android-arm64-v8a.apk'),
+  androidArm32('marquee-android-armeabi-v7a.apk'),
+  androidX64('marquee-android-x86_64.apk'),
 
   /// No installer is published for this platform: the release page it is.
   other(null);
@@ -32,11 +35,16 @@ enum UpdateTarget {
   final String? asset;
   const UpdateTarget(this.asset);
 
-  static UpdateTarget get current => Platform.isWindows
-      ? windows
-      : Platform.isAndroid
-      ? android
-      : other;
+  /// On Android the APK must match the ABI this build runs as, or it will not install.
+  static UpdateTarget get current {
+    if (Platform.isWindows) return windows;
+    if (!Platform.isAndroid) return other;
+    final abi = Abi.current();
+    if (abi == Abi.androidArm64) return android;
+    if (abi == Abi.androidArm) return androidArm32;
+    if (abi == Abi.androidX64) return androidX64;
+    return other;
+  }
 }
 
 class Release {

@@ -816,7 +816,10 @@ class _EmptyNote extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final palette = House.paletteOf(context);
     if (library.source == LibrarySource.mediaStore) {
-      if (!library.scanned) return _looking(palette);
+      // Just allowed: the first scan is still on its way, so "none yet" would be a lie.
+      if (!library.scanned || (library.scanning && library.items.isEmpty)) {
+        return _looking(palette);
+      }
       return _Note(
         icon: 'film',
         title: 'No videos on this device yet.',

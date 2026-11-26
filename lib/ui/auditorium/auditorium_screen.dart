@@ -126,6 +126,13 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
       _refocus();
       _applyOrientation(); // back from the Ticket Office: the film's size is already known
     });
+    // A film that already ended (or is playing) before this screen was rebuilt, e.g. on the
+    // way back from Settings: the stream only reports CHANGES, so start from what is true.
+    final now = ref.read(sessionProvider)?.engine;
+    if (now != null && !now.isDisposed) {
+      _playing = now.player.state.playing;
+      _completed = now.player.state.completed;
+    }
     _poke();
     _startBias();
     if (Platform.isAndroid) {
@@ -705,6 +712,16 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
   void _onPointerCancel(PointerCancelEvent e) {
     _touchCancelled = true;
     if (_touches > 0) _touches--;
+    _releaseHold();
+  }
+
+  /// A hold that was cancelled (the system took the touch, or the film went into the little
+  /// window with the finger still down) gets no "end" from Flutter: without this the film
+  /// would stay at 2x and every later swipe would be refused as "still holding".
+  void _releaseHold() {
+    if (!_holding) return;
+    _holding = false;
+    unawaited(_session?.engine.setRate(_rateBeforeHold));
   }
 
   void _onHoldStart(LongPressStartDetails d) {
@@ -717,11 +734,7 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
     _showReadout('gauge', '2× while held');
   }
 
-  void _onHoldEnd(LongPressEndDetails d) {
-    if (!_holding) return;
-    _holding = false;
-    unawaited(_session?.engine.setRate(_rateBeforeHold));
-  }
+  void _onHoldEnd(LongPressEndDetails d) => _releaseHold();
 
   /// A drag (one finger) or a pinch (two) has begun. Flutter ends the gesture and starts a
   /// new one whenever a finger is added or lifted; only the first of a touch may act, except
@@ -907,6 +920,7 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
       _touches = 0;
       _gesture = _Gesture.none;
       _swipe.value = null;
+      _releaseHold();
       if (!inPip) _applyOrientation();
     });
     // Overlays that took the keyboard give it back when they go.
@@ -1033,7 +1047,11 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
                     child: MouseRegion(
                       onHover: (_) => _idle?.cancel(),
                       onExit: (_) => _poke(),
-                      opaque: false,
+                      // A control takes its own touches; the empty picture between the bars
+                      // still reaches the gesture surface below. (`opaque: false` let EVERY
+                      // touch through as well: a thumb resting on the seek bar became a
+                      // long-press 2x, and a swipe from the bar changed the volume.)
+                      hitTestBehavior: HitTestBehavior.deferToChild,
                       child: ControlsLayer(
                         session: session,
                         desktop: _desktop,
