@@ -51,6 +51,7 @@ void main() {
         lobbyTheme: LobbyTheme.matinee,
         hwdec: 'no',
         scanMode: LibraryScanMode.folders,
+        backgroundPlay: true,
       );
       final back = Settings.fromJson({...s.toJson(), 'mystery': 1});
       expect(back.toJson(), s.toJson());

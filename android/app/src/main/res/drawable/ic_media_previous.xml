@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Lock screen and notification control. The system tints it: only the shape matters. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M18,6 L9.5,12 L18,18 Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M6,6 L8,6 L8,18 L6,18 Z" />
+</vector>

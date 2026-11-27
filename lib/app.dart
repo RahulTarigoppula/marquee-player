@@ -15,6 +15,7 @@ import 'platform/pip.dart';
 import 'platform/window.dart';
 import 'state/library.dart';
 import 'state/notice.dart';
+import 'state/now_playing.dart';
 import 'state/providers.dart';
 import 'state/session.dart';
 import 'state/updates.dart';
@@ -107,16 +108,29 @@ class _HouseLightsState extends ConsumerState<HouseLights> with SingleTickerProv
     });
     // The once-a-day update check (opt-in, off by default) only exists once this is read.
     ref.read(autoUpdateCheckProvider);
+    // Android: the lock screen, the notification shade and headset buttons follow the film.
+    ref.read(nowPlayingProvider);
+    // A PiP window that closes is followed at once by the app stopping: remember when, so
+    // [_paused] can tell "the viewer closed the film" from "the screen went off".
+    ref.listenManual(pipProvider, (was, now) {
+      if ((was ?? false) && !now) _pipEndedAt = clock.now();
+    });
   }
+
+  DateTime? _pipEndedAt;
 
   void _away() => ref.read(deviceLibraryProvider.notifier).wentAway();
 
   /// Android: stopped (Home without PiP, the screen off, a closed PiP window) means unseen, so
-  /// the film pauses. A PiP window only makes the app inactive, never paused.
+  /// the film pauses, unless Settings says its sound carries on. A PiP window only makes the
+  /// app inactive, never paused; closing that window is always "stop", whatever the setting.
   void _paused() {
     _saveResume();
     _away();
-    if (Platform.isAndroid && !ref.read(pipProvider)) {
+    if (!Platform.isAndroid || ref.read(pipProvider)) return;
+    final ended = _pipEndedAt;
+    final pipClosed = ended != null && clock.now().difference(ended) < const Duration(seconds: 2);
+    if (pipClosed || !ref.read(settingsValueProvider).backgroundPlay) {
       ref.read(sessionProvider.notifier).pauseUnseen();
     }
   }

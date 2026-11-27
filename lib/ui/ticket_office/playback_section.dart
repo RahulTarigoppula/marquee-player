@@ -115,6 +115,20 @@ class PlaybackSection extends ConsumerWidget {
             ),
           ],
         ),
+        if (onAndroid)
+          SettingsGroup(
+            title: 'Away from the app',
+            children: [
+              ToggleBulb(
+                label: 'Keep playing in the background',
+                hint:
+                    'The sound carries on when the screen is off or another app is open. '
+                    'Play, pause and skip stay on the lock screen either way.',
+                value: settings.backgroundPlay,
+                onChanged: (v) => editSettings(ref, (s) => s.copyWith(backgroundPlay: v)),
+              ),
+            ],
+          ),
         SettingsGroup(
           title: 'Sound',
           children: [

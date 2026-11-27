@@ -1,11 +1,18 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!-- Everything absent from this list is absent on purpose (IMPLEMENTATION-PROMPT §8.2): no
-         camera, no location, no notifications, no exact alarms, no MANAGE_EXTERNAL_STORAGE, no
-         network-state snooping. -->
+         camera, no location, no POST_NOTIFICATIONS, no exact alarms, no MANAGE_EXTERNAL_STORAGE,
+         no network-state snooping. -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <!-- keep-screen-on during playback (wakelock_plus) -->
+    <!-- keep-screen-on during playback (wakelock_plus), and keep the CPU awake while a film
+         plays with the screen off (NowPlaying.kt) -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- PlaybackService: the film's sound carries on behind the lock screen or another app, and
+         only while it plays. The one notification is the media session's own controls, which
+         Android 13+ shows without the notification permission: Marquee never asks for it and
+         posts nothing else. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <!-- MediaStore library scan only. SAF ("Open with", the file picker) needs NONE of these. -->
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <!-- Android 14+: "Select photos and videos". Declared so Marquee can tell partial access
@@ -77,6 +84,15 @@
                 <data android:mimeType="video/*" />
             </intent-filter>
         </activity>
+
+        <!-- Foreground only while a film plays (see PlaybackService.kt). Not exported: only
+             Marquee's own notification buttons reach it. stopWithTask: swiping the app out of
+             Recents ends it, so nothing plays on with no app behind it. -->
+        <service
+            android:name=".PlaybackService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback"
+            android:stopWithTask="true" />
 
         <!-- Don't delete: the Flutter tool uses it to generate GeneratedPluginRegistrant.java -->
         <meta-data android:name="flutterEmbedding" android:value="2" />

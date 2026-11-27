@@ -122,6 +122,10 @@ class Settings {
   /// The clock in the player shows time remaining instead of the total.
   final bool showRemaining;
 
+  /// Android: the film's sound carries on when the screen goes off or another app is in front.
+  /// Off, leaving the app pauses the film (the lock-screen controls can still start it again).
+  final bool backgroundPlay;
+
   const Settings({
     this.languages = const ['en'],
     this.preferHearingImpaired = false,
@@ -153,6 +157,7 @@ class Settings {
     this.repeat = RepeatMode.off,
     this.librarySort = LibrarySort.name,
     this.showRemaining = false,
+    this.backgroundPlay = false,
   });
 
   Settings copyWith({
@@ -186,6 +191,7 @@ class Settings {
     RepeatMode? repeat,
     LibrarySort? librarySort,
     bool? showRemaining,
+    bool? backgroundPlay,
   }) => Settings(
     languages: languages ?? this.languages,
     preferHearingImpaired: preferHearingImpaired ?? this.preferHearingImpaired,
@@ -217,6 +223,7 @@ class Settings {
     repeat: repeat ?? this.repeat,
     librarySort: librarySort ?? this.librarySort,
     showRemaining: showRemaining ?? this.showRemaining,
+    backgroundPlay: backgroundPlay ?? this.backgroundPlay,
   );
 
   static int _seekStep(int v) => seekSteps.contains(v) ? v : 10;
@@ -255,7 +262,8 @@ class Settings {
       other.autoCheckUpdates == autoCheckUpdates &&
       other.repeat == repeat &&
       other.librarySort == librarySort &&
-      other.showRemaining == showRemaining;
+      other.showRemaining == showRemaining &&
+      other.backgroundPlay == backgroundPlay;
 
   @override
   int get hashCode => Object.hashAll([
@@ -289,6 +297,7 @@ class Settings {
     repeat,
     librarySort,
     showRemaining,
+    backgroundPlay,
   ]);
 
   /// The fields that change how mpv draws text subtitles (size, look, placement, colour).
@@ -339,6 +348,7 @@ class Settings {
     'repeat': repeat.name,
     'librarySort': librarySort.name,
     'showRemaining': showRemaining,
+    'backgroundPlay': backgroundPlay,
   };
 
   /// Unknown fields are ignored and missing ones keep their defaults (the import rule, §5.5).
@@ -386,6 +396,7 @@ class Settings {
       repeat: RepeatMode.values.asNameMap()[j['repeat']] ?? d.repeat,
       librarySort: LibrarySort.values.asNameMap()[j['librarySort']] ?? d.librarySort,
       showRemaining: pick('showRemaining', d.showRemaining),
+      backgroundPlay: pick('backgroundPlay', d.backgroundPlay),
     );
   }
 }

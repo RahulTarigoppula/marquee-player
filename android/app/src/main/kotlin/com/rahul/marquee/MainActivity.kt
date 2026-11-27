@@ -10,6 +10,7 @@ import io.flutter.embedding.engine.FlutterEngine
 class MainActivity : FlutterActivity() {
     private var content: ContentChannel? = null
     private var pip: PipChannel? = null
+    private var media: MediaChannel? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -19,6 +20,7 @@ class MainActivity : FlutterActivity() {
             it.activity = this
         }
         pip = PipChannel(this, messenger)
+        media = MediaChannel(applicationContext, messenger)
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -62,8 +64,12 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         content?.dispose()
         pip?.dispose()
+        // The engine dies with this activity: the lock-screen controls and the playback service
+        // go with it, or they would point at a film nothing can play.
+        media?.dispose()
         content = null
         pip = null
+        media = null
         super.onDestroy()
     }
 

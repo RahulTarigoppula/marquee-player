@@ -294,6 +294,58 @@ jobs:
           path: out/
           retention-days: 14
 
+  # ---------------------------------------------------------------- android, running
+  # The built APK on an emulator: the film opens through "Open with", reaches the system's media
+  # controls, pauses when the screen goes off and plays on from a media key in the dark
+  # (scripts/android-smoke.py). The only place the Kotlin side RUNS before a phone does.
+  # Like the playback job it never holds a release back: emulators on shared runners are slow
+  # and sometimes do not boot. Read it before tagging.
+  android-smoke:
+    name: android smoke (emulator)
+    needs: build
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with: { path: dist, pattern: 'marquee-android-apks-*', merge-multiple: true }
+      - name: Let the emulator use KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: A three-minute film (never committed)
+        run: |
+          set -euo pipefail
+          command -v ffmpeg >/dev/null 2>&1 || {
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq --no-install-recommends ffmpeg
+          }
+          mkdir -p build/android-smoke
+          ffmpeg -hide_banner -loglevel error -nostdin -y \
+            -f lavfi -i "testsrc2=size=640x360:rate=24" \
+            -f lavfi -i "sine=frequency=440:sample_rate=48000" \
+            -t 180 -c:v libx264 -preset ultrafast -pix_fmt yuv420p -g 48 \
+            -c:a aac -b:a 96k -movflags +faststart build/android-smoke/marquee-smoke.mp4
+          ls -la build/android-smoke dist
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: default
+          disable-animations: true
+          script: python3 scripts/android-smoke.py dist/marquee-android-x86_64.apk build/android-smoke/marquee-smoke.mp4 build/android-smoke
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-smoke-evidence
+          path: |
+            build/android-smoke/*.txt
+            build/android-smoke/*.png
+          retention-days: 14
+
   # ---------------------------------------------------------------- publish
   publish:
     needs: build
