@@ -916,7 +916,7 @@ names the behaviour that was only ever reasoned about, never observed.
 |---|---|---|---|
 | 1 | Android | Watch 10+ min, close, pull-to-refresh the Library, tap the film at once | Resumes where it stopped |
 | 2 | Android, Windows | Settings → Playback → a sound profile and "Even out loud and quiet parts"; play; switch audio track | Still sound, audible effect; or the one sentence "This build can't apply sound effects." |
-| 3 | Android 13, 14+ | Library → Show my videos: allow all; "select videos"; refuse twice then "Ask again" | List fills; partial access says so; the notice points to app settings |
+| 3 | Android 13, 14+ | Library → Show my videos: allow all; "select videos"; refuse, then "Open app settings", allow there and come back | List fills; partial access says so; the Library fills by itself on return |
 | 4 | Android | Hold for 2× and press Home mid-hold; rest a thumb on the seek bar, then drag; swipe up from the bottom bar | Speed returns to normal; the bar scrubs; no volume change |
 | 5 | Android | Rotation lock ON, open a wide film from a portrait Lobby; enter and leave PiP; close | Film turns to landscape; the Lobby turns freely again |
 | 6 | Android | "Open with" Marquee from Files while a film is in PiP | The new film replaces the old one, one app instance |
@@ -929,3 +929,8 @@ names the behaviour that was only ever reasoned about, never observed.
 | 13 | Android | Settings → Playback → Keep playing in the background ON; play; lock the phone; wait 5 min; then a headset's play / pause button | The sound never stops; the button pauses and resumes it |
 | 14 | Android | Same setting ON, a folder of two short episodes, lock the phone before the first ends | The second starts by itself, the lock-screen card changes title |
 | 15 | Android | While playing, press Home (PiP), then close the PiP window; then swipe Marquee out of Recents | Closing PiP pauses; swiping away removes the notification and nothing plays |
+| 16 | Android | First film after a fresh install | The start notice shows, then the touch-gesture guide; one tap closes it and the controls come up |
+| 17 | Android | Any film, phone sideways: open More, Subtitles, Picture | A full-height sheet on the right; every row reachable by scrolling |
+| 18 | Android | Background play ON: lock the phone mid-film, come back after a minute | The picture is there again, in step with the sound (never black) |
+| 19 | Windows | Install 2.2 over 2.1 with a history; look in Documents and in `%APPDATA%\com.rahul\marquee` | History, resume points and settings intact; `marquee.sqlite` gone from Documents |
+| 20 | Windows | Minimise near the end of an episode with "play the next one" on | The next episode starts while minimised |

@@ -213,12 +213,17 @@ def run(apk, film, short_film, out):
     wait_for("the playback service is in the foreground", service_is_foreground, 20)
     time.sleep(5)
     screenshot(out, "playing.png")
-    # A tap on the picture brings the controls up (away from the middle, where play/pause is).
+    # A tap on the picture brings the controls up (away from the middle, where play/pause is,
+    # and from the top, where a notice may sit). On a fresh install the first tap closes the
+    # touch-gesture guide instead: tap twice, a moment apart.
     size = re.search(r"(\d+)x(\d+)", shell("wm size", check=False))
     if size:
         long_side = max(int(size.group(1)), int(size.group(2)))
         short_side = min(int(size.group(1)), int(size.group(2)))
-        shell(f"input tap {long_side // 4} {short_side // 3}", check=False)
+        time.sleep(6)  # the opening notice leaves, the guide takes its turn
+        screenshot(out, "guide.png")
+        spot = f"{long_side // 4} {short_side * 2 // 3}"
+        shell(f"input tap {spot}", check=False)
         time.sleep(1)
         screenshot(out, "controls.png")
 

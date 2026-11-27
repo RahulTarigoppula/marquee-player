@@ -142,3 +142,39 @@ Known limits: the picture is still decoded while only the sound is wanted (batte
 on background is the fix, untested); swiping the app out of Recents ends playback (by design:
 the engine dies with the activity); Windows has no System Media Transport Controls card, only
 the media keys.
+
+## 8. Pass 5: v2.2 (2026-11-27)
+
+"Is this the best it can be?" Two read-only reviews of 2.1, then the fixes. The answer to the
+question was no, and one of the reasons was a defect shipped that morning.
+
+| Area | What changed | Verified by |
+|---|---|---|
+| Background play | **2.1's setting did nothing**: media_kit's `Video` pauses on every app pause by default. `pauseUponEnteringBackgroundMode: false`; `HouseLights._paused` is the only pauser and handles a PiP close in either callback order | emulator: screen-off pause (now the shell's doing), play in the dark |
+| Opening unseen | `VideoController` waits for a post-frame callback and Flutter draws none while paused, so lock-screen "next" and "Up next" hung for ever: `scheduleWarmUpFrame()` in `PlayerEngine`. The countdown moved from the card into `SessionNotifier` (`FilmSession.upNextAt`); the lock screen reads "loading" through it so the service never steps back | **emulator: "next" in the dark opens film 2; film 3 starts by itself when film 2 ends, screen still off** |
+| Service | detach token, no stop before the pending start answers, wake lock renewal, kill the process when the activity dies under a playing film, audio-focus retry (Android 15), coalesced position updates, a 20 s limit on "loading", more `configChanges` | APK build; emulator run |
+| Words and layouts | 18 findings from the looks review: plain sentences (`sentences.dart`, `tickets.dart`, the picker, the Booth), landscape menu sheet, touch guide, Earlier / Later, phone top bar, landscape Home, app-settings button, card tags and menus, segmented controls, light-theme seams | 149 screenshots (54 new), read after the run; widget tests |
+| Speed | `naturalKey` (tokenise once), cached search folds, memoised titles; library cache through `Isolate.run`; lazy Home grid; cloud-file check off the UI isolate; `cache=auto` for local files; Beam ticker stops in the light theme; image cache cleared on entering the player | order proven identical on generated names; timings from scratch scripts on the dev laptop |
+| Data | Windows database to `%APPDATA%` with WAL (`lib/db/location.dart`, `open.dart`); export / import of `file_prefs` and folders; watched marks past 200; thumbnail failure marks expire; `scale` filter probed, with a circuit breaker | 11 unit tests for the move; **installer run on a Windows runner: created under %APPDATA%, an old file carried over** |
+
+New deviations:
+
+| # | Plan said | Built | Why |
+|---|---|---|---|
+| D24 | cinema vocabulary everywhere ("print", "ticket office", "threading") | kept on the sign and in the code; every sentence a person reads is plain | the theme is charm on the marquee and an obstacle in an error message |
+| D25 | database where drift_flutter puts it | Windows: `%APPDATA%\com.rahul\marquee\marquee.sqlite`, moved once | Documents is OneDrive on most Windows 11 PCs: the file was re-uploaded every five seconds of a film |
+
+Still open (found by the reviews, not done):
+- The picture is decoded while only sound is wanted (`vid=no` unseen). Needs a device: the
+  emulator cannot show the picture at all (its GL refuses mpv's context), so nothing can prove
+  the picture comes back.
+- Neighbours are still computed once at load: an "Open with" at a cold start, before the first
+  library scan, has no next episode until it is reopened (REVIEW #12 / #13, audit #20).
+- Thumbnails are decoded at 640 px even for small list rows (`thumbnailImage(width:)` exists;
+  its call sites and the screenshot harness do not use it yet).
+- The Library does not re-check the video permission when the app returns while a film is open.
+- Subtitles are drawn under the bottom bar while the timing rule is open.
+- Windows System Media Transport Controls; casting; SMB / DLNA.
+- **The picture on Android has never been seen by CI.** Every emulator screenshot shows the
+  controls over a black picture. The video output code is unchanged since 1.1, which played on
+  the owner's phone; that, not a test, is the evidence.

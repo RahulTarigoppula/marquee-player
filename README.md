@@ -45,7 +45,7 @@ Get the files from the **[latest release](https://github.com/RahulTarigoppula/ma
 2. **Android signing**: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_PASSWORD`, `ANDROID_KEY_ALIAS` (see §4 below). Without them APKs are signed with a throwaway CI key and won't update in place.
 3. **Settings → Pages → Source: GitHub Actions**, then re-run the `pages` workflow, for Marquee Lite at `https://rahultarigoppula.github.io/marquee-player/`.
 4. Optional: `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` + repo variable `WORKER_URL` to give Lite online subtitle search.
-5. Release: `git tag v2.1.1 && git push --tags`.
+5. Release: `git tag v2.2.1 && git push --tags`.
 
 Marquee is one Flutter codebase that ships a **Windows `.exe`** and an **Android APK** on the same engine, libmpv (ffmpeg + libass) through `media_kit`, so an MKV with HEVC video, AC-3 audio and an ASS subtitle track plays identically on both, with no codec packs.
 The instant a file opens it is fingerprinted with the OpenSubtitles **moviehash** (128 KiB of I/O), looked up hash-first, and the best subtitle is downloaded, saved beside the file and attached **before the first frame is shown**, a hash hit means the subtitle was uploaded for that exact release, so it is already in sync.

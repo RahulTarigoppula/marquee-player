@@ -3,6 +3,46 @@
 All notable changes to Marquee are recorded here. Versions follow [SemVer](https://semver.org);
 tags are `vX.Y.Z` and each one produces a GitHub Release (see `.github/workflows/release.yml`).
 
+## [2.2.0] - 2026-11-27
+
+Two reviews of 2.1 (looks and ease of use; stability and speed), and the fixes.
+
+### Fixed
+- **"Keep playing in the background" did nothing in 2.1.** The video widget paused the film on
+  every app pause, whatever the setting said. It works now.
+- **"Next" from the lock screen, and the next episode, never started while nothing was on
+  screen** (screen off, picture-in-picture, a minimised window). Both do now.
+- Sound could play on after Marquee was swiped out of Recents. Closing a picture-in-picture
+  window pauses in either order Android reports it. The film no longer restarts when a SIM
+  registers or "bold text" is switched.
+- On a phone held sideways, the start-of-film notice sat on top of the play button.
+- Windows: a sleeping drive or an unreachable network share no longer freezes the Library.
+
+### Changed
+- **Plain words.** The subtitle picker, the download allowance and every error say what they
+  mean: "Made for this exact file", "Matched by name — timing may be off", "5 subtitle
+  downloads a day", "Marquee can't play this file." with Try again / Back to Home.
+- **Subtitle timing** has Earlier / Later buttons, a sentence ("Subtitles show 0.35 s later.")
+  and a visible Reset, beside the ruler.
+- **Phone layouts.** Player menus are a full-height sheet when the phone is sideways (they
+  showed three rows). Home shows its button in landscape. The top bar has an Open menu and
+  full-width Home | Library tabs. A one-time guide shows the touch gestures (More › Touch
+  gestures brings it back).
+- **Library.** After a refused permission the button opens Android's app settings. Home no
+  longer lists a film three times. Tags read "English subtitles ✓". Watched marks reach past
+  the 200 most recent films.
+- **Speed.** Sorting 2,000 videos by name: 173 ms → 6.5 ms (measured on the dev laptop);
+  search and next/previous likewise. Home builds only the cards on screen. Local files no
+  longer get a 128 MiB stream cache.
+- **Windows: the database moved** from Documents (often inside OneDrive) to
+  `%APPDATA%\com.rahul\marquee`, copied before the old file is removed. An older Marquee
+  started afterwards will not see it.
+- Export / import carries each film's own choices and (Windows) the library folders.
+- The uninstaller closes only the installed copy, and asks it politely first.
+- **CI:** the emulator run also presses "next" in the dark and waits for the next film to
+  start by itself; the installer run checks where the database lands and that an old one is
+  carried over.
+
 ## [2.1.0] - 2026-11-27
 
 ### Added

@@ -47,6 +47,7 @@ import '../../platform/pip.dart';
 import '../../platform/window.dart';
 import '../../player/engine.dart';
 import '../../state/library.dart';
+import '../../state/notice.dart';
 import '../../state/providers.dart';
 import '../../state/session.dart';
 import '../../theme/tokens.dart';
@@ -423,7 +424,12 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
   /// The first film on a phone shows the touch gestures once, as soon as the picture is up
   /// (never over the leader or the "can't play" card). The film is NOT paused for it: it goes
   /// with one tap, and nothing that watches the film from outside sees it stop.
+  ///
+  /// It waits for a notice to leave first. A film's first seconds usually carry one ("Resumed
+  /// at…", "Add your API key…"), and on a real phone the two landed on top of each other, the
+  /// notice across the guide's title and its "Got it".
   bool _firstHintDue(FilmSession s, Settings settings) =>
+      ref.read(noticeProvider) == null &&
       !_desktop &&
       !_locked &&
       s.started &&
@@ -995,6 +1001,7 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
     final pad = MediaQuery.paddingOf(context);
     final size = MediaQuery.sizeOf(context);
     final shown = _controls && !_locked;
+    ref.watch(noticeProvider.select((n) => n == null)); // the guide's turn comes after it
     final hints = _hints || _firstHintDue(session, settings);
     final touch = !_desktop && !_locked;
     // Video details sit under the title. Where the play button is in the middle of the
