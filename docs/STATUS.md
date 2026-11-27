@@ -117,4 +117,28 @@ New deviations:
 
 Still open: mpv-side behaviour of the new properties (`af` chains, `video-rotate`,
 `secondary-sid`) is exercised only on real devices; Android Kotlin is compile-checked by CI, not
-instrumented; Media Session / lock-screen controls and background audio; casting; SMB / DLNA.
+instrumented; ~~Media Session / lock-screen controls and background audio~~ (pass 4); casting;
+SMB / DLNA.
+
+## 7. Pass 4: v2.1 (2026-11-27)
+
+Lock-screen controls and background sound on Android.
+
+| Area | What changed | Verified by |
+|---|---|---|
+| Media session | `marquee/media` → `MediaChannel.kt`, `NowPlaying.kt` (one framework `MediaSession` + a `MediaStyle` notification), `PlaybackService.kt` (foreground only while the film plays, CPU wake lock, `stopWithTask`). Dart: `lib/engine/now_playing.dart` (what to send and when), `lib/platform/now_playing.dart`, `lib/state/now_playing.dart` (follows the session, routes the commands) | `dart test test/engine/now_playing_test.dart`; CI APK build; **the emulator smoke test** |
+| Background sound | `Settings.backgroundPlay` (off by default); `app.dart` no longer pauses on `onPause` when it is on; a closed PiP window still pauses. media_kit already swaps to `vo=null` when the surface goes, so nothing in the player changed | the emulator smoke test covers the default (pause on screen off, play from a media key in the dark, position moves on) |
+| CI | `release.yml` → `android-smoke`: the built x86_64 APK on an API 34 emulator, driven by `scripts/android-smoke.py` with adb only, asserting on `dumpsys media_session` / `dumpsys activity services` | the run itself; advisory for `publish`, like the playback job |
+
+New deviations:
+
+| # | Plan said | Built | Why |
+|---|---|---|---|
+| D21 | Android manifest: "no notifications" | one media-controls notification, two foreground-service permissions, still **no** `POST_NOTIFICATIONS` | sound behind the lock screen needs a foreground service, and Android requires a notification for one. Android 13+ shows a media session's controls without the permission, so Marquee never asks |
+| D22 | a plugin (`audio_service`) for the session | ~450 lines of Kotlin on the framework `MediaSession` | the plugin wants its own cached engine and activity base class; the app already owns its channels (`marquee/pip`, `marquee/content`) and this keeps one engine, one activity |
+| D23 | leaving the app pauses, always | a setting, off by default | a film is watched; a concert or a lecture is listened to |
+
+Known limits: the picture is still decoded while only the sound is wanted (battery; `vid=no`
+on background is the fix, untested); swiping the app out of Recents ends playback (by design:
+the engine dies with the activity); Windows has no System Media Transport Controls card, only
+the media keys.

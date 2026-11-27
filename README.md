@@ -34,6 +34,7 @@ Get the files from the **[latest release](https://github.com/RahulTarigoppula/ma
 - Sound: 150 % boost, clear-voices / bass / treble / night profiles, evening-out of loud and quiet parts, audio delay, track choice remembered per film.
 - A live preview frame while you move along the seek bar (desktop), video details overlay (`I`), keep-on-top mini window (`T`), screenshots.
 - Android: swipe to seek, edge swipes for brightness and volume, double-tap to jump, pinch to fill, touch lock, rotation that follows the picture, picture-in-picture, pauses for calls and unplugged headphones.
+- Android: play, pause, jump and skip from the **lock screen**, the notification shade and headset buttons; and, if you switch it on in Settings → Playback, the sound **keeps playing with the screen off** or behind another app.
 - Windows: every control on the keyboard (press `?`), drag-and-drop, "Open with", single window.
 
 **Privacy.** No accounts of ours, no telemetry, no analytics, no ads. Only the file's fingerprint, size and a title query go to OpenSubtitles when searching. Looking for an update is off unless you switch it on (it asks GitHub once a day, nothing about you is sent). Everything else stays on your device.
@@ -44,7 +45,7 @@ Get the files from the **[latest release](https://github.com/RahulTarigoppula/ma
 2. **Android signing**: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_PASSWORD`, `ANDROID_KEY_ALIAS` (see §4 below). Without them APKs are signed with a throwaway CI key and won't update in place.
 3. **Settings → Pages → Source: GitHub Actions**, then re-run the `pages` workflow, for Marquee Lite at `https://rahultarigoppula.github.io/marquee-player/`.
 4. Optional: `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` + repo variable `WORKER_URL` to give Lite online subtitle search.
-5. Release: `git tag v2.0.1 && git push --tags`.
+5. Release: `git tag v2.1.1 && git push --tags`.
 
 Marquee is one Flutter codebase that ships a **Windows `.exe`** and an **Android APK** on the same engine, libmpv (ffmpeg + libass) through `media_kit`, so an MKV with HEVC video, AC-3 audio and an ASS subtitle track plays identically on both, with no codec packs.
 The instant a file opens it is fingerprinted with the OpenSubtitles **moviehash** (128 KiB of I/O), looked up hash-first, and the best subtitle is downloaded, saved beside the file and attached **before the first frame is shown**, a hash hit means the subtitle was uploaded for that exact release, so it is already in sync.

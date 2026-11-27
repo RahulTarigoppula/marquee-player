@@ -5,7 +5,7 @@
 
 Needs one device or emulator on adb (Android 13+). It installs the APK, opens the film through
 "Open with" and then only does what a person could do from outside the app: media keys, the
-power button, Back. What it reads back is what Android itself reports (`dumpsys`), never the
+power button, a headset button, Back. What it reads back is what Android itself reports (`dumpsys`), never the
 app's own word:
 
   1. the film reaches the system's media controls, playing, with a foreground service
@@ -46,6 +46,13 @@ def shell(command, check=True):
 
 def key(code):
     shell(f"input keyevent {code}")
+
+
+def media_button(name):
+    """A headset's button. `input keyevent` cannot stand in for one while the screen is off:
+    Android hands an injected key to the focused window, and a dark screen has none, so the
+    key is dropped before any app sees it. This goes where a real button goes."""
+    shell(f"cmd media_session dispatch {name}")
 
 
 class Failed(Exception):
@@ -183,11 +190,11 @@ def run(apk, film, out):
     wait_for("paused by the screen going off", in_state(PAUSED), 30)
 
     step("play from the dark screen: the sound carries on")
-    key(KEY_MEDIA_PLAY)
+    media_button("play")
     dark = wait_for("playing with the screen off", in_state(PLAYING), 30)
     wait_for("the playback service is in the foreground again", service_is_foreground, 20)
     time.sleep(8)
-    key(KEY_MEDIA_PAUSE)
+    media_button("pause")
     after = wait_for("paused from the dark screen", in_state(PAUSED), 20)
     if after[1] - dark[1] < 4000:
         raise Failed(

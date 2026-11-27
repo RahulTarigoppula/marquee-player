@@ -886,7 +886,7 @@ Machine: the owner's Windows 11 PC, running **the tag's own zip**, extracted to 
 | `pages.yml` | push to `main` touching `web/**` | build + deploy Marquee Lite (DEPLOYMENT §5); runs `npm test -- --run` first so a broken Lite never reaches the live URL |
 | `worker.yml` | push to `main` touching `worker/**` | `worker-test` then `wrangler deploy` (DEPLOYMENT §4) |
 | `playback.yml` | called by `ci.yml` and `release.yml`; `workflow_dispatch` | the real-playback test of §6 on `windows-latest` (DEPLOYMENT §7.4) |
-| `release.yml` | tag `v*` (and `workflow_dispatch` for a dry run; weekly schedule = playback only) | `gate` (analyze + unit tests on Windows) → `build` matrix (Windows installer + zip, split-per-ABI APKs, installer smoke test) → `publish` (GitHub Release); `playback` runs beside it and never blocks. Size gates N9–N11 and the 25-minute budget N17 live here (DEPLOYMENT §7) |
+| `release.yml` | tag `v*` (and `workflow_dispatch` for a dry run; weekly schedule = playback only) | `gate` (analyze + unit tests on Windows) → `build` matrix (Windows installer + zip, split-per-ABI APKs, installer smoke test) → `publish` (GitHub Release); `playback` and `android-smoke` (the APK on an emulator: media controls, screen-off pause, play in the dark, `scripts/android-smoke.py`) run beside it and never block. Size gates N9–N11 and the 25-minute budget N17 live here (DEPLOYMENT §7) |
 | `contract.yml` | nightly cron + `workflow_dispatch` | §7.2 against the real API with `OS_API_KEY`; opens an issue on a shape change instead of failing a branch |
 
 A pull request may merge when `ci.yml` is green. A tag may be cut when `ci.yml` is green **and** §14 and §15 have been walked on the actual artifacts.
@@ -925,3 +925,7 @@ names the behaviour that was only ever reasoned about, never observed.
 | 9 | Windows | Add a folder of mixed files (video, audio-only, a broken file, one cloud-only OneDrive file) | Cards fill in, the app stays smooth, the cloud file is NOT downloaded |
 | 10 | Windows | Install 2.0 over 1.1.0; close maximised; relaunch | History, resume points and settings survive; opens maximised |
 | 11 | Both | Screenshot from the More menu | Android: appears in the Gallery (Pictures/Marquee); Windows: Pictures\Marquee |
+| 12 | Android | Play a film, lock the phone, wake it (do not unlock) | The film paused; its card is on the lock screen with play, the two jump buttons and a seek bar; play there starts the sound |
+| 13 | Android | Settings → Playback → Keep playing in the background ON; play; lock the phone; wait 5 min; then a headset's play / pause button | The sound never stops; the button pauses and resumes it |
+| 14 | Android | Same setting ON, a folder of two short episodes, lock the phone before the first ends | The second starts by itself, the lock-screen card changes title |
+| 15 | Android | While playing, press Home (PiP), then close the PiP window; then swipe Marquee out of Recents | Closing PiP pauses; swiping away removes the notification and nothing plays |

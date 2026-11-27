@@ -319,6 +319,10 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
       if (_biasBusy || !mounted) return;
       final s = _session;
       if (s == null || !_playing) return; // paused ⇒ the glow freezes
+      // Playing unseen (the screen is off, or another app is in front): there is no picture
+      // to sample and nobody to glow for.
+      final life = WidgetsBinding.instance.lifecycleState;
+      if (life == AppLifecycleState.paused || life == AppLifecycleState.hidden) return;
       _biasBusy = true;
       try {
         final bytes = await s.engine.biasFrame();

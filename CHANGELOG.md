@@ -3,6 +3,25 @@
 All notable changes to Marquee are recorded here. Versions follow [SemVer](https://semver.org);
 tags are `vX.Y.Z` and each one produces a GitHub Release (see `.github/workflows/release.yml`).
 
+## [2.1.0] - 2026-11-27
+
+### Added
+- **Lock-screen controls (Android).** While a film is open, play / pause, jump back and
+  forward, previous / next and a seek bar are on the lock screen, in the notification shade
+  and on headset or Bluetooth buttons. Tapping the card returns to the film.
+- **Background sound (Android).** Settings → Playback → *Keep playing in the background*: the
+  sound carries on when the screen goes off or another app is in front, and the next episode
+  starts by itself. Off by default: leaving the app pauses the film, and the lock screen can
+  start it again. Closing a picture-in-picture window always pauses.
+- **CI:** the release build now runs the APK on an Android emulator (`scripts/android-smoke.py`):
+  it opens a film through "Open with" and checks the media controls, the screen-off pause and
+  play-in-the-dark through `dumpsys`.
+
+### Changed
+- Android declares `FOREGROUND_SERVICE` and `FOREGROUND_SERVICE_MEDIA_PLAYBACK`. The service is
+  in the foreground only while a film plays. Still no notification permission: Marquee never
+  asks for it, and its one notification is the media controls.
+
 ## [2.0.0] - 2026-11-26
 
 ### Added

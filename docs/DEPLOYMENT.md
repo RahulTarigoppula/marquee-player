@@ -1224,7 +1224,7 @@ android {
 
 ### 8.4 `android/app/src/main/AndroidManifest.xml`
 
-Only what Marquee actually needs. Everything absent from this list is absent on purpose (GOAL §9 privacy): no camera, no location, no notifications, no exact alarms, no `MANAGE_EXTERNAL_STORAGE`, no network-state snooping.
+Only what Marquee actually needs. Everything absent from this list is absent on purpose (GOAL §9 privacy): no camera, no location, no `POST_NOTIFICATIONS`, no exact alarms, no `MANAGE_EXTERNAL_STORAGE`, no network-state snooping. Since v2.1 the real manifest also declares `FOREGROUND_SERVICE` and `FOREGROUND_SERVICE_MEDIA_PLAYBACK` and the `PlaybackService` (lock-screen controls and background sound, STATUS D21); the file in the repo is the truth, the listing below is the v1 baseline.
 
 ```xml
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">

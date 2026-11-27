@@ -6,6 +6,7 @@ name: release
 #                      Use it on main to try a build before tagging.
 #   schedule           the real-playback test alone (catches a runner image or libmpv drift)
 # The real-playback job never holds a release back: it is new, and a flaky test must not cost a tag.
+# Nor does android-smoke (the APK on an emulator): read both before tagging.
 on:
   push:
     tags: ['v*']
