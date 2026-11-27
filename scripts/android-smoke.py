@@ -8,6 +8,7 @@ Needs one device or emulator on adb (Android 13+). It installs the APK, opens th
 power button, a headset button, Back. What it reads back is what Android itself reports (`dumpsys`), never the
 app's own word:
 
+  0. a cold start reaches the Lobby and stays up
   1. the film reaches the system's media controls, playing, with a foreground service
   2. pause and play from a media key
   3. the screen goes off -> the film pauses (background play is off by default)
@@ -153,10 +154,23 @@ def run(apk, film, out):
     )
     media = wait_for("the film is in the device's video library", film_id, 60)
 
-    step("open it the way a file manager would")
+    step("a cold start to the Lobby")
     key(KEY_WAKEUP)
     shell("wm dismiss-keyguard", check=False)
     adb("logcat", "-c", check=False)
+    launch = shell(f"am start -W -n {ACTIVITY}")
+    total = re.search(r"TotalTime: (\d+)", launch)
+    time.sleep(5)
+    if not shell(f"pidof {PKG}", check=False).strip():
+        raise Failed("the app did not stay up after a plain launch")
+    screenshot(out, "lobby.png")
+    with open(os.path.join(out, "startup.txt"), "w", encoding="utf-8") as f:
+        f.write(launch)
+    # An emulator without a GPU: the number is for comparing runs, not for boasting.
+    print(f"   ok: the Lobby is up ({total.group(1) if total else '?'} ms to first frame)")
+    shell(f"am force-stop {PKG}")
+
+    step("open it the way a file manager would")
     shell(
         f"am start -W -n {ACTIVITY} -a android.intent.action.VIEW "
         f"-d content://media/external/video/media/{media} -t video/mp4 "
@@ -168,6 +182,14 @@ def run(apk, film, out):
     wait_for("the playback service is in the foreground", service_is_foreground, 20)
     time.sleep(5)
     screenshot(out, "playing.png")
+    # A tap on the picture brings the controls up (away from the middle, where play/pause is).
+    size = re.search(r"(\d+)x(\d+)", shell("wm size", check=False))
+    if size:
+        long_side = max(int(size.group(1)), int(size.group(2)))
+        short_side = min(int(size.group(1)), int(size.group(2)))
+        shell(f"input tap {long_side // 4} {short_side // 3}", check=False)
+        time.sleep(1)
+        screenshot(out, "controls.png")
 
     step("pause and play from a media key")
     key(KEY_MEDIA_PAUSE)
