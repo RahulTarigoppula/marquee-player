@@ -13,6 +13,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
 import 'engine.dart';
+import 'thumbnailer.dart' show SmallFrames, kSmallFrameFilter;
 
 /// The fastest the preview is asked to move: about eight frames a second. A slow disk or a
 /// heavy keyframe makes it slower by itself (the next seek waits for the last one to land).
@@ -68,10 +69,17 @@ class SeekPreview {
     'vd-lavc-threads': '2',
     'vd-lavc-fast': 'yes',
     'vd-lavc-skiploopfilter': 'all',
-    // media_kit sizes its texture to the video's own size once that is known (the fixed
-    // width / height below only hold until then), so the picture is made small in mpv.
-    'vf': 'lavfi=[scale=320:-2]',
   };
+
+  /// Without the small-picture filter the preview still works at the film's own size, but
+  /// only up to this width: a 4K frame copied to a CPU texture eight times a second is exactly
+  /// the load the film must not feel. Wider films show the time alone.
+  static const int _unscaledMaxWidth = 1920;
+
+  /// This player's frames come out small ([kSmallFrameFilter] is on it). media_kit sizes its
+  /// texture to the video's own size once that is known (the fixed width / height below only
+  /// hold until then), so the picture is made small in mpv.
+  bool _small = false;
 
   /// The frame at (the keyframe before) [at], as soon as the player can. Calls made while it
   /// is still busy replace each other: only the latest is ever sought.
@@ -97,13 +105,30 @@ class SeekPreview {
           if (!_current(player)) return;
           _loaded = true;
         }
-        await native.command([
+        Future<void> land() => native.command([
           'seek',
           (at.inMilliseconds / 1000).toStringAsFixed(3),
           'absolute+keyframes',
         ]);
-        final shown = await _landed(native, player);
+        await land();
+        var shown = await _landed(native, player);
         if (!_current(player)) return;
+        // The first frame this player shows is where it can truly ask for the small-picture
+        // filter (see [SmallFrames]); normally the answer is already known and the filter was
+        // on from the start.
+        if (shown && !_small && SmallFrames.works != false) {
+          _small = await SmallFrames.apply(native);
+          if (!_current(player)) return;
+          if (_small) {
+            // The frame on the texture was made before the filter: land again, through it.
+            await land();
+            shown = await _landed(native, player);
+            if (!_current(player)) return;
+          }
+        }
+        if (shown && !_small && await _width(native) > _unscaledMaxWidth) {
+          throw StateError('too large to preview unscaled');
+        }
         if (shown) {
           _blank = 0;
           ready.value = true;
@@ -152,8 +177,12 @@ class SeekPreview {
     // pointer draws no frames, and every call below would wait for one.
     SchedulerBinding.instance.ensureVisualUpdate();
     final native = player.platform;
+    // Known to work (the thumbnailer or an earlier preview asked): on from the start. Not
+    // known yet: left off, and asked once this player shows its first frame (see [_pump]).
+    _small = SmallFrames.works == true;
     if (native is NativePlayer) {
-      for (final MapEntry(:key, :value) in _options.entries) {
+      final options = {..._options, if (_small) 'vf': kSmallFrameFilter};
+      for (final MapEntry(:key, :value) in options.entries) {
         try {
           await native.setProperty(key, value);
         } on Object {
@@ -177,12 +206,16 @@ class SeekPreview {
     for (var i = 0; i < 40; i++) {
       if (!_current(player)) return false;
       if (await native.getProperty('seeking') != 'yes') {
-        return (int.tryParse(await native.getProperty('video-params/w')) ?? 0) > 0;
+        return await _width(native) > 0;
       }
       await Future<void>.delayed(const Duration(milliseconds: 40));
     }
     return false;
   }
+
+  /// The decoded picture's own width (before any filter); 0 while there is none.
+  Future<int> _width(NativePlayer native) async =>
+      int.tryParse(await native.getProperty('video-params/w')) ?? 0;
 
   /// Nobody has hovered for a while: let the file (and the decoder's memory) go.
   Future<void> _unload() async {

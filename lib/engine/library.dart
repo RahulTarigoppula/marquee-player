@@ -2,6 +2,7 @@
 // sort orders, the search match, a folder's neighbours (next / previous episode), what counts as
 // "new", and the start-up cache. Pure Dart: the scanners (lib/platform/library_scan.dart) make
 // the items, the Lobby draws them.
+import 'dart:convert';
 import 'dart:math' as math;
 
 import 'filename.dart';
@@ -158,6 +159,21 @@ List<LibraryItem>? decodeLibraryCache(Object? json) {
   return [for (final r in rows) ?LibraryItem.fromRow(r)];
 }
 
+/// The cache as the text that is stored. With [decodeLibraryCacheText] it is everything the
+/// cache costs, in two plain functions of plain values, so the app can run either off the UI
+/// isolate: thousands of rows take longer to encode or decode than a frame lasts.
+String encodeLibraryCacheText(List<LibraryItem> items, {int limit = kLibraryCacheLimit}) =>
+    jsonEncode(encodeLibraryCache(items, limit: limit));
+
+/// The items in stored cache [text]; null when it is not a cache this build can read.
+List<LibraryItem>? decodeLibraryCacheText(String text) {
+  try {
+    return decodeLibraryCache(jsonDecode(text));
+  } on FormatException {
+    return null;
+  }
+}
+
 /// A fresh scan that only knows names and sizes keeps what was already learned about the same
 /// file (duration, picture size), so a rescan never blanks the badges.
 List<LibraryItem> carryProbes(List<LibraryItem> fresh, List<LibraryItem> known) {
@@ -185,8 +201,32 @@ bool sameLibrary(List<LibraryItem> a, List<LibraryItem> b) {
 
 // ───────────────────────────── order ─────────────────────────────
 
+/// What sorting and searching ask of an item's name, worked out once per item instead of once
+/// per comparison (a sort) or once per keystroke (a search): on a library of thousands that
+/// is the difference between a frozen window and an instant list.
+class _ItemKeys {
+  _ItemKeys(this._item) : name = naturalKey(_item.name);
+  final LibraryItem _item;
+  final NaturalKey name;
+  String? _hay;
+  String? _squashed;
+
+  /// The file and folder name as the search reads them (see [searchFold]).
+  String get hay => _hay ??= searchFold('${_item.name} ${_item.folderName}');
+
+  /// [hay] with the spaces taken out, for a query typed as one word.
+  String get squashed => _squashed ??= hay.replaceAll(' ', '');
+}
+
+/// Kept beside the items, not in them: an item stays a small constant value, and its keys go
+/// when it does (a rescan that replaces the list drops the old keys with it).
+final _itemKeys = Expando<_ItemKeys>('library item keys');
+
+_ItemKeys _keysOf(LibraryItem item) => _itemKeys[item] ??= _ItemKeys(item);
+
 int _byName(LibraryItem a, LibraryItem b) {
-  final c = naturalCompare(a.name, b.name);
+  if (identical(a, b)) return 0;
+  final c = _keysOf(a).name.compareTo(_keysOf(b).name);
   return c != 0 ? c : a.locator.compareTo(b.locator);
 }
 
@@ -194,14 +234,24 @@ int _byName(LibraryItem a, LibraryItem b) {
 /// videos of unknown length sort after every known one under "Longest first".
 List<LibraryItem> sortLibrary(Iterable<LibraryItem> items, LibrarySort sort) {
   int then(int c, LibraryItem a, LibraryItem b) => c != 0 ? c : _byName(a, b);
-  return [...items]..sort(
-    (a, b) => switch (sort) {
-      LibrarySort.name => _byName(a, b),
-      LibrarySort.newest => then(b.modifiedAt.compareTo(a.modifiedAt), a, b),
-      LibrarySort.largest => then(b.sizeBytes.compareTo(a.sizeBytes), a, b),
-      LibrarySort.longest => then((b.durationMs ?? -1).compareTo(a.durationMs ?? -1), a, b),
-    },
-  );
+  List<LibraryItem> by(int Function(LibraryItem a, LibraryItem b) order) => [...items]..sort(order);
+  switch (sort) {
+    case LibrarySort.name:
+      // The default order, and the one where every comparison reads the names: each item's
+      // key is looked up once here, not twice per comparison.
+      final keyed = [for (final i in items) (key: _keysOf(i).name, item: i)]
+        ..sort((a, b) {
+          final c = a.key.compareTo(b.key);
+          return c != 0 ? c : a.item.locator.compareTo(b.item.locator);
+        });
+      return [for (final k in keyed) k.item];
+    case LibrarySort.newest:
+      return by((a, b) => then(b.modifiedAt.compareTo(a.modifiedAt), a, b));
+    case LibrarySort.largest:
+      return by((a, b) => then(b.sizeBytes.compareTo(a.sizeBytes), a, b));
+    case LibrarySort.longest:
+      return by((a, b) => then((b.durationMs ?? -1).compareTo(a.durationMs ?? -1), a, b));
+  }
 }
 
 // ───────────────────────────── folders ─────────────────────────────
@@ -257,8 +307,10 @@ List<LibraryFolder> groupFolders(
         ),
       ),
   ];
+  // Each folder's name is cut up once, not once per comparison.
+  final keys = {for (final f in folders) f: naturalKey(f.name)};
   int byName(LibraryFolder a, LibraryFolder b) {
-    final c = naturalCompare(a.name, b.name);
+    final c = keys[a]!.compareTo(keys[b]!);
     return c != 0 ? c : a.path.compareTo(b.path);
   }
 
@@ -299,30 +351,92 @@ List<LibraryItem> inFolder(Iterable<LibraryItem> items, String folderPath) => [
 
 // ───────────────────────────── search ─────────────────────────────
 
-final _separators = RegExp(r'[\s._\-\[\](){}+,]+');
+/// What a release name uses instead of a space: white space itself (what a regular
+/// expression calls `\s`) and `. _ - [ ] ( ) { } + ,`.
+bool _isSeparator(int unit) {
+  if (unit < 0x80) {
+    return switch (unit) {
+      0x20 || 0x09 || 0x0A || 0x0B || 0x0C || 0x0D => true,
+      0x2E || 0x5F || 0x2D || 0x5B || 0x5D || 0x28 || 0x29 || 0x7B || 0x7D || 0x2B || 0x2C => true,
+      _ => false,
+    };
+  }
+  return unit == 0xA0 ||
+      unit == 0x1680 ||
+      (unit >= 0x2000 && unit <= 0x200A) ||
+      unit == 0x2028 ||
+      unit == 0x2029 ||
+      unit == 0x202F ||
+      unit == 0x205F ||
+      unit == 0x3000 ||
+      unit == 0xFEFF;
+}
 
 /// Lower case, with the punctuation release names use instead of spaces folded to one space:
-/// `The.Third_Man-1949` reads `the third man 1949`.
-String searchFold(String text) => text.toLowerCase().replaceAll(_separators, ' ').trim();
+/// `The.Third_Man-1949` reads `the third man 1949`. Exactly
+/// `toLowerCase().replaceAll(RegExp(r'[\s._\-\[\](){}+,]+'), ' ').trim()`, done by hand: it
+/// runs once for every video of a library on the first key of a search.
+String searchFold(String text) {
+  final lower = text.toLowerCase();
+  final end = lower.length;
+  StringBuffer? out;
+  var kept = 0; // lower[kept..at) is waiting to be copied
+  var at = 0;
+  while (at < end) {
+    if (!_isSeparator(lower.codeUnitAt(at))) {
+      at++;
+      continue;
+    }
+    var to = at + 1;
+    while (to < end && _isSeparator(lower.codeUnitAt(to))) {
+      to++;
+    }
+    // A single space already reads as itself: most file names are copied in a few pieces.
+    if (to - at > 1 || lower.codeUnitAt(at) != 0x20) {
+      (out ??= StringBuffer())
+        ..write(lower.substring(kept, at))
+        ..write(' ');
+      kept = to;
+    }
+    at = to;
+  }
+  if (out == null) return lower.trim();
+  out.write(lower.substring(kept));
+  return out.toString().trim();
+}
+
+/// A search as typed, folded once for the whole list.
+class _Query {
+  _Query(String text) : this._(searchFold(text));
+  _Query._(String folded)
+    : isEmpty = folded.isEmpty,
+      words = folded.split(' '),
+      squashed = folded.replaceAll(' ', '');
+  final bool isEmpty;
+  final List<String> words;
+  final String squashed;
+
+  bool matches(LibraryItem item) {
+    if (isEmpty) return true;
+    final keys = _keysOf(item);
+    return words.every(keys.hay.contains) || keys.squashed.contains(squashed);
+  }
+}
 
 /// Whether [item] answers [query]: every word of the query appears in the file or folder name
 /// (in any order), or the query matches with the spaces taken out (`thirdman`). An empty query
 /// matches everything.
-bool matchesSearch(LibraryItem item, String query) {
-  final q = searchFold(query);
-  if (q.isEmpty) return true;
-  final hay = searchFold('${item.name} ${item.folderName}');
-  if (q.split(' ').every(hay.contains)) return true;
-  return hay.replaceAll(' ', '').contains(q.replaceAll(' ', ''));
-}
+bool matchesSearch(LibraryItem item, String query) => _Query(query).matches(item);
 
-List<LibraryItem> searchLibrary(Iterable<LibraryItem> items, String query) =>
-    searchFold(query).isEmpty
-    ? [...items]
-    : [
-        for (final i in items)
-          if (matchesSearch(i, query)) i,
-      ];
+List<LibraryItem> searchLibrary(Iterable<LibraryItem> items, String query) {
+  final q = _Query(query);
+  return q.isEmpty
+      ? [...items]
+      : [
+          for (final i in items)
+            if (q.matches(i)) i,
+        ];
+}
 
 // ───────────────────────────── what a card says ─────────────────────────────
 
@@ -371,6 +485,19 @@ String _stem(String name) {
 /// `The Third Man (1949)` or `Severance S02E03`; anything else (camera clips, home videos)
 /// keeps its own name with the dots and underscores turned into spaces, never a guess.
 String libraryTitle(String name) {
+  final known = _titles[name];
+  if (known != null) return known;
+  // A bound, not a policy: a library larger than this works some titles out again.
+  if (_titles.length >= _titleMemo) _titles.clear();
+  return _titles[name] = _readTitle(name);
+}
+
+/// Titles already worked out, by file name. Reading one runs the whole filename parser, and a
+/// card asks for its title on every build (a scrolling list builds cards all the time).
+final _titles = <String, String>{};
+const int _titleMemo = 8192;
+
+String _readTitle(String name) {
   final stem = _stem(name);
   final plain = stem.replaceAll(RegExp(r'[._]+'), ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
   final parsed = parseName(name);
@@ -395,10 +522,65 @@ String libraryTitle(String name) {
 
 /// The cache key of an item's thumbnail: stable for the same file, different once the file is
 /// replaced (its size or change time moves), so a stale frame is never shown and a file that
-/// could not be read is tried again only when it changes.
+/// could not be read is tried again when it changes (or after [kThumbFailFor]).
 String thumbKey(LibraryItem item) => urlResumeKey(
   '${item.locator}|${item.sizeBytes}|${item.modifiedAt.millisecondsSinceEpoch}',
 ).value;
+
+// ───────────────────────────── videos that gave no frame ─────────────────────────────
+
+/// A "this video gave no frame" mark is believed for this long, then the video is tried
+/// again: what looked like a broken file may have been a busy system or a drive not ready.
+const Duration kThumbFailFor = Duration(days: 14);
+
+/// Whether a mark written at [markedAt] has had its time.
+bool thumbFailExpired(DateTime markedAt, {required DateTime now}) =>
+    now.difference(markedAt) > kThumbFailFor;
+
+/// This many videos in a row with no frame, and not one success yet, is not that many broken
+/// videos: it is the frame grabber itself that does not work on this run.
+const int kThumbBreakAfter = 8;
+
+/// The frame queue's circuit breaker. Until one frame has been made in this run of the app,
+/// a video that gave none is only HELD here, not written down as broken: a cause that fails
+/// every file alike (a filter this libmpv build lacks, no GPU in a remote session, a system
+/// that answers nothing) must never mark a whole library. The first success proves the
+/// grabber and the held marks are written; [kThumbBreakAfter] failures without one forget
+/// them and stop the queue until the app is started again.
+///
+/// The price: a library whose first [kThumbBreakAfter] videos really are all unreadable gets
+/// no frames in that run. It gets its title cards instead, and nothing is remembered wrongly.
+class ThumbBreaker {
+  final _held = <String>{};
+  bool _proven = false;
+  bool _tripped = false;
+
+  /// No more frames in this run.
+  bool get tripped => _tripped;
+
+  /// [key] gave no frame earlier in this run and is waiting for the verdict: not asked again.
+  bool holds(String key) => _held.contains(key);
+
+  /// [key] gave no frame. True when that may be written down now.
+  bool failed(String key) {
+    if (_proven) return true;
+    if (_tripped) return false;
+    _held.add(key);
+    if (_held.length >= kThumbBreakAfter) {
+      _tripped = true;
+      _held.clear();
+    }
+    return false;
+  }
+
+  /// A frame was made. Returns the keys held until now: their marks are real after all.
+  List<String> succeeded() {
+    _proven = true;
+    final real = _held.toList();
+    _held.clear();
+    return real;
+  }
+}
 
 /// The last segment of a folder path, whichever slash it uses (`C:\Users\me\Videos` reads
 /// `Videos`); a bare drive (`D:\`) reads `D:`.

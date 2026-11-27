@@ -126,6 +126,10 @@ class Settings {
   /// Off, leaving the app pauses the film (the lock-screen controls can still start it again).
   final bool backgroundPlay;
 
+  /// Phone: the one-time picture of the touch gestures has been shown and sent away. It is
+  /// never shown unasked again (More › Touch gestures brings it back).
+  final bool gestureHintSeen;
+
   const Settings({
     this.languages = const ['en'],
     this.preferHearingImpaired = false,
@@ -158,6 +162,7 @@ class Settings {
     this.librarySort = LibrarySort.name,
     this.showRemaining = false,
     this.backgroundPlay = false,
+    this.gestureHintSeen = false,
   });
 
   Settings copyWith({
@@ -192,6 +197,7 @@ class Settings {
     LibrarySort? librarySort,
     bool? showRemaining,
     bool? backgroundPlay,
+    bool? gestureHintSeen,
   }) => Settings(
     languages: languages ?? this.languages,
     preferHearingImpaired: preferHearingImpaired ?? this.preferHearingImpaired,
@@ -224,6 +230,7 @@ class Settings {
     librarySort: librarySort ?? this.librarySort,
     showRemaining: showRemaining ?? this.showRemaining,
     backgroundPlay: backgroundPlay ?? this.backgroundPlay,
+    gestureHintSeen: gestureHintSeen ?? this.gestureHintSeen,
   );
 
   static int _seekStep(int v) => seekSteps.contains(v) ? v : 10;
@@ -263,7 +270,8 @@ class Settings {
       other.repeat == repeat &&
       other.librarySort == librarySort &&
       other.showRemaining == showRemaining &&
-      other.backgroundPlay == backgroundPlay;
+      other.backgroundPlay == backgroundPlay &&
+      other.gestureHintSeen == gestureHintSeen;
 
   @override
   int get hashCode => Object.hashAll([
@@ -298,6 +306,7 @@ class Settings {
     librarySort,
     showRemaining,
     backgroundPlay,
+    gestureHintSeen,
   ]);
 
   /// The fields that change how mpv draws text subtitles (size, look, placement, colour).
@@ -349,6 +358,7 @@ class Settings {
     'librarySort': librarySort.name,
     'showRemaining': showRemaining,
     'backgroundPlay': backgroundPlay,
+    'gestureHintSeen': gestureHintSeen,
   };
 
   /// Unknown fields are ignored and missing ones keep their defaults (the import rule, §5.5).
@@ -397,6 +407,7 @@ class Settings {
       librarySort: LibrarySort.values.asNameMap()[j['librarySort']] ?? d.librarySort,
       showRemaining: pick('showRemaining', d.showRemaining),
       backgroundPlay: pick('backgroundPlay', d.backgroundPlay),
+      gestureHintSeen: pick('gestureHintSeen', d.gestureHintSeen),
     );
   }
 }

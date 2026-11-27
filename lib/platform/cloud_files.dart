@@ -4,6 +4,7 @@
 // dart:io's FileStat does not expose these attribute bits, hence one kernel32 call.
 import 'dart:ffi';
 import 'dart:io' show Platform;
+import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
 
@@ -17,8 +18,26 @@ typedef _GetAttrsDart = int Function(Pointer<Utf16> path);
 
 _GetAttrsDart? _getAttrs;
 
+/// [isCloudOnlyFile], asked on a short-lived isolate of its own. The kernel call is
+/// synchronous, and on a drive that has gone to sleep or a network share that is not there it
+/// does not return for seconds (tens of them for an unreachable share): asked on the UI
+/// isolate, that is a frozen window once per video tried. One isolate per question is cheap at
+/// the pace the thumbnailer asks (one file at a time, with a pause between them).
+Future<bool> isCloudOnlyFileOffThread(String path) async {
+  if (!Platform.isWindows) return false;
+  try {
+    return await _ask(path);
+  } on Object {
+    return false; // the question could not be asked: local, as above
+  }
+}
+
+// Its own function: the closure sent to the isolate carries [path] and nothing else.
+Future<bool> _ask(String path) => Isolate.run(() => isCloudOnlyFile(path), debugName: 'cloud file');
+
 /// True when reading [path] would make a sync provider fetch it. False everywhere but
 /// Windows, and false whenever the question cannot be asked (the file is then treated as local).
+/// Blocks until Windows answers: off the UI isolate, use [isCloudOnlyFileOffThread].
 bool isCloudOnlyFile(String path) {
   if (!Platform.isWindows) return false;
   try {

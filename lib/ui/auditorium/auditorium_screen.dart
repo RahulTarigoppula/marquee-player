@@ -4,9 +4,10 @@
 //
 // Layers, bottom to top: bias-light walls · the picture · Flutter subtitles (Android, other
 // scripts) · the gesture surface · the controls · video details, "Skip intro" · menus,
-// readouts, "Up next", the "Unlock" pill · the Booth, the threading overlay and the cue
-// sheet. Overlays are SIBLINGS of the gesture surface, never its children, so a tap on the
-// threading overlay can never pause or seek the hidden film.
+// readouts, "Up next", the "Unlock" pill · the "can't play this file" card · the picture of
+// the touch gestures · the Booth, the threading overlay and the cue sheet. Overlays are
+// SIBLINGS of the gesture surface, never its children, so a tap on the threading overlay can
+// never pause or seek the hidden film.
 //
 // This file holds the room's state, its keys and its gestures. The layers themselves live in
 // layers.dart, the menus in menu_panel.dart, the pure widgets in controls/.
@@ -22,6 +23,10 @@
 // Drags and pinches share Flutter's scale recogniser (a detector cannot have both a pan and a
 // scale): a one-finger "scale" is the drag. A finger added or lifted mid-gesture ends it and
 // the rest of that touch does nothing, so a pinch never turns into a seek.
+//
+// None of that can be seen, so the first film on a phone opens with a picture of it
+// (`GestureGuide`, remembered by the `gestureHintSeen` setting) and More › Touch gestures
+// shows it again. Keep the guide's words in step with the table above.
 import 'dart:async';
 import 'dart:io' show Platform;
 import 'dart:math' as math;
@@ -35,6 +40,7 @@ import 'package:path/path.dart' as p;
 import 'package:screen_brightness/screen_brightness.dart';
 
 import '../../engine/bias_light.dart';
+import '../../engine/models/settings.dart';
 import '../../engine/playback.dart';
 import '../../engine/sync_rule.dart';
 import '../../platform/pip.dart';
@@ -74,6 +80,10 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
   bool _controls = true;
   bool _syncOpen = false;
   bool _details = false;
+
+  /// The picture of the touch gestures, asked for from the More menu. (The first film shows
+  /// it unasked: see [_firstHintDue].)
+  bool _hints = false;
   AuditoriumMenu? _menu;
   final _menuTrail = <AuditoriumMenu>[];
   Timer? _idle;
@@ -113,7 +123,6 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
   FilmOrientation? _orientSent;
   bool _playing = false;
   bool _completed = false;
-  bool _upNextCancelled = false;
   String? _pipKey;
 
   bool get _desktop => PlayerEngine.isDesktop;
@@ -411,6 +420,32 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
 
   void _toggleDetails() => setState(() => _details = !_details);
 
+  /// The first film on a phone shows the touch gestures once, as soon as the picture is up
+  /// (never over the leader or the "can't play" card). The film is NOT paused for it: it goes
+  /// with one tap, and nothing that watches the film from outside sees it stop.
+  bool _firstHintDue(FilmSession s, Settings settings) =>
+      !_desktop &&
+      !_locked &&
+      s.started &&
+      !s.threadingVisible &&
+      s.error == null &&
+      !settings.gestureHintSeen;
+
+  bool get _hintsUp {
+    final s = _session;
+    return s != null && (_hints || _firstHintDue(s, ref.read(settingsValueProvider)));
+  }
+
+  /// "Got it", a tap anywhere on the guide, or Back. The controls come up as they would for
+  /// any first tap, so the next thing seen is where everything is.
+  void _closeHints() {
+    if (_hints) setState(() => _hints = false);
+    if (!ref.read(settingsValueProvider).gestureHintSeen) {
+      unawaited(ref.read(settingsProvider.notifier).edit((s) => s.copyWith(gestureHintSeen: true)));
+    }
+    _poke();
+  }
+
   /// Windows: the film stays above the other windows.
   void _togglePinned() {
     ref.read(pinnedProvider.notifier).toggle();
@@ -435,6 +470,10 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
     }
     if (_desktop && ref.read(fullscreenProvider)) {
       ref.read(fullscreenProvider.notifier).set(false);
+      return;
+    }
+    if (_hintsUp) {
+      _closeHints();
       return;
     }
     if (_menu != null) {
@@ -868,13 +907,14 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
     _showReadout(swipe.delta < 0 ? 'rotate-ccw' : 'rotate-cw', signedClock(swipe.delta));
   }
 
-  /// "Up next" says the file's name. A phone's library film is a content:// URI: its name is
-  /// the device library's to give.
+  /// "Up next" says the next film's title the way the Library does ("Severance S02E04"),
+  /// not its raw file name. A phone's library film is a content:// URI: its name is the
+  /// device library's to give.
   String _upNextName(String locator) {
-    if (!locator.startsWith('content://')) return p.basename(locator);
+    if (!locator.startsWith('content://')) return libraryTitle(p.basename(locator));
     final items = ref.read(deviceLibraryProvider).value?.items ?? const <LibraryItem>[];
     for (final item in items) {
-      if (item.locator == locator) return item.name;
+      if (item.locator == locator) return libraryTitle(item.name);
     }
     return 'The next video';
   }
@@ -894,7 +934,6 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
       if (pb.playing != _playing || pb.completed != _completed) {
         setState(() {
           _playing = pb.playing;
-          if (!pb.completed) _upNextCancelled = false;
           _completed = pb.completed;
         });
         if (!pb.playing) {
@@ -946,14 +985,17 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
     if (ref.watch(pipProvider)) {
       return PictureLayer(engine: engine, fit: session.fit, transparent: false);
     }
-    // One rule decides the end of a film (repeat, "play the next one", the sleep timer): the
-    // card shows only when that rule starts another film. A looping film never completes.
+    // One rule decides the end of a film (repeat, "play the next one", the sleep timer), and
+    // the session runs the countdown to the next one (it must also run in picture in picture
+    // and with the screen off, where this screen is not built). The card shows that countdown
+    // while there is one; it starts nothing itself.
     final upNext = session.upNextFor(settings);
-    final showUpNext =
-        _completed && !_upNextCancelled && upNext != null && !session.threadingVisible;
+    final upNextAt = session.upNextAt;
+    final showUpNext = upNextAt != null && upNext != null && !session.threadingVisible;
     final pad = MediaQuery.paddingOf(context);
     final size = MediaQuery.sizeOf(context);
     final shown = _controls && !_locked;
+    final hints = _hints || _firstHintDue(session, settings);
     final touch = !_desktop && !_locked;
     // Video details sit under the title. Where the play button is in the middle of the
     // picture (phones, narrow windows) they must end above it: a room too short for the
@@ -1039,8 +1081,6 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
                   ),
                 ),
               ),
-              if (session.error != null)
-                Undecodable(sentence: session.error!, onBack: () => unawaited(_back())),
               RepaintBoundary(
                 child: IgnorePointer(
                   ignoring: !shown,
@@ -1058,6 +1098,7 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
                       hitTestBehavior: HitTestBehavior.deferToChild,
                       child: ControlsLayer(
                         session: session,
+                        visible: shown,
                         desktop: _desktop,
                         fullscreen: fullscreen,
                         menu: _menu,
@@ -1113,31 +1154,39 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
                 Positioned.fill(
                   child: GestureDetector(behavior: HitTestBehavior.opaque, onTap: _closeMenu),
                 ),
-                Positioned(
-                  right: Tokens.space4,
-                  bottom: pad.bottom + (_desktop ? 104 : 132),
-                  left: _desktop ? null : Tokens.space4,
-                  child: Align(
-                    alignment: Alignment.bottomRight,
-                    child: MenuPanel(
-                      menu: _menu!,
-                      canGoBack: _menuTrail.isNotEmpty,
-                      maxHeight: MediaQuery.sizeOf(context).height * 0.6,
-                      onBack: () => setState(() => _menu = _menuTrail.removeLast()),
-                      onClose: _closeMenu,
-                      onOpen: (m) => _openMenu(m, sub: true),
-                      onPickSubtitle: () => unawaited(_pickSubtitle()),
-                      onBooth: _openBooth,
-                      onCueSheet: () {
-                        _closeMenu();
-                        ref.read(cueSheetProvider.notifier).set(true);
-                      },
-                      onDetails: () {
-                        _closeMenu();
-                        _toggleDetails();
-                      },
-                      desktop: _desktop,
-                    ),
+                MenuSlot(
+                  desktop: _desktop,
+                  builder: (maxHeight, sheet) => MenuPanel(
+                    menu: _menu!,
+                    canGoBack: _menuTrail.isNotEmpty,
+                    maxHeight: maxHeight,
+                    fill: sheet,
+                    onBack: () => setState(() => _menu = _menuTrail.removeLast()),
+                    onClose: _closeMenu,
+                    onOpen: (m) => _openMenu(m, sub: true),
+                    onPickSubtitle: () => unawaited(_pickSubtitle()),
+                    onBooth: _openBooth,
+                    onCueSheet: () {
+                      _closeMenu();
+                      ref.read(cueSheetProvider.notifier).set(true);
+                    },
+                    onDetails: () {
+                      _closeMenu();
+                      _toggleDetails();
+                    },
+                    onSync: () {
+                      _closeMenu();
+                      setState(() => _syncOpen = true);
+                    },
+                    onGestures: _desktop
+                        ? null
+                        : () {
+                            _closeMenu();
+                            setState(() => _hints = true);
+                          },
+                    onRotate: Platform.isAndroid ? _cycleOrientation : null,
+                    orientation: _orient,
+                    desktop: _desktop,
                   ),
                 ),
               ],
@@ -1174,14 +1223,17 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
               if (showUpNext)
                 Positioned(
                   right: Tokens.space5,
-                  bottom: pad.bottom + 120,
+                  // A phone held sideways: just clear of the bar, so the card ends under the
+                  // top one.
+                  bottom: pad.bottom + (size.height < kShortRoom ? 108 : 120),
                   child: IgnorePointer(
                     ignoring: _locked,
                     child: UpNextCard(
                       key: ValueKey(upNext),
                       name: _upNextName(upNext),
+                      at: upNextAt,
                       onPlay: () => unawaited(_notifier.playUpNext()),
-                      onCancel: () => setState(() => _upNextCancelled = true),
+                      onCancel: _notifier.cancelUpNext,
                     ),
                   ),
                 ),
@@ -1200,6 +1252,23 @@ class _AuditoriumScreenState extends ConsumerState<AuditoriumScreen> {
                       ),
                     ),
                   ),
+                ),
+              // Over the controls too: a file that cannot play has nothing to control, and
+              // the play button in the middle of a phone must not sit on the sentence.
+              if (session.error != null)
+                Undecodable(
+                  sentence: session.error!,
+                  fileName: session.file.displayName,
+                  // The same file again, through the one way in: it closes what is here first.
+                  onRetry: () => unawaited(_notifier.open(session.file)),
+                  onBack: () => unawaited(_notifier.close()),
+                ),
+              if (hints)
+                GestureGuide(
+                  seekStep: settings.seekStepSeconds,
+                  brightness: Platform.isAndroid,
+                  swipeToSeek: settings.swipeToSeek,
+                  onDone: _closeHints,
                 ),
               if (booth) const BoothSheet(),
               if (session.threadingVisible) const ThreadingOverlay(),

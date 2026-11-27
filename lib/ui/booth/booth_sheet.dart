@@ -1,10 +1,12 @@
-// The Subtitle Booth: everything about subtitles (and the audio delay), never above 70 %.
-// The film keeps playing behind the glass. Style choices are Settings — they persist and
-// apply to every film.
+// Subtitle options (the "Booth" in the code): everything about subtitles, and the sound's
+// timing, in one sheet that never covers more than 70 % of the picture. The video keeps
+// playing behind the glass. How subtitles look is a Setting: it persists and applies to
+// every video, so this sheet shows the very controls Settings › Subtitles does.
 //
-// Once the film has started, the subtitle search lives HERE, not over the picture: what was
+// Once the video has started, the subtitle search lives HERE, not over the picture: what was
 // found by name (pick one), why a search stalled and what to try next, and the progress of a
-// search or download asked for from this sheet.
+// search or download asked for from this sheet. It sits right under the list of subtitles,
+// because it is what the sheet is opened for when a search needs an answer.
 import 'dart:async';
 import 'dart:ui' as ui;
 
@@ -13,19 +15,21 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../engine/models/models.dart';
 import '../../engine/sentences.dart';
-import '../../player/engine.dart';
 import '../../state/providers.dart';
 import '../../state/session.dart';
 import '../../theme/house.dart';
 import '../../theme/tokens.dart';
+import '../components/kit.dart';
 import '../components/primitives.dart';
 import '../components/sync_rule.dart';
 import '../components/ticket_strip.dart';
+import '../threading/subtitle_choice.dart';
+import '../ticket_office/subtitles_section.dart' show SubtitleLookControls;
 
 const double kBoothMaxFraction = 0.7;
 
-/// S / M / L / XL → mpv `sub-scale`.
-const Map<String, double> kSubtitleSizes = {'S': 0.8, 'M': 1.0, 'L': 1.3, 'XL': 1.6};
+/// The sheet's name, the same words as the menu row that opens it.
+const String kSubtitleOptions = 'Subtitle options';
 
 class BoothSheet extends ConsumerStatefulWidget {
   const BoothSheet({super.key});
@@ -46,16 +50,13 @@ class _BoothSheetState extends ConsumerState<BoothSheet> {
 
   void _close() => ref.read(boothOpenProvider.notifier).set(false);
 
-  void _edit(Settings Function(Settings) f) =>
-      unawaited(ref.read(settingsProvider.notifier).edit(f));
-
   /// Through the session: it keeps Android from taking the picker for a trip Home (which
-  /// would shrink the film into picture in picture behind it).
+  /// would shrink the video into picture in picture behind it).
   Future<void> _loadFile() => ref.read(sessionProvider.notifier).pickAndLoadSubtitle();
 
   /// The search as it stands: a status line while it runs, the sentence it stalled on, the
-  /// prints it found (a tap downloads that one: the only thing here that spends a ticket)
-  /// and the ways on from a stall.
+  /// subtitles it found (a tap downloads that one: the only thing here that uses up a
+  /// download) and the ways on from a stall.
   List<Widget> _searchRows(FilmSession s, HousePalette p) {
     final t = s.threading;
     final n = ref.read(sessionProvider.notifier);
@@ -71,12 +72,7 @@ class _BoothSheetState extends ConsumerState<BoothSheet> {
           padding: const EdgeInsets.only(bottom: Tokens.space2),
           child: Semantics(
             liveRegion: true,
-            child: Text(
-              t.phase == LeaderPhase.downloading
-                  ? 'DOWNLOADING ${languageName(t.picked?.candidate.language ?? 'en').toUpperCase()} SUBTITLES'
-                  : 'LOOKING FOR SUBTITLES',
-              style: Txt.label(p.accent),
-            ),
+            child: Text(searchStatusLabel(t), style: Txt.label(p.accent)),
           ),
         ),
       if (stalled != null && stalled.sentence.isNotEmpty) ...[
@@ -88,7 +84,7 @@ class _BoothSheetState extends ConsumerState<BoothSheet> {
         const SizedBox(height: Tokens.space2),
       ],
       for (final c in t.candidates.take(8))
-        _PrintRow(
+        SubtitleChoiceRow(
           scored: c,
           picked: same(t.picked, c),
           downloading: t.phase == LeaderPhase.downloading && !t.stalled && same(t.picked, c),
@@ -101,11 +97,7 @@ class _BoothSheetState extends ConsumerState<BoothSheet> {
               ...switch (a) {
                 FallbackAction.signIn => [
                   TextAction(
-                    switch (stalled.failure) {
-                      ThreadingFailure.noApiKey => 'Add your free API key…',
-                      ThreadingFailure.unauthorized => 'Sign in again…',
-                      _ => 'Sign in for more downloads (free)…',
-                    },
+                    signInActionLabel(stalled.failure),
                     primary: true,
                     onTap: () {
                       _close();
@@ -114,15 +106,15 @@ class _BoothSheetState extends ConsumerState<BoothSheet> {
                   ),
                 ],
                 FallbackAction.retry => [
-                  TextAction('Try again', onTap: () => unawaited(n.retrySubtitles())),
+                  TextAction(kTryAgain, onTap: () => unawaited(n.retrySubtitles())),
                 ],
                 FallbackAction.filenameSearch => [
-                  TextAction('Search by filename', onTap: () => unawaited(n.searchByFilename())),
+                  TextAction(kSearchByFileName, onTap: () => unawaited(n.searchByFilename())),
                 ],
                 FallbackAction.subdl => [
-                  TextAction('Use the Subdl slot', onTap: () => unawaited(n.searchSubdl())),
+                  TextAction(kTryBackupSite, onTap: () => unawaited(n.searchSubdl())),
                 ],
-                // The title field is just below; the film is already playing.
+                // The title field is just below; the video is already playing.
                 FallbackAction.manualSearch || FallbackAction.skip => const <Widget>[],
               },
           ],
@@ -135,24 +127,15 @@ class _BoothSheetState extends ConsumerState<BoothSheet> {
     final s = ref.watch(sessionProvider);
     if (s == null) return const SizedBox.shrink();
     final p = House.paletteOf(context);
-    final settings = ref.watch(settingsValueProvider);
     final pb = ref.watch(playbackProvider).value ?? s.engine.snapshot;
     final attached = s.threading.attached;
     final engine = s.engine;
-    // Track choices go through the session, which remembers them for this film.
+    // Track choices go through the session, which remembers them for this video.
     final notifier = ref.read(sessionProvider.notifier);
     final attachedId = attached is ExternalSubtitle ? engine.externalIdFor(attached.path) : null;
     final h = MediaQuery.sizeOf(context).height;
     // The on-screen keyboard (Android) must never cover the search field.
     final keyboard = MediaQuery.viewInsetsOf(context).bottom;
-    final size = kSubtitleSizes.entries
-        .reduce(
-          (a, b) =>
-              (a.value - settings.subtitleScale).abs() <= (b.value - settings.subtitleScale).abs()
-              ? a
-              : b,
-        )
-        .key;
     return Stack(
       children: [
         Positioned.fill(
@@ -202,7 +185,30 @@ class _BoothSheetState extends ConsumerState<BoothSheet> {
                                   setState(() => _drag = 0);
                                 }
                               },
-                              onClose: _close,
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.only(
+                                left: Tokens.space5,
+                                right: Tokens.space2,
+                              ),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Semantics(
+                                      header: true,
+                                      child: Text(
+                                        kSubtitleOptions,
+                                        style: Txt.body(
+                                          Tokens.textLg,
+                                          p.ink,
+                                          weight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  IconMark(icon: 'x', label: 'Close', onTap: _close),
+                                ],
+                              ),
                             ),
                             Flexible(
                               child: SingleChildScrollView(
@@ -215,25 +221,15 @@ class _BoothSheetState extends ConsumerState<BoothSheet> {
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.stretch,
                                   children: [
-                                    const SectionLabel('Tracks'),
                                     _TrackRow(
                                       title: 'Off',
                                       selected: !pb.hasSubtitle,
                                       onTap: () => unawaited(notifier.subtitlesOff()),
                                     ),
                                     if (attached is ExternalSubtitle)
-                                      _TrackRow(
-                                        title: '${attached.language.toUpperCase()}  Marquee',
-                                        chip: attached.syncedByHash
-                                            ? 'SYNCED'
-                                            : attached.provider == SubtitleProvider.sidecar
-                                            ? 'SIDECAR'
-                                            : 'BY NAME · CHECK SYNC',
-                                        chipIcon: attached.syncedByHash ? 'check' : null,
-                                        chipColor: attached.syncedByHash ? p.success : p.warning,
-                                        detail: attached.besideFile
-                                            ? 'saved beside the file'
-                                            : 'saved in app storage',
+                                      _attachedRow(
+                                        attached,
+                                        p,
                                         selected: attachedId != null && pb.subtitleId == attachedId,
                                         onTap: () => unawaited(notifier.useAttachedSubtitle()),
                                       ),
@@ -241,9 +237,12 @@ class _BoothSheetState extends ConsumerState<BoothSheet> {
                                       (t) => t.id != attachedId,
                                     ))
                                       _TrackRow(
-                                        title:
-                                            '${(t.language ?? '—').toUpperCase()}  ${t.title ?? (engine.isExternal(t.id) ? 'file' : 'embedded')}',
-                                        chip: isBitmapSubtitle(t) ? 'IMAGE' : null,
+                                        title: subtitleTrackTitle(
+                                          id: t.id,
+                                          language: t.language,
+                                          title: t.title,
+                                          external: engine.isExternal(t.id),
+                                        ),
                                         selected: pb.subtitleId == t.id,
                                         onTap: () => unawaited(notifier.selectSubtitle(t.id)),
                                       ),
@@ -254,87 +253,16 @@ class _BoothSheetState extends ConsumerState<BoothSheet> {
                                         onTap: () => unawaited(_loadFile()),
                                       ),
                                     ),
-                                    const SectionLabel('Size'),
-                                    Wrap(
-                                      spacing: Tokens.space2,
-                                      children: [
-                                        for (final MapEntry(key: z, value: scale)
-                                            in kSubtitleSizes.entries)
-                                          _Choice(
-                                            label: z,
-                                            on: size == z,
-                                            onTap: () =>
-                                                _edit((x) => x.copyWith(subtitleScale: scale)),
-                                          ),
-                                      ],
-                                    ),
-                                    const SectionLabel('Look'),
-                                    Wrap(
-                                      spacing: Tokens.space2,
-                                      children: [
-                                        for (final (look, label) in [
-                                          (SubtitleLook.outline, 'outline'),
-                                          (SubtitleLook.box, 'dark box'),
-                                        ])
-                                          _Choice(
-                                            label: label,
-                                            on: settings.subtitleLook == look,
-                                            onTap: () =>
-                                                _edit((x) => x.copyWith(subtitleLook: look)),
-                                          ),
-                                      ],
-                                    ),
-                                    const SectionLabel('Colour'),
-                                    Wrap(
-                                      spacing: Tokens.space2,
-                                      children: [
-                                        for (final tint in SubtitleTint.values)
-                                          _Choice(
-                                            label: tint.label.toLowerCase(),
-                                            on: settings.subtitleTint == tint,
-                                            onTap: () =>
-                                                _edit((x) => x.copyWith(subtitleTint: tint)),
-                                          ),
-                                      ],
-                                    ),
-                                    const SectionLabel('Position'),
-                                    Wrap(
-                                      spacing: Tokens.space2,
-                                      children: [
-                                        for (final (at, label) in [
-                                          (SubtitlePlacement.bottom, 'bottom'),
-                                          (SubtitlePlacement.lowerThird, 'lower third'),
-                                          (SubtitlePlacement.top, 'top'),
-                                        ])
-                                          _Choice(
-                                            label: label,
-                                            on: settings.subtitlePlacement == at,
-                                            onTap: () =>
-                                                _edit((x) => x.copyWith(subtitlePlacement: at)),
-                                          ),
-                                      ],
-                                    ),
-                                    const SectionLabel('Subtitle sync'),
-                                    SyncRule(
-                                      delayMs: s.delayMs,
-                                      onChanged: (v) =>
-                                          unawaited(ref.read(sessionProvider.notifier).setDelay(v)),
-                                    ),
-                                    const SectionLabel('Audio delay'),
-                                    _AudioDelay(
-                                      ms: s.audioDelayMs,
-                                      onChanged: (v) => unawaited(
-                                        ref.read(sessionProvider.notifier).setAudioDelay(v),
-                                      ),
-                                    ),
-                                    const SectionLabel('Find another print'),
+                                    const _Heading('Find different subtitles'),
                                     ..._searchRows(s, p),
                                     TextField(
                                       controller: _search,
                                       style: Txt.body(Tokens.textBase, p.ink),
                                       scrollPadding: const EdgeInsets.only(bottom: 120),
+                                      textInputAction: TextInputAction.search,
                                       decoration: InputDecoration(
-                                        hintText: 'Title (leave empty to search by file name)',
+                                        // Short enough to show whole on a 360 px phone.
+                                        hintText: 'Title, or leave empty for the file name',
                                         hintStyle: Txt.body(Tokens.textBase, p.inkFaint),
                                         enabledBorder: UnderlineInputBorder(
                                           borderSide: BorderSide(color: p.borderStrong),
@@ -343,29 +271,42 @@ class _BoothSheetState extends ConsumerState<BoothSheet> {
                                           borderSide: BorderSide(color: p.accent),
                                         ),
                                       ),
-                                      onSubmitted: (q) => unawaited(
-                                        ref.read(sessionProvider.notifier).findAnother(q),
+                                      onSubmitted: (q) => unawaited(notifier.findAnother(q)),
+                                    ),
+                                    const SizedBox(height: Tokens.space3),
+                                    Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: HouseButton(
+                                        label: 'Search',
+                                        icon: 'search',
+                                        onPressed: () =>
+                                            unawaited(notifier.findAnother(_search.text)),
                                       ),
                                     ),
-                                    Row(
-                                      children: [
-                                        TextAction(
-                                          'Search',
-                                          primary: true,
-                                          onTap: () => unawaited(
-                                            ref
-                                                .read(sessionProvider.notifier)
-                                                .findAnother(_search.text),
-                                          ),
-                                        ),
-                                        const SizedBox(width: Tokens.space3),
-                                        Flexible(
-                                          child: TicketStripView(
-                                            strip: ref.watch(ticketStripProvider),
-                                            count: ref.watch(quotaProvider).remaining,
-                                          ),
-                                        ),
-                                      ],
+                                    const SizedBox(height: Tokens.space3),
+                                    TicketStripView(
+                                      strip: ref.watch(ticketStripProvider),
+                                      count: ref.watch(quotaProvider).remaining,
+                                    ),
+                                    const _Heading('Subtitles too early or late?'),
+                                    Padding(
+                                      padding: const EdgeInsets.only(bottom: Tokens.space2),
+                                      child: Text(
+                                        'Make them show earlier if the words come after the '
+                                        'voice, later if they come before it.',
+                                        style: Txt.body(Tokens.textSm, p.inkMuted),
+                                      ),
+                                    ),
+                                    SyncRule(
+                                      delayMs: s.delayMs,
+                                      onChanged: (v) => unawaited(notifier.setDelay(v)),
+                                    ),
+                                    const _Heading('How subtitles look'),
+                                    const SubtitleLookControls(),
+                                    const _Heading('Sound too early or late?'),
+                                    _SoundTiming(
+                                      ms: s.audioDelayMs,
+                                      onChanged: (v) => unawaited(notifier.setAudioDelay(v)),
                                     ),
                                   ],
                                 ),
@@ -384,26 +325,59 @@ class _BoothSheetState extends ConsumerState<BoothSheet> {
       ],
     );
   }
+
+  /// The subtitle Marquee attached by itself: one it downloaded, or a file it found beside
+  /// the video. Says in words whether its timing was checked against this exact file.
+  Widget _attachedRow(
+    ExternalSubtitle a,
+    HousePalette p, {
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    final language = languageLabel(a.language);
+    final sidecar = a.provider == SubtitleProvider.sidecar;
+    return _TrackRow(
+      title: sidecar ? language : '$language — found by Marquee',
+      status: a.syncedByHash
+          ? 'In sync'
+          : sidecar
+          ? 'Next to the video'
+          : 'Timing may be off',
+      statusIcon: a.syncedByHash ? 'check' : null,
+      statusColor: a.syncedByHash
+          ? p.success
+          : sidecar
+          ? p.inkMuted
+          : p.warning,
+      // A file found beside the video already says where it is.
+      detail: sidecar
+          ? null
+          : a.besideFile
+          ? 'Saved next to the video'
+          : 'Kept inside Marquee',
+      selected: selected,
+      onTap: onTap,
+    );
+  }
 }
 
 class _Handle extends StatelessWidget {
   final ValueChanged<double> onDrag;
   final ValueChanged<double> onRelease;
-  final VoidCallback onClose;
-  const _Handle({required this.onDrag, required this.onRelease, required this.onClose});
+  const _Handle({required this.onDrag, required this.onRelease});
 
   @override
   Widget build(BuildContext context) {
     final p = House.paletteOf(context);
+    // A place to drag the sheet down by. The Close button under it is the one a screen
+    // reader or a keyboard uses.
     return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onVerticalDragUpdate: (d) => onDrag(d.delta.dy),
       onVerticalDragEnd: (d) => onRelease(d.primaryVelocity ?? 0),
-      child: Semantics(
-        label: 'Close the subtitle booth',
-        button: true,
-        onTap: onClose,
+      child: ExcludeSemantics(
         child: SizedBox(
-          height: 28,
+          height: 24,
           width: double.infinity,
           child: Center(child: Container(width: 40, height: 3, color: p.borderStrong)),
         ),
@@ -412,117 +386,78 @@ class _Handle extends StatelessWidget {
   }
 }
 
-/// Audio earlier / later in 50 ms steps (a film whose sound is out of step with the picture).
-class _AudioDelay extends StatelessWidget {
+/// A section's heading inside the sheet, written the way Settings writes a card's title: in
+/// sentence case, often as the question the viewer has.
+class _Heading extends StatelessWidget {
+  final String text;
+  const _Heading(this.text);
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(top: Tokens.space6, bottom: Tokens.space2),
+    child: Semantics(
+      header: true,
+      child: Text(
+        text,
+        style: Txt.body(Tokens.textBase, House.paletteOf(context).ink, weight: FontWeight.w600),
+      ),
+    ),
+  );
+}
+
+/// The sound earlier or later in 50 ms steps, for a video whose sound is out of step with
+/// the picture: the state in a sentence, two buttons that say which way, and a way back.
+class _SoundTiming extends StatelessWidget {
   final int ms;
   final ValueChanged<int> onChanged;
-  const _AudioDelay({required this.ms, required this.onChanged});
+  const _SoundTiming({required this.ms, required this.onChanged});
 
   @override
   Widget build(BuildContext context) {
     final p = House.paletteOf(context);
-    final sign = ms > 0 ? '+' : (ms < 0 ? '-' : '');
-    return Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
       children: [
-        IconMark(icon: 'minus', label: 'Audio 50 ms earlier', onTap: () => onChanged(ms - 50)),
-        SizedBox(
-          width: 96,
+        Semantics(
+          liveRegion: true,
           child: Text(
-            '$sign${(ms.abs() / 1000).toStringAsFixed(2)} s',
-            textAlign: TextAlign.center,
-            style: Txt.mono(Tokens.textBase, ms == 0 ? p.inkMuted : p.accent),
+            soundTimingSentence(ms),
+            style: Txt.body(Tokens.textBase, ms == 0 ? p.inkMuted : p.accent),
           ),
         ),
-        IconMark(icon: 'plus', label: 'Audio 50 ms later', onTap: () => onChanged(ms + 50)),
-        const SizedBox(width: Tokens.space2),
-        if (ms != 0) TextAction('Reset', onTap: () => onChanged(0)),
+        const SizedBox(height: Tokens.space2),
+        Wrap(
+          spacing: Tokens.space2,
+          runSpacing: Tokens.space2,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            HouseButton(
+              label: 'Earlier',
+              icon: 'minus',
+              semanticLabel: 'Sound 0.05 seconds earlier',
+              onPressed: () => onChanged(ms - 50),
+            ),
+            HouseButton(
+              label: 'Later',
+              icon: 'plus',
+              semanticLabel: 'Sound 0.05 seconds later',
+              onPressed: () => onChanged(ms + 50),
+            ),
+            if (ms != 0) TextAction('Reset', onTap: () => onChanged(0)),
+          ],
+        ),
       ],
     );
   }
 }
 
-/// One subtitle the search found. Tapping it downloads and attaches it.
-class _PrintRow extends StatelessWidget {
-  final ScoredCandidate scored;
-  final bool picked, downloading;
-  final VoidCallback onTap;
-  const _PrintRow({
-    required this.scored,
-    required this.picked,
-    required this.downloading,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final p = House.paletteOf(context);
-    final c = scored.candidate;
-    final meta = [
-      if (!c.moviehashMatch) 'BY NAME · CHECK SYNC',
-      '${c.downloadCount} dl',
-      if (c.fps != null) '${c.fps!.toStringAsFixed(3)} fps',
-      if (c.hearingImpaired) 'HI',
-      if (c.machineTranslated || c.aiTranslated) 'MACHINE',
-      if (c.provider == SubtitleProvider.subdl) 'SUBDL',
-    ].join(' · ');
-    return Pressable(
-      label:
-          '${languageName(c.language)}, ${c.release ?? 'untitled'}, ${c.moviehashMatch ? 'exact match' : 'by name, check sync'}',
-      selected: picked,
-      inMutuallyExclusiveGroup: true,
-      onTap: onTap,
-      radius: Tokens.radiusSm,
-      builder: (context, s) => AnimatedContainer(
-        duration: Tokens.durFast,
-        constraints: const BoxConstraints(minHeight: Tokens.targetMin),
-        padding: const EdgeInsets.symmetric(horizontal: Tokens.space2, vertical: Tokens.space1),
-        color: pressWash(p, s, active: picked),
-        child: ExcludeSemantics(
-          child: Row(
-            children: [
-              Bulb(lit: c.moviehashMatch, color: p.success, size: 7),
-              const SizedBox(width: Tokens.space3),
-              Text(c.language.toUpperCase(), style: Txt.mono(Tokens.textSm, p.ink)),
-              const SizedBox(width: Tokens.space3),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      c.moviehashMatch
-                          ? 'MATCH  ${c.release ?? ''}'
-                          : c.release ?? 'Untitled release',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Txt.body(Tokens.textSm, picked ? p.accent : p.ink),
-                    ),
-                    Text(
-                      meta,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Txt.mono(Tokens.textXs, c.moviehashMatch ? p.inkMuted : p.warning),
-                    ),
-                  ],
-                ),
-              ),
-              if (downloading) ...[
-                const SizedBox(width: Tokens.space2),
-                LucideIcon('download', size: 16, color: p.accent),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
+/// One subtitle that can be shown: its name, and under it what is known about it.
 class _TrackRow extends StatelessWidget {
   final String title;
-  final String? chip;
-  final String? chipIcon;
-  final Color? chipColor;
+  final String? status;
+  final String? statusIcon;
+  final Color? statusColor;
   final String? detail;
   final bool selected;
   final VoidCallback onTap;
@@ -530,17 +465,18 @@ class _TrackRow extends StatelessWidget {
     required this.title,
     required this.selected,
     required this.onTap,
-    this.chip,
-    this.chipIcon,
-    this.chipColor,
+    this.status,
+    this.statusIcon,
+    this.statusColor,
     this.detail,
   });
 
   @override
   Widget build(BuildContext context) {
     final p = House.paletteOf(context);
+    final under = [?status, ?detail];
     return Pressable(
-      label: title,
+      label: [title, ...under].join(', '),
       selected: selected,
       inMutuallyExclusiveGroup: true,
       onTap: onTap,
@@ -548,58 +484,50 @@ class _TrackRow extends StatelessWidget {
       builder: (context, s) => AnimatedContainer(
         duration: Tokens.durFast,
         constraints: const BoxConstraints(minHeight: Tokens.targetMin),
-        padding: const EdgeInsets.symmetric(horizontal: Tokens.space2),
+        padding: const EdgeInsets.symmetric(horizontal: Tokens.space2, vertical: Tokens.space1),
         color: pressWash(p, s),
-        child: Row(
-          children: [
-            Bulb(lit: selected, size: 7),
-            const SizedBox(width: Tokens.space3),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(title, style: Txt.body(Tokens.textBase, selected ? p.accent : p.ink)),
-                  if (detail != null) Text(detail!, style: Txt.body(Tokens.textSm, p.inkMuted)),
-                ],
+        child: ExcludeSemantics(
+          child: Row(
+            children: [
+              Bulb(lit: selected, size: 7),
+              const SizedBox(width: Tokens.space3),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(title, style: Txt.body(Tokens.textBase, selected ? p.accent : p.ink)),
+                    if (under.isNotEmpty)
+                      Row(
+                        children: [
+                          if (statusIcon != null) ...[
+                            LucideIcon(statusIcon!, size: 14, color: statusColor ?? p.inkMuted),
+                            const SizedBox(width: Tokens.space1),
+                          ],
+                          Flexible(
+                            child: Text.rich(
+                              TextSpan(
+                                children: [
+                                  if (status != null)
+                                    TextSpan(
+                                      text: status,
+                                      style: TextStyle(color: statusColor ?? p.inkMuted),
+                                    ),
+                                  if (status != null && detail != null) const TextSpan(text: ' · '),
+                                  if (detail != null) TextSpan(text: detail),
+                                ],
+                              ),
+                              style: Txt.body(Tokens.textSm, p.inkMuted),
+                            ),
+                          ),
+                        ],
+                      ),
+                  ],
+                ),
               ),
-            ),
-            if (chipIcon != null) ...[
-              LucideIcon(chipIcon!, size: 14, color: chipColor ?? p.inkMuted),
-              const SizedBox(width: Tokens.space1),
             ],
-            if (chip != null) Text(chip!, style: Txt.mono(Tokens.textXs, chipColor ?? p.inkMuted)),
-          ],
+          ),
         ),
-      ),
-    );
-  }
-}
-
-class _Choice extends StatelessWidget {
-  final String label;
-  final bool on;
-  final VoidCallback onTap;
-  const _Choice({required this.label, required this.on, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final p = House.paletteOf(context);
-    return Pressable(
-      label: label,
-      toggled: on,
-      onTap: onTap,
-      radius: Tokens.radiusSm,
-      builder: (context, s) => AnimatedContainer(
-        duration: Tokens.durFast,
-        constraints: const BoxConstraints(minHeight: Tokens.targetMin, minWidth: Tokens.targetMin),
-        padding: const EdgeInsets.symmetric(horizontal: Tokens.space3),
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: pressWash(p, s, active: on),
-          border: Border(bottom: BorderSide(color: on ? p.accent : p.border)),
-        ),
-        child: Text(label, style: Txt.mono(Tokens.textSm, on ? p.accent : p.inkMuted)),
       ),
     );
   }

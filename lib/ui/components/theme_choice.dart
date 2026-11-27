@@ -1,4 +1,5 @@
-// Auto · Night · Day — the one theme control, identical in the Lobby bar and in Settings.
+// Auto · Night · Day — the one theme control: in Settings › Appearance everywhere, and in the
+// Lobby bar too where there is room for it (a desktop window, never a phone).
 import 'package:flutter/widgets.dart';
 
 import '../../engine/models/settings.dart';
@@ -14,7 +15,7 @@ class ThemeChoice extends StatelessWidget {
   final LobbyTheme value;
   final ValueChanged<LobbyTheme> onChanged;
 
-  /// Icons only (the Lobby bar); labels stay in tooltips and for screen readers.
+  /// Icons only (the desktop Lobby bar); labels stay in tooltips and for screen readers.
   final bool compact;
   final bool expand;
   const ThemeChoice({

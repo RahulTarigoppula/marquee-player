@@ -113,7 +113,19 @@ class _HouseLightsState extends ConsumerState<HouseLights> with SingleTickerProv
     // A PiP window that closes is followed at once by the app stopping: remember when, so
     // [_paused] can tell "the viewer closed the film" from "the screen went off".
     ref.listenManual(pipProvider, (was, now) {
-      if ((was ?? false) && !now) _pipEndedAt = clock.now();
+      if (!(was ?? false) || now) return;
+      _pipEndedAt = clock.now();
+      // Android may stop the app BEFORE it says the window has gone: [_paused] then saw a PiP
+      // window and left the film alone. A window that goes while the app is already unseen
+      // was closed (going back to full screen makes the app visible first).
+      final life = WidgetsBinding.instance.lifecycleState;
+      if (life == AppLifecycleState.paused || life == AppLifecycleState.hidden) {
+        ref.read(sessionProvider.notifier).pauseUnseen();
+      }
+    });
+    // The Lobby's pictures are no use behind a film, and libmpv wants the memory.
+    ref.listenManual(roomProvider, (_, room) {
+      if (room == Room.auditorium) PaintingBinding.instance.imageCache.clear();
     });
   }
 
@@ -122,12 +134,14 @@ class _HouseLightsState extends ConsumerState<HouseLights> with SingleTickerProv
   void _away() => ref.read(deviceLibraryProvider.notifier).wentAway();
 
   /// Android: stopped (Home without PiP, the screen off, a closed PiP window) means unseen, so
-  /// the film pauses, unless Settings says its sound carries on. A PiP window only makes the
-  /// app inactive, never paused; closing that window is always "stop", whatever the setting.
+  /// the film pauses, unless Settings says its sound carries on. A PiP window on screen only
+  /// makes the app inactive, never paused; closing that window is always "stop", whatever the
+  /// setting. This is the ONLY place a film is paused for being unseen: the Video widget's own
+  /// pause-in-background is switched off (PictureLayer), or the setting could never work.
   void _paused() {
     _saveResume();
     _away();
-    if (!Platform.isAndroid || ref.read(pipProvider)) return;
+    if (!Platform.isAndroid) return;
     final ended = _pipEndedAt;
     final pipClosed = ended != null && clock.now().difference(ended) < const Duration(seconds: 2);
     if (pipClosed || !ref.read(settingsValueProvider).backgroundPlay) {
@@ -177,7 +191,7 @@ class _HouseLightsState extends ConsumerState<HouseLights> with SingleTickerProv
       if (ref.read(sessionProvider) != null) {
         await session.loadSubtitleFile(path);
       } else {
-        ref.read(noticeProvider.notifier).show('Drop a film first, then its subtitles.');
+        ref.read(noticeProvider.notifier).show('Drop a video first, then its subtitles.');
       }
       return;
     }
@@ -273,7 +287,8 @@ class _HouseLightsState extends ConsumerState<HouseLights> with SingleTickerProv
 /// The one-line notice ("That file has moved or been deleted. · Remove"): a quiet pill near
 /// the bottom, above every room, gone after its duration.
 class NoticePill extends ConsumerStatefulWidget {
-  /// In the Auditorium the pill sits above the transport bar.
+  /// In the Auditorium the pill sits above the transport bar, or under the top bar where the
+  /// screen is too short for that to clear the middle of the picture.
   final bool raised;
   const NoticePill({super.key, this.raised = false});
 
@@ -307,11 +322,16 @@ class _NoticePillState extends ConsumerState<NoticePill> {
       _arm(notice);
     }
     final p = House.paletteOf(context);
-    final bottom = MediaQuery.paddingOf(context).bottom + (widget.raised ? 128 : Tokens.space7);
+    final pad = MediaQuery.paddingOf(context);
+    // A phone held sideways is about 320 px tall: 128 px above the bottom is the middle of
+    // the picture, right on the play and skip buttons, for as long as the notice stays.
+    // There it sits just under the player's top bar instead (and drops in from above).
+    final atTop = widget.raised && MediaQuery.sizeOf(context).height < 480;
     return Positioned(
       left: Tokens.space4,
       right: Tokens.space4,
-      bottom: bottom,
+      top: atTop ? pad.top + 56 : null,
+      bottom: atTop ? null : pad.bottom + (widget.raised ? 128 : Tokens.space7),
       child: Center(
         child: AnimatedSwitcher(
           duration: Tokens.durBase,
@@ -319,7 +339,7 @@ class _NoticePillState extends ConsumerState<NoticePill> {
           transitionBuilder: (child, a) => FadeTransition(
             opacity: a,
             child: SlideTransition(
-              position: Tween(begin: const Offset(0, 0.3), end: Offset.zero).animate(a),
+              position: Tween(begin: Offset(0, atTop ? -0.3 : 0.3), end: Offset.zero).animate(a),
               child: child,
             ),
           ),

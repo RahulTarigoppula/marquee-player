@@ -1,7 +1,12 @@
 // The Lobby: the room you come home to. Two tabs. Home: the last film on the marquee with
-// Resume, the films you are part-way through, everything you have played, and two clear ways in
-// — Open file, Open URL (or drop a file anywhere on desktop). Library: every video on the device
-// (library_view.dart).
+// Resume, the films you are part-way through, the rest of what you have played, and two clear
+// ways in — Open file, Open link (or drop a file anywhere on desktop). Library: every video on
+// the device (library_view.dart).
+//
+// Three shapes. A desktop window: the bar with the theme switch and both Open buttons, the tabs
+// under it. A phone upright: a bare bar with one Open button, and Home | Library as a full-width
+// row a thumb can hit. A phone on its side: all of it in one row, because there the height is
+// what is scarce and the first thing on screen must be the button that plays something.
 import 'dart:async';
 
 import 'package:clock/clock.dart';
@@ -21,12 +26,20 @@ import '../components/primitives.dart';
 import '../components/room.dart';
 import '../components/theme_choice.dart';
 import 'film_card.dart';
+import 'library_actions.dart';
 import 'library_view.dart';
 import 'lobby_actions.dart';
 import 'lobby_hero.dart';
 
 /// The Lobby switches to its wide (desktop / landscape) layout at this width.
 const double kLobbyWide = 840;
+
+/// A short screen at least this wide has room for the title, the tabs and the actions in one
+/// row; a narrower one (a small split-screen window) keeps the tabs on a row of their own.
+const double kLobbyOneRow = 560;
+
+/// The two ways in behind the phone bar's one Open button.
+enum _OpenWay { file, link }
 
 /// True where files can be dragged onto the window.
 bool acceptsDrops(BuildContext context) => switch (Theme.of(context).platform) {
@@ -71,6 +84,23 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
 
   void _menu(LobbyCard c, Offset at) => unawaited(showCardMenu(context, ref, c, at));
 
+  /// The phone bar's Open button: two plain lines under it.
+  Future<void> _openMenu(Offset at) async {
+    final way = await showHouseMenu<_OpenWay>(context, at, const [
+      MenuChoice(_OpenWay.file, 'folder-open', 'Open file'),
+      MenuChoice(_OpenWay.link, 'link', 'Open link'),
+    ]);
+    if (!mounted) return;
+    switch (way) {
+      case _OpenWay.file:
+        await openPickedFile(ref);
+      case _OpenWay.link:
+        await openUrl(context, ref);
+      case null:
+        break;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final h = House.of(context);
@@ -93,39 +123,71 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
     final settings = ref.watch(settingsValueProvider);
     final size = MediaQuery.sizeOf(context);
     final wide = size.width >= kLobbyWide;
+    // A phone on its side: plenty of width, very little height.
+    final short = size.height < kShortBelow;
+    // A phone either way up. Its bar carries one Open button with a menu, and no theme switch
+    // (that is in Settings › Appearance): the room goes to the tabs.
+    final phone = !wide || short;
+    final oneRow = short && size.width >= kLobbyOneRow;
     final phase = skyPhaseAt(_now);
     final night = phase == SkyPhase.night || phase == SkyPhase.dusk;
     final margin = wide ? Tokens.space8 : Tokens.marginPhone;
 
-    final bar = _TopBar(
+    Widget tabs({required bool fill}) => SegmentedChoice<LobbyTab>(
+      key: const ValueKey('lobby-tabs'),
+      groupLabel: 'Show',
+      value: tab,
+      onChanged: (t) => ref.read(lobbyViewProvider.notifier).setTab(t),
+      expand: fill,
+      tall: phone,
+      segments: const [
+        Segment(LobbyTab.home, 'Home', icon: 'house'),
+        Segment(LobbyTab.library, 'Library', icon: 'library'),
+      ],
+    );
+    Widget bar({Widget? tabs}) => _TopBar(
       now: _now,
       wide: wide,
-      filmCount: cards.length,
-      showOpen: (cards.isNotEmpty || onLibrary) && wide,
+      phone: phone,
+      showClock: !short,
+      tabs: tabs,
+      // With nothing played yet Home's own two buttons are the way in; the Library has none.
+      showOpen: cards.isNotEmpty || onLibrary,
       theme: settings.lobbyTheme,
       onTheme: (t) =>
           unawaited(ref.read(settingsProvider.notifier).edit((s) => s.copyWith(lobbyTheme: t))),
       onOpenFile: () => unawaited(openPickedFile(ref)),
       onOpenUrl: () => unawaited(openUrl(context, ref)),
+      onOpenMenu: (at) => unawaited(_openMenu(at)),
       onSettings: () => ref.read(roomProvider.notifier).go(Room.ticketOffice),
     );
     // The bar and the tab switch travel together at the top of whichever tab is showing.
-    final header = Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        bar,
-        _Tabs(
-          tab: tab,
-          margin: margin,
-          onChanged: (t) => ref.read(lobbyViewProvider.notifier).setTab(t),
-        ),
-      ],
-    );
+    final Widget header = oneRow
+        ? bar(tabs: tabs(fill: true))
+        : Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              bar(),
+              Padding(
+                padding: EdgeInsets.fromLTRB(
+                  margin,
+                  phone ? Tokens.space3 : Tokens.space4,
+                  margin,
+                  Tokens.space2,
+                ),
+                // Upright on a phone the tabs are the app's main navigation: the full width,
+                // 48 px tall. On desktop they sit under the title, in line with it.
+                child: wide
+                    ? Align(alignment: Alignment.centerLeft, child: tabs(fill: false))
+                    : tabs(fill: true),
+              ),
+            ],
+          );
 
     final Widget body;
     if (loading) {
-      body = Align(alignment: Alignment.topCenter, child: bar);
+      body = Align(alignment: Alignment.topCenter, child: bar());
     } else if (onLibrary) {
       body = LibraryPane(
         header: header,
@@ -145,6 +207,7 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
                 header,
                 _EmptyLobby(
                   wide: wide,
+                  short: short,
                   night: night,
                   drops: acceptsDrops(context),
                   dragOver: widget.dragOver,
@@ -164,16 +227,29 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
         for (final c in cards.skip(1))
           if (isInProgress(c)) c,
       ];
+      // Each film is on Home once: the hero and Continue watching have theirs already, and
+      // Recently played is whatever is left (and is not there at all when nothing is).
+      final recent = [
+        for (final c in cards.skip(1))
+          if (!isInProgress(c)) c,
+      ];
+      // A whole number of pixels: a hero that ends between two rows of pixels draws its
+      // backdrop's edge as a hairline across the screen (seen in the light theme).
+      final heroMin = short
+          ? 0.0
+          : (wide
+                    ? (size.height * 0.62).clamp(320.0, 560.0)
+                    : (size.height * 0.5).clamp(380.0, 520.0))
+                .roundToDouble();
       body = CustomScrollView(
         slivers: [
           SliverToBoxAdapter(
             child: LobbyHero(
               card: latest,
               wide: wide,
+              short: short,
               night: night,
-              minHeight: wide
-                  ? (size.height * 0.62).clamp(320.0, 560.0)
-                  : (size.height * 0.5).clamp(380.0, 520.0),
+              minHeight: heroMin,
               top: header,
               onPlay: () => unawaited(openCard(ref, latest)),
               onMenu: (at) => _menu(latest, at),
@@ -196,7 +272,7 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
                     const SizedBox(width: Tokens.space3),
                     Expanded(
                       child: HouseButton(
-                        label: 'Open URL',
+                        label: 'Open link',
                         icon: 'link',
                         expand: true,
                         onPressed: () => unawaited(openUrl(context, ref)),
@@ -218,23 +294,31 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
               ),
             ),
           ],
-          _Heading(
-            'Recently played',
-            trailing: cards.length == 1 ? '1 film' : '${cards.length} films',
-            margin: margin,
-          ),
-          SliverPadding(
-            padding: EdgeInsets.symmetric(horizontal: margin),
-            sliver: SliverToBoxAdapter(
-              child: _CardGrid(
-                cards: cards,
+          if (recent.isNotEmpty) ...[
+            _Heading(
+              'Recently played',
+              trailing: recent.length == 1 ? '1 video' : '${recent.length} videos',
+              margin: margin,
+            ),
+            SliverPadding(
+              padding: EdgeInsets.symmetric(horizontal: margin),
+              sliver: _CardGrid(
+                cards: recent,
                 minCardWidth: wide ? 232 : 150,
                 onOpen: (c) => unawaited(openCard(ref, c)),
                 onMenu: _menu,
               ),
             ),
+          ],
+          // The credits: at the foot of the screen when there is little above them, at the
+          // end of the page (as before) when there is a lot.
+          SliverFillRemaining(
+            hasScrollBody: false,
+            child: Align(
+              alignment: Alignment.bottomCenter,
+              child: _Footer(margin: margin),
+            ),
           ),
-          SliverToBoxAdapter(child: _Footer(margin: margin)),
         ],
       );
     }
@@ -272,22 +356,36 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
 class _TopBar extends StatelessWidget {
   final DateTime now;
   final bool wide;
-  final int filmCount;
+
+  /// A phone, upright or on its side: one Open button with a menu, no theme switch.
+  final bool phone;
+
+  /// The line under the title (`NIGHT · 21:30`). Dropped on a short screen.
+  final bool showClock;
+
+  /// Home | Library, when it rides in the bar itself (a phone on its side).
+  final Widget? tabs;
   final bool showOpen;
   final LobbyTheme theme;
   final ValueChanged<LobbyTheme> onTheme;
   final VoidCallback onOpenFile;
   final VoidCallback onOpenUrl;
+
+  /// The phone's Open button was tapped: where to hang its menu.
+  final ValueChanged<Offset> onOpenMenu;
   final VoidCallback onSettings;
   const _TopBar({
     required this.now,
     required this.wide,
-    required this.filmCount,
+    required this.phone,
+    required this.showClock,
+    required this.tabs,
     required this.showOpen,
     required this.theme,
     required this.onTheme,
     required this.onOpenFile,
     required this.onOpenUrl,
+    required this.onOpenMenu,
     required this.onSettings,
   });
 
@@ -296,49 +394,68 @@ class _TopBar extends StatelessWidget {
     final p = House.paletteOf(context);
     final phase = skyPhaseAt(now);
     final time = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+    final inline = tabs;
+    final title = Semantics(
+      header: true,
+      child: Text('MARQUEE', style: Txt.display(Tokens.textXl, p.ink, weight: FontWeight.w800)),
+    );
     return Padding(
       padding: EdgeInsets.fromLTRB(
         wide ? Tokens.space8 : Tokens.marginPhone,
-        Tokens.space4,
+        inline == null ? Tokens.space4 : Tokens.space2,
         wide ? Tokens.space6 : Tokens.space3,
-        0,
+        inline == null ? 0 : Tokens.space1,
       ),
       child: Row(
         children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Semantics(
-                  header: true,
-                  child: Text(
-                    'MARQUEE',
-                    style: Txt.display(Tokens.textXl, p.ink, weight: FontWeight.w800),
-                  ),
+          if (inline == null)
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  title,
+                  // The time of day only. How many videos there are is the Library's to say
+                  // (it counts every video; this bar used to count the ones played).
+                  if (showClock)
+                    Text(
+                      '${phase.name.toUpperCase()} · $time',
+                      maxLines: 1,
+                      overflow: TextOverflow.fade,
+                      softWrap: false,
+                      style: Txt.label(p.inkFaint),
+                    ),
+                ],
+              ),
+            )
+          else ...[
+            title,
+            const SizedBox(width: Tokens.space5),
+            // The tabs take what the title and the buttons leave, up to a comfortable width.
+            Expanded(
+              child: Align(
+                alignment: Alignment.centerLeft,
+                heightFactor: 1,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 300),
+                  child: inline,
                 ),
-                Text(
-                  '${phase.name.toUpperCase()} · $time'
-                  '${filmCount == 0 ? '' : ' · ${filmCount == 1 ? '1 FILM' : '$filmCount FILMS'}'}',
-                  maxLines: 1,
-                  overflow: TextOverflow.fade,
-                  softWrap: false,
-                  style: Txt.label(p.inkFaint),
-                ),
-              ],
+              ),
             ),
-          ),
-          ThemeChoice(
-            key: const ValueKey('lobby-theme'),
-            value: theme,
-            onChanged: onTheme,
-            compact: true,
-          ),
-          if (showOpen) ...[
+            const SizedBox(width: Tokens.space2),
+          ],
+          if (!phone)
+            ThemeChoice(
+              key: const ValueKey('lobby-theme'),
+              value: theme,
+              onChanged: onTheme,
+              compact: true,
+            ),
+          if (showOpen && !phone) ...[
             const SizedBox(width: Tokens.space4),
             HouseButton(
               key: const ValueKey('open-url'),
-              label: 'Open URL',
+              label: 'Open link',
               icon: 'link',
               kind: ButtonKind.ghost,
               onPressed: onOpenUrl,
@@ -351,36 +468,22 @@ class _TopBar extends StatelessWidget {
               onPressed: onOpenFile,
             ),
           ],
-          const SizedBox(width: Tokens.space2),
+          if (showOpen && phone)
+            Builder(
+              builder: (context) => IconMark(
+                key: const ValueKey('open-menu'),
+                icon: 'folder-open',
+                label: 'Open a video',
+                onTap: () {
+                  final box = context.findRenderObject()! as RenderBox;
+                  onOpenMenu(box.localToGlobal(box.size.bottomLeft(Offset.zero)));
+                },
+              ),
+            ),
+          if (!phone) const SizedBox(width: Tokens.space2),
           IconMark(icon: 'settings-2', label: 'Settings', onTap: onSettings),
         ],
       ),
-    );
-  }
-}
-
-/// Home | Library, under the top bar, in line with the title above it.
-class _Tabs extends StatelessWidget {
-  final LobbyTab tab;
-  final double margin;
-  final ValueChanged<LobbyTab> onChanged;
-  const _Tabs({required this.tab, required this.margin, required this.onChanged});
-
-  @override
-  Widget build(BuildContext context) {
-    final choice = SegmentedChoice<LobbyTab>(
-      key: const ValueKey('lobby-tabs'),
-      groupLabel: 'Show',
-      value: tab,
-      onChanged: onChanged,
-      segments: const [
-        Segment(LobbyTab.home, 'Home', icon: 'house'),
-        Segment(LobbyTab.library, 'Library', icon: 'library'),
-      ],
-    );
-    return Padding(
-      padding: EdgeInsets.fromLTRB(margin, Tokens.space4, margin, Tokens.space2),
-      child: Align(alignment: Alignment.centerLeft, child: choice),
     );
   }
 }
@@ -490,7 +593,9 @@ class _CardRowState extends State<_CardRow> {
   }
 }
 
-/// Every film, as a responsive grid: as many columns as fit at [minCardWidth], at least two.
+/// The rest of the films, as a lazy grid (a sliver): as many columns as fit at [minCardWidth],
+/// at least two. Only the cards on screen are built and only their pictures decoded, so a long
+/// history costs the first frame nothing — the Library's grid is made the same way.
 class _CardGrid extends StatelessWidget {
   final List<LobbyCard> cards;
   final double minCardWidth;
@@ -504,24 +609,29 @@ class _CardGrid extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) => LayoutBuilder(
-    builder: (context, c) {
+  Widget build(BuildContext context) => SliverLayoutBuilder(
+    builder: (context, constraints) {
       const gap = Tokens.space4;
-      final cols = ((c.maxWidth + gap) / (minCardWidth + gap)).floor().clamp(2, 8);
-      final w = ((c.maxWidth - gap * (cols - 1)) / cols).floorToDouble();
-      return Wrap(
-        spacing: gap,
-        runSpacing: Tokens.space6,
-        children: [
-          for (final card in cards)
-            FilmCard(
-              key: ValueKey('grid-${card.id}'),
-              card: card,
-              width: w,
-              onOpen: () => onOpen(card),
-              onMenu: (at) => onMenu(card, at),
-            ),
-        ],
+      final width = constraints.crossAxisExtent;
+      final cols = ((width + gap) / (minCardWidth + gap)).floor().clamp(2, 8);
+      final w = (width - gap * (cols - 1)) / cols;
+      return SliverGrid(
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: cols,
+          crossAxisSpacing: gap,
+          mainAxisSpacing: Tokens.space6,
+          mainAxisExtent: w * 9 / 16 + kCardTextHeight,
+        ),
+        delegate: SliverChildBuilderDelegate((context, i) {
+          final card = cards[i];
+          return FilmCard(
+            key: ValueKey('grid-${card.id}'),
+            card: card,
+            width: w,
+            onOpen: () => onOpen(card),
+            onMenu: (at) => onMenu(card, at),
+          );
+        }, childCount: cards.length),
       );
     },
   );
@@ -529,6 +639,10 @@ class _CardGrid extends StatelessWidget {
 
 class _EmptyLobby extends StatelessWidget {
   final bool wide;
+
+  /// A phone on its side: a small sign and close gaps, so "Open a video" is on the first
+  /// screen and not under it.
+  final bool short;
   final bool night;
   final bool drops;
   final bool dragOver;
@@ -537,6 +651,7 @@ class _EmptyLobby extends StatelessWidget {
   final VoidCallback onLibrary;
   const _EmptyLobby({
     required this.wide,
+    required this.short,
     required this.night,
     required this.drops,
     required this.dragOver,
@@ -548,15 +663,16 @@ class _EmptyLobby extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = House.paletteOf(context);
+    final big = wide && !short;
     final content = Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         Text(
           'Pick a video and Marquee plays it, with matching subtitles found for you.',
           textAlign: TextAlign.center,
-          style: Txt.body(wide ? Tokens.textLg : Tokens.textBase, p.ink),
+          style: Txt.body(big ? Tokens.textLg : Tokens.textBase, p.ink),
         ),
-        const SizedBox(height: Tokens.space6),
+        SizedBox(height: short ? Tokens.space3 : Tokens.space6),
         Wrap(
           alignment: WrapAlignment.center,
           spacing: Tokens.space3,
@@ -572,7 +688,7 @@ class _EmptyLobby extends StatelessWidget {
             ),
             HouseButton(
               key: const ValueKey('open-url'),
-              label: 'Open URL',
+              label: 'Open link',
               icon: 'link',
               kind: ButtonKind.ghost,
               large: true,
@@ -598,7 +714,7 @@ class _EmptyLobby extends StatelessWidget {
     return Padding(
       padding: EdgeInsets.symmetric(
         horizontal: wide ? Tokens.space8 : Tokens.marginPhone,
-        vertical: Tokens.space6,
+        vertical: short ? Tokens.space3 : Tokens.space6,
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -607,11 +723,12 @@ class _EmptyLobby extends StatelessWidget {
             title: 'Marquee',
             meta: 'THE HOUSE IS OPEN',
             night: night,
-            fontSize: wide ? Tokens.text4Xl : Tokens.text3Xl,
+            fontSize: big ? Tokens.text4Xl : Tokens.text3Xl,
           ),
-          const SizedBox(height: Tokens.space8),
+          SizedBox(height: short ? Tokens.space3 : Tokens.space8),
           ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 560),
+            // Wider on a short screen, so the sentence stays on one line there.
+            constraints: BoxConstraints(maxWidth: short ? 640 : 560),
             child: drops ? _DropFrame(lit: dragOver, child: content) : content,
           ),
         ],

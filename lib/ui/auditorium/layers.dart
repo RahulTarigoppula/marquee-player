@@ -1,6 +1,6 @@
 // The Auditorium's layers that are not the gesture surface: the picture, the controls (the
 // only part the 10 Hz playback stream rebuilds), the seek bar's preview picture, the "Skip
-// intro" pill, the video details overlay and the "can't be projected" card. Each one watches
+// intro" pill, the video details overlay and the "can't play this file" card. Each one watches
 // exactly what it draws, so the screen itself (auditorium_screen.dart: state, keys, gestures)
 // never rebuilds on a clock tick.
 import 'dart:async';
@@ -20,6 +20,7 @@ import '../../state/providers.dart';
 import '../../state/session.dart';
 import '../../theme/house.dart';
 import '../../theme/tokens.dart';
+import '../components/kit.dart';
 import '../components/primitives.dart';
 import '../components/sync_rule.dart';
 import 'controls/controls_bar.dart';
@@ -94,6 +95,10 @@ class _PictureLayerState extends ConsumerState<PictureLayer> {
             aspectRatio: fit.forcedAspect,
             // Keep-awake only while the film actually plays (released on pause).
             wakelock: true,
+            // media_kit would pause the film itself every time the app leaves the front,
+            // which silently undid "Keep playing in the background". Whether leaving pauses
+            // is the app shell's decision alone (lib/app.dart).
+            pauseUponEnteringBackgroundMode: false,
           ),
         );
       },
@@ -101,10 +106,13 @@ class _PictureLayerState extends ConsumerState<PictureLayer> {
   }
 }
 
-/// The controls at 10 Hz: the only part of the room the playback stream rebuilds.
+/// The controls at 10 Hz: the only part of the room the playback stream rebuilds, and only
+/// while they can be seen. Faded out they stay mounted (so they can fade back in), but
+/// [visible] false stops them listening to the clock: a film playing with its controls hidden
+/// rebuilds nothing here.
 class ControlsLayer extends ConsumerStatefulWidget {
   final FilmSession session;
-  final bool desktop, fullscreen, syncOpen;
+  final bool desktop, fullscreen, syncOpen, visible;
   final AuditoriumMenu? menu;
   final FilmOrientation orientation;
   final ControlsActions actions;
@@ -116,6 +124,7 @@ class ControlsLayer extends ConsumerStatefulWidget {
     required this.syncOpen,
     required this.menu,
     required this.actions,
+    this.visible = true,
     this.orientation = FilmOrientation.auto,
   });
 
@@ -170,7 +179,11 @@ class _ControlsLayerState extends ConsumerState<ControlsLayer> {
   @override
   Widget build(BuildContext context) {
     final s = widget.session;
-    final pb = ref.watch(playbackProvider).value ?? const PlaybackState();
+    // Hidden: one look, no subscription. The screen rebuilds this layer the moment the
+    // controls are wanted again, and that build watches the stream's CURRENT value, so the
+    // first frame that can be seen already shows the right time.
+    final playback = widget.visible ? ref.watch(playbackProvider) : ref.read(playbackProvider);
+    final pb = playback.value ?? const PlaybackState();
     final prefs = ref.watch(
       settingsValueProvider.select((x) => (step: x.seekStepSeconds, remaining: x.showRemaining)),
     );
@@ -254,6 +267,7 @@ class _ControlsLayerState extends ConsumerState<ControlsLayer> {
               child: SyncRule(
                 delayMs: s.delayMs,
                 onChanged: (v) => unawaited(ref.read(sessionProvider.notifier).setDelay(v)),
+                onClose: a.onToggleSync,
               ),
             )
           : null,
@@ -387,25 +401,76 @@ class _LiveVideoDetailsState extends State<LiveVideoDetails> {
   );
 }
 
-/// A film libmpv could not open: one sentence and the way out.
+/// A file libmpv could not open. The card covers the whole room, controls included (there
+/// is nothing to control): the one [sentence] it is handed, whatever it says, the file's own
+/// name so a person with ten downloads knows which one it was, and the two things there are
+/// to do about it.
 class Undecodable extends StatelessWidget {
   final String sentence;
-  final VoidCallback onBack;
-  const Undecodable({super.key, required this.sentence, required this.onBack});
+  final String fileName;
+  final VoidCallback onRetry, onBack;
+  const Undecodable({
+    super.key,
+    required this.sentence,
+    required this.fileName,
+    required this.onRetry,
+    required this.onBack,
+  });
 
   @override
   Widget build(BuildContext context) {
     final p = Tokens.auditorium;
     return ColoredBox(
       color: p.bg,
-      child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(sentence, style: Txt.body(Tokens.textLg, p.ink)),
-            const SizedBox(height: Tokens.space3),
-            TextAction('Open another file', primary: true, onTap: onBack),
-          ],
+      child: SafeArea(
+        child: Center(
+          // Scrolls: a long sentence and a long name on a phone held sideways.
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(Tokens.space5),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 440),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  LucideIcon('film', size: 32, color: p.inkFaint),
+                  const SizedBox(height: Tokens.space4),
+                  Semantics(
+                    liveRegion: true,
+                    child: Text(
+                      sentence,
+                      textAlign: TextAlign.center,
+                      style: Txt.body(Tokens.textLg, p.ink, weight: FontWeight.w500),
+                    ),
+                  ),
+                  if (fileName.isNotEmpty) ...[
+                    const SizedBox(height: Tokens.space2),
+                    Text(
+                      fileName,
+                      textAlign: TextAlign.center,
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                      style: Txt.mono(Tokens.textSm, p.inkMuted),
+                    ),
+                  ],
+                  const SizedBox(height: Tokens.space6),
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: Tokens.space3,
+                    runSpacing: Tokens.space2,
+                    children: [
+                      HouseButton(
+                        label: 'Try again',
+                        icon: 'refresh-cw',
+                        kind: ButtonKind.primary,
+                        onPressed: onRetry,
+                      ),
+                      HouseButton(label: 'Back to Home', onPressed: onBack),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
         ),
       ),
     );

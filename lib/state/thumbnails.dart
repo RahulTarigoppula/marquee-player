@@ -18,6 +18,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../engine/library.dart' show thumbFailExpired;
+
 /// Frames are decoded this wide (physical pixels): sharp on a 300 px card at 2x and on the
 /// dimmed hero backdrop, a fraction of the memory and decode time of a full frame.
 const int kThumbnailDecodeWidth = 640;
@@ -56,13 +58,43 @@ final thumbnailIndexProvider = Provider<Set<int>>((ref) {
   }
 });
 
-/// The image a card draws for [file]: decoded at [kThumbnailDecodeWidth], never full size.
-ImageProvider thumbnailImage(File file) =>
-    ResizeImage(FileImage(file), width: kThumbnailDecodeWidth, policy: ResizeImagePolicy.fit);
+/// The widths a frame is ever decoded at (physical pixels). A few fixed steps, not any width:
+/// the image cache keeps one decoded copy per width, and a replaced frame has to be thrown
+/// out at every one of them ([_evict]).
+const List<int> kThumbnailDecodeWidths = [160, 240, 320, 400, 480, kThumbnailDecodeWidth];
 
+/// The step a picture drawn [width] physical pixels wide is decoded at: the first one that
+/// is at least as wide (so it is never drawn blurred), and never more than
+/// [kThumbnailDecodeWidth].
+int thumbnailDecodeWidth(num width) {
+  for (final step in kThumbnailDecodeWidths) {
+    if (step >= width) return step;
+  }
+  return kThumbnailDecodeWidth;
+}
+
+/// The image a card draws for [file]: decoded at [kThumbnailDecodeWidth], never full size.
+///
+/// A small picture passes the [width] it is drawn at, in PHYSICAL pixels (logical width times
+/// the device pixel ratio): a 128 px list row on a 3x phone is decoded 400 wide instead of 640
+/// and takes well under half the memory, a 2x row a quarter. Without it (or with anything
+/// that is not a real width) the full [kThumbnailDecodeWidth] is used, as before.
+ImageProvider thumbnailImage(File file, {double? width}) => ResizeImage(
+  FileImage(file),
+  width: width == null || !width.isFinite || width <= 0
+      ? kThumbnailDecodeWidth
+      : thumbnailDecodeWidth(width),
+  policy: ResizeImagePolicy.fit,
+);
+
+/// Forgets every decoded copy of [f]: the file itself and each width it may have been
+/// decoded at.
 Future<void> _evict(File f) async {
-  await FileImage(f).evict();
-  await thumbnailImage(f).evict();
+  final image = FileImage(f);
+  await image.evict();
+  for (final step in kThumbnailDecodeWidths) {
+    await ResizeImage(image, width: step, policy: ResizeImagePolicy.fit).evict();
+  }
 }
 
 /// Writes [jpeg] as the thumbnail for [mediaId], replacing any older frame.
@@ -101,9 +133,9 @@ Future<void> deleteThumbnail(Ref ref, int mediaId) async {
 // ───────────────────────────── device-library frames ─────────────────────────────
 
 /// The folder of device-library frames: `<key>.jpg` is a frame, an empty `<key>.fail` marks a
-/// file that gave none (never tried again until the file itself changes, which changes its
-/// key). In the app's CACHE folder: the system may clear it, and everything is re-made on
-/// demand. Overridden in tests.
+/// file that gave none (not tried again until the file itself changes, which changes its key,
+/// or the mark is two weeks old: see [thumbFailExpired]). In the app's CACHE folder: the system
+/// may clear it, and everything is re-made on demand. Overridden in tests.
 final libraryThumbDirProvider = FutureProvider<Directory>((ref) async {
   final dir = Directory(p.join((await getApplicationCacheDirectory()).path, 'libthumbs'));
   await dir.create(recursive: true);
@@ -155,6 +187,7 @@ class LibraryThumbsNotifier extends Notifier<LibraryThumbs> {
   Future<void> _load() async {
     try {
       final dir = await ref.read(libraryThumbDirProvider.future);
+      final now = DateTime.now();
       await for (final e in dir.list(followLinks: false)) {
         if (e is! File) continue;
         final name = p.basename(e.path);
@@ -163,7 +196,14 @@ class LibraryThumbsNotifier extends Notifier<LibraryThumbs> {
         } else if (name.endsWith('.jpg')) {
           _ready.add(name.substring(0, name.length - 4));
         } else if (name.endsWith('.fail')) {
-          _failed.add(name.substring(0, name.length - 5));
+          // A mark is not for ever: what was written as "gives no frame" may have been a busy
+          // system or a drive not ready that day. Past its time it is deleted and the video is
+          // simply asked again (and marked again, with a new date, if it still gives none).
+          if (thumbFailExpired((await e.stat()).modified, now: now)) {
+            unawaited(e.delete().then((_) {}, onError: (Object _) {}));
+          } else {
+            _failed.add(name.substring(0, name.length - 5));
+          }
         }
       }
     } on Object {

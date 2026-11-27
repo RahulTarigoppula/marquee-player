@@ -1,6 +1,6 @@
-// What the Lobby can do: open a file, a URL or a card; remove a card with an Undo window; the
-// card's context menu; the "Open URL" dialog. Kept apart from the layout so the screen reads
-// as a room, not as plumbing.
+// What the Lobby can do: open a file, a link or a card; remove a card with an Undo window; the
+// "Open link" dialog. Kept apart from the layout so the screen reads as a room, not as plumbing.
+// (The menus, a card's among them, are in library_actions.dart.)
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../engine/models/media.dart';
 import '../../platform/files.dart';
+import '../../state/library.dart';
 import '../../state/notice.dart';
 import '../../state/providers.dart';
 import '../../state/session.dart';
@@ -45,7 +46,7 @@ String clockText(int ms) {
   return h > 0 ? '$h:${m.toString().padLeft(2, '0')}:$sec' : '$m:$sec';
 }
 
-/// `MKV` from libmpv's `matroska,webm`, `MP4` from `mov,mp4,m4a,…`.
+/// `MKV` from libmpv's `matroska,webm`, `MP4` from `mov,mp4,m4a,…` (for Details).
 String? containerText(LobbyCard c) {
   final raw = c.container;
   if (raw == null || raw.isEmpty) return null;
@@ -77,14 +78,16 @@ class PendingRemovals extends Notifier<Set<int>> {
     return const {};
   }
 
-  void remove(LobbyCard card) {
+  /// [said] replaces the usual sentence where the menu line that led here used other words
+  /// (the Library's "Forget where I stopped").
+  void remove(LobbyCard card, {String? said}) {
     _timers[card.id]?.cancel();
     state = {...state, card.id};
     _timers[card.id] = Timer(kUndoWindow, () => unawaited(_commit(card.id)));
     ref
         .read(noticeProvider.notifier)
         .show(
-          'Removed ${cardTitle(card)} from your history.',
+          said ?? 'Removed ${cardTitle(card)} from your history.',
           actionLabel: 'Undo',
           onAction: () => undo(card.id),
           duration: kUndoWindow,
@@ -122,11 +125,13 @@ Future<void> openPickedFile(WidgetRef ref) async {
   if (f != null) await session.open(f);
 }
 
-/// Opens a Lobby card. A file that has moved gets a plain sentence and a way to tidy up.
-Future<void> openCard(WidgetRef ref, LobbyCard card) async {
+/// Opens a Lobby card. [fromStart] forgets where it stopped first. A file that has moved gets
+/// a plain sentence and a way to tidy up.
+Future<void> openCard(WidgetRef ref, LobbyCard card, {bool fromStart = false}) async {
   final session = ref.read(sessionProvider.notifier);
   final notice = ref.read(noticeProvider.notifier);
   final pending = ref.read(pendingRemovalsProvider.notifier);
+  final library = ref.read(deviceLibraryProvider.notifier);
   OpenedFile? f;
   try {
     f = remoteSchemes.any((s) => card.locator.toLowerCase().startsWith('$s://'))
@@ -143,10 +148,17 @@ Future<void> openCard(WidgetRef ref, LobbyCard card) async {
     );
     return;
   }
+  if (fromStart) {
+    try {
+      await library.forgetResume(card);
+    } on Object {
+      // It resumes instead: the "Start over" notice is still one tap away.
+    }
+  }
   await session.open(f);
 }
 
-/// Asks for a web address and opens it.
+/// Asks for a video link and opens it.
 Future<void> openUrl(BuildContext context, WidgetRef ref) async {
   final session = ref.read(sessionProvider.notifier);
   final house = House.of(context);
@@ -217,7 +229,7 @@ class _OpenUrlDialogState extends State<OpenUrlDialog> {
                     child: Semantics(
                       header: true,
                       child: Text(
-                        'Open a web address',
+                        'Open a link',
                         style: Txt.body(Tokens.textXl, p.ink, weight: FontWeight.w600),
                       ),
                     ),
@@ -233,7 +245,7 @@ class _OpenUrlDialogState extends State<OpenUrlDialog> {
               HouseField(
                 controller: _text,
                 label: 'Video link',
-                hint: 'https://example.com/film.mp4',
+                hint: 'https://example.com/video.mp4',
                 autofocus: true,
                 keyboardType: TextInputType.url,
                 textInputAction: TextInputAction.go,
@@ -268,66 +280,5 @@ class _OpenUrlDialogState extends State<OpenUrlDialog> {
         ),
       ),
     );
-  }
-}
-
-enum CardAction { play, remove }
-
-/// The card menu (right click, long press, or the ⋮ button). Remove is the last item and needs
-/// a deliberate second tap — and even then it can be undone.
-Future<void> showCardMenu(
-  BuildContext context,
-  WidgetRef ref,
-  LobbyCard card,
-  Offset globalPosition,
-) async {
-  final house = House.of(context);
-  final p = house.palette;
-  final overlay = Overlay.of(context).context.findRenderObject()! as RenderBox;
-  final at = overlay.globalToLocal(globalPosition);
-  final pending = ref.read(pendingRemovalsProvider.notifier);
-  final resume = resumeMs(card);
-  PopupMenuItem<CardAction> item(CardAction v, String icon, String text, {Color? color}) =>
-      PopupMenuItem<CardAction>(
-        value: v,
-        height: 48,
-        child: house.carry(
-          Row(
-            children: [
-              LucideIcon(icon, color: color ?? p.inkMuted, size: 18),
-              const SizedBox(width: Tokens.space3),
-              Text(text, style: Txt.body(Tokens.textBase, color ?? p.ink)),
-            ],
-          ),
-        ),
-      );
-  final choice = await showMenu<CardAction>(
-    context: context,
-    position: RelativeRect.fromRect(at & const Size(1, 1), Offset.zero & overlay.size),
-    constraints: const BoxConstraints(minWidth: 220),
-    items: [
-      item(
-        CardAction.play,
-        'play',
-        resume != null
-            ? 'Resume from ${clockText(resume)}'
-            : (card.finished ? 'Play again' : 'Play'),
-      ),
-      item(
-        CardAction.remove,
-        'trash-2',
-        'Remove from history',
-        color: house.matinee ? p.danger : p.accent2Lit,
-      ),
-    ],
-  );
-  if (!context.mounted) return;
-  switch (choice) {
-    case CardAction.play:
-      await openCard(ref, card);
-    case CardAction.remove:
-      pending.remove(card);
-    case null:
-      break;
   }
 }

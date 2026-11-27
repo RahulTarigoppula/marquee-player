@@ -4,11 +4,13 @@
 // on app start, on refresh, when the folders change and after a minute away.
 import 'dart:async';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:clock/clock.dart';
 import 'package:flutter/widgets.dart' show AppLifecycleListener, AppLifecycleState, WidgetsBinding;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../db/database.dart' show kLobbyRailLimit;
 import '../engine/library.dart';
 import '../engine/models/media.dart';
 import '../engine/models/settings.dart';
@@ -29,6 +31,27 @@ const _viewKey = 'lobby_view';
 
 /// Back in the app after this long away: look for new videos.
 const Duration kRescanAfterAway = Duration(minutes: 1);
+
+/// A cache smaller than this (a few hundred videos) is decoded and encoded where it stands:
+/// starting an isolate would take longer than the work. Anything larger goes off the UI
+/// isolate, where five thousand rows would otherwise cost several frames right after the
+/// first one.
+const int _inlineCacheChars = 48 * 1024;
+const int _inlineCacheRows = 300;
+
+// Top-level and not async on purpose: a closure handed to another isolate takes everything in
+// its scope along, and here that is the text (or the rows) and nothing else.
+Future<List<LibraryItem>?> _decodeCache(String text) => text.length < _inlineCacheChars
+    ? Future.value(decodeLibraryCacheText(text))
+    : Isolate.run(() => decodeLibraryCacheText(text), debugName: 'library cache');
+
+Future<String> _encodeCache(List<LibraryItem> items) {
+  // Only what the cache keeps crosses over, not a library of twenty thousand.
+  final rows = items.length > kLibraryCacheLimit ? items.sublist(0, kLibraryCacheLimit) : items;
+  return rows.length < _inlineCacheRows
+      ? Future.value(encodeLibraryCacheText(rows))
+      : Isolate.run(() => encodeLibraryCacheText(rows), debugName: 'library cache');
+}
 
 /// Where the library comes from on this device.
 enum LibrarySource {
@@ -137,7 +160,8 @@ class DeviceLibraryNotifier extends AsyncNotifier<DeviceLibrary> {
     var asked = false;
     try {
       final db = ref.read(databaseProvider);
-      cached = decodeLibraryCache(await db.readState(_cacheKey));
+      final text = await db.readStateText(_cacheKey);
+      cached = text == null ? null : await _decodeCache(text);
       asked = await db.readState(_askedKey) == true;
     } on Object {
       cached = null; // an unreadable cache is no cache: the scan below fills the library
@@ -223,7 +247,8 @@ class DeviceLibraryNotifier extends AsyncNotifier<DeviceLibrary> {
 
   Future<void> _saveCache(List<LibraryItem> items) async {
     try {
-      await ref.read(databaseProvider).writeState(_cacheKey, encodeLibraryCache(items));
+      final db = ref.read(databaseProvider);
+      await db.writeStateText(_cacheKey, await _encodeCache(items));
     } on Object {
       // The next start-up scans without a head start.
     }
@@ -366,11 +391,34 @@ final libraryNeighboursProvider =
 /// Windows paths compare without case; a content:// URI is exact.
 String historyKey(String locator) => locator.contains('://') ? locator : locator.toLowerCase();
 
+/// The marks of EVERY played film, asked for only once the Home rail is full (see
+/// [libraryHistoryProvider]). The rail's own stream is the signal to ask again: it speaks
+/// whenever a film is played or removed, or a resume point moves. Never an error: without an
+/// answer the Library simply shows what the rail knows.
+final _olderMarksProvider = FutureProvider<List<LobbyCard>>((ref) async {
+  ref.watch(libraryProvider);
+  try {
+    return await ref.watch(databaseProvider).playedMarks();
+  } on Object {
+    return const [];
+  }
+});
+
 /// What the database knows about each file that has been played, by [historyKey]: resume
 /// position, watched, the grabbed frame's id.
 final libraryHistoryProvider = Provider<Map<String, LobbyCard>>((ref) {
   final cards = ref.watch(libraryProvider).value ?? const <LobbyCard>[];
-  return {for (final c in cards) historyKey(c.locator): c};
+  // The rail lists the newest [kLobbyRailLimit] films. While it is not full it is the whole
+  // history; once it is, the films beyond it would lose their progress line and their tick,
+  // so the Library asks for those marks itself (a narrow, unlimited query).
+  final older = cards.length < kLobbyRailLimit
+      ? const <LobbyCard>[]
+      : ref.watch(_olderMarksProvider).value ?? const <LobbyCard>[];
+  return {
+    for (final c in older) historyKey(c.locator): c,
+    // Last, so they win: the rail's cards carry everything, the marks only the progress.
+    for (final c in cards) historyKey(c.locator): c,
+  };
 });
 
 // ───────────────────────────── what the Lobby shows ─────────────────────────────
@@ -569,11 +617,15 @@ class LibraryThumbQueue implements LibraryThumbRequests {
   bool _disposed = false;
   int _made = 0;
 
+  /// Nothing is written down as "gives no frame" before one frame has been made in this run,
+  /// and a run that only fails stops asking (see [ThumbBreaker]).
+  final _breaker = ThumbBreaker();
+
   @override
   void request(LibraryItem item) {
-    if (_disposed) return;
+    if (_disposed || _breaker.tripped) return;
     final key = thumbKey(item);
-    if (key == _inHand || _pending.containsKey(key)) return;
+    if (key == _inHand || _pending.containsKey(key) || _breaker.holds(key)) return;
     if (!_ref.read(libraryThumbsProvider).wants(key)) return;
     _pending[key] = item;
     if (_pending.length > kThumbBacklog) _pending.remove(_pending.keys.first);
@@ -607,6 +659,10 @@ class LibraryThumbQueue implements LibraryThumbRequests {
     _running = true;
     try {
       while (_pending.isNotEmpty && !_paused && !_disposed && _inSight) {
+        if (_breaker.tripped) {
+          _pending.clear();
+          break;
+        }
         final source = _ref.read(librarySourceProvider);
         if (source == LibrarySource.folders && (_made >= kThumbsPerRun || !Platform.isWindows)) {
           _pending.clear();
@@ -629,29 +685,47 @@ class LibraryThumbQueue implements LibraryThumbRequests {
     }
   }
 
+  /// [key]'s frame is on disk. The grabber is proven: failures held back until now were the
+  /// files' own, and are written down.
+  Future<void> _gotFrame(String key) async {
+    final thumbs = _ref.read(libraryThumbsProvider.notifier);
+    for (final held in _breaker.succeeded()) {
+      await thumbs.markFailed(held);
+    }
+    await thumbs.markReady(key);
+  }
+
+  /// [key]'s video gave no frame: written down once the grabber is known to work, held in
+  /// memory until then.
+  Future<void> _noFrame(String key) async {
+    if (_breaker.failed(key)) await _ref.read(libraryThumbsProvider.notifier).markFailed(key);
+  }
+
   /// Android: the system already has a thumbnail for every MediaStore video.
   Future<void> _fromSystem(LibraryItem item, String key) async {
-    final thumbs = _ref.read(libraryThumbsProvider.notifier);
     final bytes = await videoThumbnail(item.locator, width: 480);
     if (_disposed) return;
     if (bytes == null) {
-      await thumbs.markFailed(key);
+      await _noFrame(key);
       return;
     }
     final dir = await _ref.read(libraryThumbDirProvider.future);
     final part = File(libraryThumbPartPath(dir, key));
     await part.writeAsBytes(bytes);
     await part.rename(libraryThumbPath(dir, key));
-    await thumbs.markReady(key);
+    await _gotFrame(key);
   }
 
   /// Windows: one hidden player reads a frame out of the file.
   Future<void> _grab(LibraryItem item, String key) async {
-    final thumbs = _ref.read(libraryThumbsProvider.notifier);
     final dir = await _ref.read(libraryThumbDirProvider.future);
     // An online-only cloud file would be downloaded just to draw its card: leave it alone
-    // (no "failed" mark either; it gets its frame once it is on this disk).
-    if (isCloudOnlyFile(item.locator)) return;
+    // (no "failed" mark either; it gets its frame once it is on this disk). Asked off the UI
+    // isolate: on a drive that is asleep, or a NAS that is off, the question itself can take
+    // many seconds to come back.
+    if (await isCloudOnlyFileOffThread(item.locator)) return;
+    // A film may have started while Windows was answering: not now.
+    if (_disposed || _paused) return;
     final grabber = _grabber ??= FrameGrabber();
     final result = await grabber.grab(
       item.locator,
@@ -662,14 +736,14 @@ class LibraryThumbQueue implements LibraryThumbRequests {
     switch (result.outcome) {
       case GrabOutcome.done:
         _made++;
-        await thumbs.markReady(key);
+        await _gotFrame(key);
         final probe = result.probe;
         if (probe != null) {
           _ref.read(deviceLibraryProvider.notifier).applyProbe(item.locator, probe);
         }
       case GrabOutcome.failed:
         _made++;
-        await thumbs.markFailed(key);
+        await _noFrame(key);
       case GrabOutcome.aborted:
         break; // asked again the next time its card is built
     }

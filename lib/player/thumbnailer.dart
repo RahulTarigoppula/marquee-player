@@ -1,8 +1,10 @@
 // Frames for videos that were never played (Windows): ONE hidden libmpv player that opens a
 // file paused, jumps about a tenth of the way in, waits for a decoded frame and has mpv write
-// it as a small JPEG. Software decoding at 320 px, no audio, no subtitles, two decoder threads:
-// it must never be felt. The queue that feeds it (lib/state/library.dart) runs one file at a
-// time and stops while a film plays. Every failure is silent: the card keeps its title card.
+// it as a small JPEG. Software decoding, a 320 px picture (full size, more compressed, on a
+// libmpv build without the `scale` filter: see [SmallFrames]), no audio, no subtitles, two
+// decoder threads: it must never be felt. The queue that feeds it (lib/state/library.dart)
+// runs one file at a time and stops while a film plays. Every failure is silent: the card
+// keeps its title card.
 import 'dart:async';
 import 'dart:io';
 
@@ -49,6 +51,40 @@ const Duration kGrabTimeout = Duration(seconds: 12);
 /// libmpv is unloaded again after this long without work.
 const Duration kGrabberIdle = Duration(seconds: 20);
 
+/// The filter that makes the picture small inside mpv: a 4K frame would be a 2 MB JPEG nobody
+/// looks at, and a 4K texture behind a 320 px seek-bar preview.
+const String kSmallFrameFilter = 'lavfi=[scale=320:-2]';
+
+/// Whether this libmpv build can make [kSmallFrameFilter], asked ONCE per run of the app and
+/// shared by the two hidden players (this one and the seek-bar preview).
+///
+/// The filter used to be set as a plain option before any file was open. mpv only checks such
+/// an option when the picture starts: a build without the `scale` filter then gives no picture
+/// at all, for every file, and a whole library would have been marked "gives no frame". So it
+/// goes through the `vf` COMMAND instead, on a player that is already showing a frame: the
+/// command builds the chain there and then, and rolls back when it cannot. What is read back
+/// afterwards is the filter or nothing. (The film's own player does the same for `af`.)
+abstract final class SmallFrames {
+  /// Null until a player with a picture has asked.
+  static bool? works;
+
+  /// Puts the filter on [native], which must already be showing a frame of its file. True
+  /// when frames are small from the next seek on; false when this build cannot (it is then
+  /// never asked again in this run) or the question could not be put just now.
+  static Future<bool> apply(NativePlayer native) async {
+    if (works == false) return false;
+    try {
+      await native.command(['vf', 'set', kSmallFrameFilter]);
+      if (works == true) return true;
+      final made = (await native.getProperty('vf')).trim().isNotEmpty;
+      if (!made) await native.command(['vf', 'clr', '']);
+      return works = made;
+    } on Object {
+      return false; // the player went away mid-question: nothing was learned
+    }
+  }
+}
+
 class FrameGrabber {
   Player? _player;
   // Held so the player keeps a render target; never shown.
@@ -57,6 +93,9 @@ class FrameGrabber {
   Timer? _idle;
   bool _busy = false;
   bool _disposed = false;
+
+  /// This player's frames come out small ([kSmallFrameFilter] is on it).
+  bool _small = false;
 
   /// Options for speed over fidelity. Each is set on its own and may be refused by a libmpv
   /// build that does not know it: the default then stays.
@@ -75,10 +114,12 @@ class FrameGrabber {
     'vd-lavc-threads': '2',
     'vd-lavc-fast': 'yes',
     'vd-lavc-skiploopfilter': 'all',
-    'vf': 'lavfi=[scale=320:-2]', // a 4K frame would be a 2 MB JPEG nobody looks at
-    'screenshot-jpeg-quality': '82',
     'screenshot-tag-colorspace': 'no',
   };
+
+  /// A small frame can afford a good JPEG; a full-size one (no `scale` in this build) is kept
+  /// from growing past a few hundred KB.
+  static const _smallQuality = '82', _fullQuality = '70';
 
   Future<Player> _ensure() async {
     final existing = _player;
@@ -105,8 +146,17 @@ class FrameGrabber {
     // frames: without this every call below would wait for a frame that never comes.
     SchedulerBinding.instance.ensureVisualUpdate();
     final native = player.platform;
+    // Known to work (an earlier player asked): on from the start, as a plain option. Not
+    // known yet: left off, and asked once this player shows its first frame (see [_grab]).
+    final small = SmallFrames.works;
+    _small = small == true;
     if (native is NativePlayer) {
-      for (final MapEntry(:key, :value) in _options.entries) {
+      final options = {
+        ..._options,
+        if (_small) 'vf': kSmallFrameFilter,
+        'screenshot-jpeg-quality': small == false ? _fullQuality : _smallQuality,
+      };
+      for (final MapEntry(:key, :value) in options.entries) {
         try {
           await native.setProperty(key, value);
         } on Object {
@@ -168,13 +218,12 @@ class FrameGrabber {
     if (!_current(player)) return aborted;
 
     final at = duration == null ? kGrabAtUnknown : duration * kGrabAtFraction;
-    if (at > const Duration(milliseconds: 500)) {
-      await native.command([
-        'seek',
-        (at.inMilliseconds / 1000).toStringAsFixed(3),
-        'absolute+keyframes',
-      ]);
-    }
+    Future<void> land() => native.command([
+      'seek',
+      (at.inMilliseconds / 1000).toStringAsFixed(3),
+      'absolute+keyframes',
+    ]);
+    if (at > const Duration(milliseconds: 500)) await land();
 
     // A paused player still decodes and shows the frame it landed on; wait for that.
     int? width, height;
@@ -190,6 +239,29 @@ class FrameGrabber {
     if (!ready) {
       await _unload(player);
       return failed; // audio only, a damaged file, or a codec this build cannot decode
+    }
+
+    // A frame is showing, so the picture chain exists: the moment (the only one) at which
+    // asking for the small-picture filter gets a true answer. Once per run, normally: every
+    // later player is created with what was learned here.
+    if (!_small && SmallFrames.works != false) {
+      _small = await SmallFrames.apply(native);
+      if (!_current(player)) return aborted;
+      if (_small) {
+        // The frame on screen was made before the filter: land on it again, through it.
+        await land();
+        for (var i = 0; i < 60; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 80));
+          if (!_current(player)) return aborted;
+          if (await native.getProperty('seeking') != 'yes') break;
+        }
+      } else if (SmallFrames.works == false) {
+        try {
+          await native.setProperty('screenshot-jpeg-quality', _fullQuality);
+        } on Object {
+          // Unknown to this build: the frame is written at mpv's own quality.
+        }
+      }
     }
 
     final part = File(partPath);

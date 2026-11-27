@@ -20,7 +20,7 @@ class AppearanceSection extends ConsumerWidget {
           title: 'Theme',
           helper:
               'Auto is light by day and dark at night (and follows your device). '
-              'Films always play in the dark.',
+              'Videos always play in the dark.',
           children: [
             ThemeChoice(
               value: settings.lobbyTheme,
@@ -34,13 +34,13 @@ class AppearanceSection extends ConsumerWidget {
           children: [
             ToggleBulb(
               label: 'Projector beam',
-              hint: 'The soft cone of light in the lobby at night.',
+              hint: 'The soft cone of light on the Home screen at night.',
               value: settings.beam,
               onChanged: (v) => editSettings(ref, (s) => s.copyWith(beam: v)),
             ),
             ToggleBulb(
               label: 'Sounds',
-              hint: 'Quiet cues when a film opens and its subtitles arrive.',
+              hint: 'Quiet cues when a video opens and its subtitles arrive.',
               value: settings.sounds,
               onChanged: (v) => editSettings(ref, (s) => s.copyWith(sounds: v)),
             ),

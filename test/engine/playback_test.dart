@@ -5,6 +5,8 @@ import 'package:marquee/engine/picture.dart';
 import 'package:marquee/engine/playback.dart';
 import 'package:test/test.dart';
 
+import 'natural_names.dart';
+
 void main() {
   group('seek clamping', () {
     const dur = Duration(minutes: 100);
@@ -75,6 +77,50 @@ void main() {
       expect(naturalCompare('S01E02', 'S01E002'), lessThan(0));
       expect(naturalCompare('a', 'a'), 0);
       expect(naturalCompare('a1', 'a1x'), lessThan(0));
+    });
+
+    test('a name cut up once sorts exactly as the bare names always did', () {
+      final names = generatedNames(400);
+      final keys = [for (final n in names) naturalKey(n)];
+      // Every pair, both ways round: the same sign as the comparison this replaced.
+      final differs = <String>[];
+      for (var i = 0; i < names.length; i++) {
+        for (var j = 0; j < names.length; j++) {
+          if (keys[i].compareTo(keys[j]).sign != legacyNaturalCompare(names[i], names[j]).sign) {
+            differs.add('"${names[i]}" against "${names[j]}"');
+          }
+        }
+      }
+      expect(differs, isEmpty);
+      final byKey = [
+        for (final k in [...keys]..sort()) k.name,
+      ];
+      expect(byKey, [...names]..sort(legacyNaturalCompare));
+      expect([...names]..sort(naturalCompare), byKey);
+    });
+
+    test('a key keeps its name, and a digit run too long for a number compares as text', () {
+      expect(naturalKey('Ep 2.mkv').name, 'Ep 2.mkv');
+      const huge = '99999999999999999999999';
+      expect(int.tryParse(huge), isNull);
+      // As text "9…" sorts after "10"; as numbers it would too, but only text is possible.
+      expect(naturalCompare('a$huge', 'a10'), legacyNaturalCompare('a$huge', 'a10'));
+      expect(naturalCompare('a$huge', 'a$huge'), 0);
+      final key = naturalKey('x');
+      expect(key.compareTo(key), 0);
+    });
+
+    test('the folder order is the same order', () {
+      final names = generatedNames(120).toSet().toList();
+      final sorted = [...names]..sort(legacyNaturalCompare);
+      for (final at in [0, 1, 57, sorted.length - 1]) {
+        final order = folderOrder(names, sorted[at]);
+        expect(order.previous, at > 0 ? sorted[at - 1] : null);
+        expect(order.next, at < sorted.length - 1 ? sorted[at + 1] : null);
+        expect(order.first, at > 0 ? sorted.first : null);
+        final near = neighboursOf(names, sorted[at]);
+        expect((near.previous, near.next), (order.previous, order.next));
+      }
     });
 
     test('finds the neighbours of the playing file', () {

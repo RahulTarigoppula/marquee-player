@@ -45,7 +45,7 @@ jobs:
             | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: A three-minute film (never committed)
+      - name: A three-minute film and a short one (never committed)
         run: |
           set -euo pipefail
           command -v ffmpeg >/dev/null 2>&1 || {
@@ -58,6 +58,12 @@ jobs:
             -f lavfi -i "sine=frequency=440:sample_rate=48000" \
             -t 180 -c:v libx264 -preset ultrafast -pix_fmt yuv420p -g 48 \
             -c:a aac -b:a 96k -movflags +faststart build/android-smoke/marquee-smoke.mp4
+          # Short enough to END during the test: what follows it must start by itself.
+          ffmpeg -hide_banner -loglevel error -nostdin -y \
+            -f lavfi -i "testsrc2=size=640x360:rate=24" \
+            -f lavfi -i "sine=frequency=660:sample_rate=48000" \
+            -t 20 -c:v libx264 -preset ultrafast -pix_fmt yuv420p -g 48 \
+            -c:a aac -b:a 96k -movflags +faststart build/android-smoke/marquee-short.mp4
           ls -la build/android-smoke dist
       - uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -65,7 +71,7 @@ jobs:
           arch: x86_64
           target: default
           disable-animations: true
-          script: python3 scripts/android-smoke.py dist/marquee-android-x86_64.apk build/android-smoke/marquee-smoke.mp4 build/android-smoke
+          script: python3 scripts/android-smoke.py dist/marquee-android-x86_64.apk build/android-smoke/marquee-smoke.mp4 build/android-smoke/marquee-short.mp4 build/android-smoke
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -73,4 +79,5 @@ jobs:
           path: |
             build/android-smoke/*.txt
             build/android-smoke/*.png
+          # (the films stay behind: only the evidence is worth keeping)
           retention-days: 14

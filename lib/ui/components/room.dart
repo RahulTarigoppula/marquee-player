@@ -120,8 +120,14 @@ class _BeamState extends State<Beam> with TickerProviderStateMixin {
   }
 
   void _syncTicker() {
+    final house = House.of(context);
+    // Daylight draws no beam at all (see build): ticking there would only make the engine
+    // produce thirty identical frames a second for as long as the Lobby is open.
     final run =
-        widget.animate && !House.of(context).reducedMotion && TickerMode.valuesOf(context).enabled;
+        widget.animate &&
+        !house.reducedMotion &&
+        !house.matinee &&
+        TickerMode.valuesOf(context).enabled;
     if (run && _ticker == null) {
       var last = Duration.zero;
       _ticker = createTicker((e) {

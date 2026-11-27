@@ -74,7 +74,7 @@ void main() {
     });
 
     test('prints the threading folio', () {
-      expect(kThreadingFolio, 'REEL 01 · THREADING');
+      expect(kThreadingFolio, 'Opening your video');
     });
 
     test('signs values with plus or the minus sign', () {

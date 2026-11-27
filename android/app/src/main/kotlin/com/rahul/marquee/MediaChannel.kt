@@ -23,14 +23,18 @@ class MediaChannel(
 
     private val channel = MethodChannel(messenger, NAME)
 
+    private val sink: (String, Any?) -> Unit = { method, argument ->
+        channel.invokeMethod(method, argument)
+    }
+
     init {
         channel.setMethodCallHandler(this)
-        NowPlaying.attach(context) { method, argument -> channel.invokeMethod(method, argument) }
+        NowPlaying.attach(context, sink)
     }
 
     fun dispose() {
         channel.setMethodCallHandler(null)
-        NowPlaying.detach(context)
+        NowPlaying.detach(context, sink)
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {

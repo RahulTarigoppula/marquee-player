@@ -1,5 +1,6 @@
 // Riverpod providers (§5.4). Widgets watch these; only these touch lib/api and lib/db.
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -299,7 +300,8 @@ class LibraryActions {
   Future<Map<String, Object?>> export(String platform) =>
       ref.read(databaseProvider).exportLibrary(version: appVersion, platform: platform);
   Future<void> import(Map<String, Object?> json) async {
-    await ref.read(databaseProvider).importLibrary(json);
+    // Library folders are paths on a PC: a phone's library is the device's own list.
+    await ref.read(databaseProvider).importLibrary(json, importFolders: Platform.isWindows);
     ref.invalidate(settingsProvider);
   }
 }

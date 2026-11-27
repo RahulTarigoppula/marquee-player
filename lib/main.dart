@@ -1,13 +1,13 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:drift_flutter/drift_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'app.dart';
 import 'db/database.dart';
+import 'db/open.dart';
 import 'platform/files.dart';
 import 'platform/pip.dart';
 import 'platform/window.dart';
@@ -20,7 +20,7 @@ import 'state/session.dart';
 Future<void> main(List<String> args) async {
   final binding = WidgetsFlutterBinding.ensureInitialized();
   // Opens on a background isolate; the first query (the window bounds) waits for it.
-  final db = MarqueeDatabase(driftDatabase(name: 'marquee'));
+  final db = MarqueeDatabase(openMarqueeDatabase());
   final container = ProviderContainer(overrides: [databaseProvider.overrideWithValue(db)]);
   // Diagnostics are local only: a plain sentence, never a report sent anywhere.
   FlutterError.onError = (d) => FlutterError.presentError(d);

@@ -19,6 +19,14 @@ import 'session.dart';
 /// How long an empty session may still be "the next film is opening" before it is checked again.
 const Duration kNowPlayingHold = Duration(seconds: 3);
 
+/// A film that has not started this long after the last one closed is not "loading" any more:
+/// the controls say paused, so the service and the wake lock behind them are given back.
+const Duration kNowPlayingLoadingLimit = Duration(seconds: 20);
+
+/// A scrub or a held seek key moves the film many times a second; the lock screen hears of it
+/// at most this often. Play, pause and a new title are never held back.
+const Duration kNowPlayingSeekEvery = Duration(milliseconds: 500);
+
 /// The channel to the system: replaced in tests.
 final nowPlayingChannelProvider = Provider<NowPlayingChannel>((ref) => NowPlayingChannel());
 
@@ -39,6 +47,11 @@ class _NowPlayingBridge {
   PlayerEngine? _engine;
   StreamSubscription<PlaybackState>? _states;
   Timer? _hold;
+  Timer? _loadingLimit;
+  Timer? _trailing;
+
+  /// The film that is "loading" has been so for too long ([kNowPlayingLoadingLimit]).
+  bool _loadingTimedOut = false;
 
   /// What the system was last told, and how long ago: it has been advancing the clock itself
   /// since (see [nowPlayingChanged]).
@@ -69,6 +82,8 @@ class _NowPlayingBridge {
 
   void dispose() {
     _hold?.cancel();
+    _loadingLimit?.cancel();
+    _trailing?.cancel();
     unawaited(_states?.cancel());
     channel.stopListening();
     unawaited(channel.clear());
@@ -102,6 +117,9 @@ class _NowPlayingBridge {
   }
 
   void _clear() {
+    _loadingLimit?.cancel();
+    _trailing?.cancel();
+    _loadingTimedOut = false;
     if (_sent == null) return;
     _sent = null;
     _sinceSent.stop();
@@ -111,8 +129,27 @@ class _NowPlayingBridge {
   void _push() {
     final s = ref.read(sessionProvider);
     if (s == null || s.error != null) return;
+    if (s.started) {
+      _loadingLimit?.cancel();
+      _loadingLimit = null;
+      _loadingTimedOut = false;
+    }
     final info = s.started ? _playing(s) : _loading(s);
-    if (info == null || !nowPlayingChanged(_sent, _sinceSent.elapsed, info)) return;
+    final sent = _sent;
+    if (info == null || !nowPlayingChanged(sent, _sinceSent.elapsed, info)) return;
+    // Only the clock moved (a scrub, a held key): one send now, then the last word once the
+    // hand is still. Each send is a session update, a notification and a service call.
+    if (sent != null &&
+        sent.sameExceptPosition(info) &&
+        _sinceSent.elapsed < kNowPlayingSeekEvery) {
+      _trailing ??= Timer(kNowPlayingSeekEvery - _sinceSent.elapsed, () {
+        _trailing = null;
+        _push();
+      });
+      return;
+    }
+    _trailing?.cancel();
+    _trailing = null;
     _sent = info;
     _sinceSent
       ..reset()
@@ -131,8 +168,10 @@ class _NowPlayingBridge {
       duration: st.duration,
       position: st.position,
       speed: st.rate,
-      playing: st.playing,
-      buffering: st.buffering,
+      // The film has ended and the next one is counting down: to the system that is still
+      // "playing", or the service would step back and could not come forward again.
+      playing: st.playing || s.upNextAt != null,
+      buffering: st.buffering || (s.upNextAt != null && !st.playing),
       hasPrevious: s.previousPath != null,
       hasNext: s.nextPath != null,
       stepSeconds: ref.read(settingsValueProvider).seekStepSeconds,
@@ -143,12 +182,19 @@ class _NowPlayingBridge {
   /// carry over, as "loading", so the service behind them never stops.
   NowPlayingInfo? _loading(FilmSession s) {
     if (_sent == null) return null;
+    // An open that never finishes must not hold the phone awake: after the limit it reads
+    // "paused", and play on the lock screen has nothing to start until the app is opened.
+    _loadingLimit ??= Timer(kNowPlayingLoadingLimit, () {
+      _loadingLimit = null;
+      _loadingTimedOut = true;
+      _push();
+    });
     final title = s.displayTitle;
     return NowPlayingInfo(
       title: title,
       subtitle: nowPlayingSubtitle(title: title, fileName: s.file.displayName),
-      playing: true,
-      buffering: true,
+      playing: !_loadingTimedOut,
+      buffering: !_loadingTimedOut,
       stepSeconds: ref.read(settingsValueProvider).seekStepSeconds,
     );
   }

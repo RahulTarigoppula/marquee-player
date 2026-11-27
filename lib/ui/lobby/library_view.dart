@@ -11,6 +11,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../engine/models/settings.dart';
+import '../../platform/library_scan.dart' show openAppSettings;
 import '../../state/library.dart';
 import '../../state/notice.dart';
 import '../../state/providers.dart';
@@ -24,6 +25,22 @@ import 'lobby_actions.dart';
 
 /// Below this width videos and folders are list rows, not cards (a portrait phone).
 const double kLibraryListBelow = 600;
+
+/// Below this height the screen is a phone on its side: the Lobby closes up its header, and
+/// nothing stays pinned over the little that is left.
+const double kShortBelow = 520;
+
+/// Opens Marquee's page in the phone's settings (the way back from a refused permission), with
+/// the route in words when the page will not open. Coming back to the app re-reads the
+/// permission (`DeviceLibraryNotifier.cameBack`), so the Library fills by itself.
+Future<void> openAppSettingsFor(WidgetRef ref) async {
+  final notice = ref.read(noticeProvider.notifier);
+  if (await openAppSettings()) return;
+  notice.show(
+    'Open your phone’s Settings, then Apps, Marquee, Permissions, and allow videos.',
+    duration: const Duration(seconds: 8),
+  );
+}
 
 /// Adds a folder through the system picker, with a plain sentence when the picker fails.
 Future<void> addFolderFromPicker(WidgetRef ref) async {
@@ -178,7 +195,7 @@ class _LibraryPaneState extends ConsumerState<LibraryPane> {
       slivers.add(
         SliverPersistentHeader(
           // On a short screen (a phone on its side) the toolbar scrolls away with the page.
-          pinned: size.height >= 520,
+          pinned: size.height >= kShortBelow,
           delegate: _ToolbarDelegate(
             height: _Toolbar.heightFor(twoRows: list),
             background: palette.bg,
@@ -272,7 +289,14 @@ class _LibraryPaneState extends ConsumerState<LibraryPane> {
           ),
         );
       }
-      slivers.add(SliverToBoxAdapter(child: widget.footer));
+      // The credits sit at the foot of the screen when the list is short (never floating
+      // under the last row like stray content), and scroll away after a long one as before.
+      slivers.add(
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: Align(alignment: Alignment.bottomCenter, child: widget.footer),
+        ),
+      );
     }
 
     final Widget scroll = CustomScrollView(
@@ -326,7 +350,10 @@ class _LibraryPaneState extends ConsumerState<LibraryPane> {
       );
     }
     final textHeight = libraryCardTextHeight(context);
-    final minCard = widget.wide ? 220.0 : 168.0;
+    // A phone on its side is wide but not tall: smaller cards there, so a whole row of videos
+    // (and the top of the next) fits under the bar and the toolbar.
+    final short = MediaQuery.sizeOf(context).height < kShortBelow;
+    final minCard = widget.wide && !short ? 220.0 : 168.0;
     return SliverPadding(
       padding: EdgeInsets.fromLTRB(margin, Tokens.space2, margin, 0),
       sliver: SliverLayoutBuilder(
@@ -784,23 +811,31 @@ class _PermissionNote extends ConsumerWidget {
         ],
       );
     }
-    // Android may refuse to show its dialog a second time: the file picker always works.
+    // Android stops showing its dialog once it has been refused, so "ask again" could do
+    // nothing at all. The app's page in the phone's settings always works, and so does the
+    // file picker.
     return _Note(
       icon: 'library',
       title: "Marquee isn't allowed to list your videos.",
       body:
-          'You can still open any video with the file picker. To see them all here, allow '
-          'videos for Marquee in your phone’s app settings.',
+          'To see them all here, open app settings, tap Permissions and allow videos. '
+          'You can still open any one video with Open file.',
       actions: [
+        HouseButton(
+          key: const ValueKey('library-app-settings'),
+          label: 'Open app settings',
+          icon: 'settings-2',
+          kind: ButtonKind.primary,
+          large: true,
+          onPressed: () => unawaited(openAppSettingsFor(ref)),
+        ),
         HouseButton(
           key: const ValueKey('library-open-file'),
           label: 'Open file',
           icon: 'folder-open',
-          kind: ButtonKind.primary,
           large: true,
           onPressed: () => unawaited(openPickedFile(ref)),
         ),
-        HouseButton(label: 'Ask again', kind: ButtonKind.ghost, large: true, onPressed: ask),
       ],
     );
   }

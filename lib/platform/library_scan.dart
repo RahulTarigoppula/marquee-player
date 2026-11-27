@@ -152,6 +152,20 @@ Future<VideoAccess> requestVideoPermission() async {
   }
 }
 
+/// Opens Marquee's own page in Android's settings, where the video permission is turned back
+/// on once the system dialog has been refused (Android then stops showing it). False when the
+/// page could not be opened.
+Future<bool> openAppSettings() async {
+  try {
+    await _content.invokeMethod<void>('openAppSettings');
+    return true;
+  } on PlatformException {
+    return false;
+  } on MissingPluginException {
+    return false;
+  }
+}
+
 /// Every video MediaStore knows (all of them, or the ones the user selected). Empty without
 /// permission. THROWS when the scan itself failed: a failure must never be taken for an empty
 /// library (the caller keeps the list it has).

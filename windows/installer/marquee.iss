@@ -162,5 +162,18 @@ Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags
 
 [UninstallRun]
 ; The uninstaller has no Restart Manager: a Marquee left running would keep its files locked
-; and half the folder would stay behind. Exit code 128 (not running) is the usual, quiet case.
-Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM {#AppExe}"; Flags: runhidden; RunOnceId: "CloseMarquee"
+; and half the folder would stay behind. Only THIS copy is closed, found by its path: a
+; portable copy playing a film from another folder is none of the uninstaller's business
+; (taskkill by image name used to end that one too). It is asked politely first, as if its
+; own close button had been pressed, so the resume point is saved; whatever is still there
+; five seconds later is ended. Nothing running is the usual, quiet case.
+;
+; How the line is put together, because nobody can run it on the dev machine:
+;  - the working directory is the install folder, and the script builds the exe's path from
+;    it. The path is never typed into the script, so a folder with an apostrophe in its name
+;    (C:\Users\O'Brien\...) cannot break the quoting;
+;  - a literal opening brace is doubled for Inno Setup (a closing one is not), and a quote
+;    inside the parameter is doubled; the script itself uses single quotes only;
+;  - the RunOnceId is the one the taskkill line had, so after an upgrade the uninstaller runs
+;    this line and not the old one as well.
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; WorkingDir: "{app}"; Flags: runhidden; RunOnceId: "CloseMarquee"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ""$exe = Join-Path (Get-Location).ProviderPath '{#AppExe}'; $p = @(Get-Process -Name marquee -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -eq $exe }); if ($p.Count -gt 0) {{ $p | ForEach-Object {{ $null = $_.CloseMainWindow() }; $p | Wait-Process -Timeout 5 -ErrorAction SilentlyContinue; $p | Where-Object {{ -not $_.HasExited } | Stop-Process -Force -ErrorAction SilentlyContinue }"""

@@ -61,14 +61,19 @@ object NowPlaying {
     private var sink: ((String, Any?) -> Unit)? = null
     private var wake: PowerManager.WakeLock? = null
 
-    /** The Flutter engine is up: commands go to [to]. A notification left by a killed run goes. */
+    /**
+     * The Flutter engine is up: commands go to [to]. A notification left by a killed run goes.
+     * Hand [to] back to [detach]: a new activity can attach before the old one's onDestroy
+     * arrives (finish, then a quick relaunch), and the old one must not silence the new.
+     */
     fun attach(context: Context, to: (String, Any?) -> Unit) {
         sink = to
         if (film == null) manager(context).cancel(NOTIFICATION_ID)
     }
 
-    /** The Flutter engine is going: nothing can play, so nothing may be shown. */
-    fun detach(context: Context) {
+    /** The Flutter engine behind [from] is going: nothing can play, so nothing may be shown. */
+    fun detach(context: Context, from: (String, Any?) -> Unit) {
+        if (sink !== from) return
         sink = null
         clear(context)
     }
@@ -334,7 +339,9 @@ object NowPlaying {
                         it.setReferenceCounted(false)
                         wake = it
                     }
-                // Renewed on every update; the limit only matters if the app dies mid-film.
+                // Renewed on every update. Released first: a lock that is not reference
+                // counted keeps its FIRST timeout otherwise, however often it is taken again.
+                if (w.isHeld) w.release()
                 w.acquire(WAKE_LIMIT_MS)
             } else {
                 wake?.let { if (it.isHeld) it.release() }

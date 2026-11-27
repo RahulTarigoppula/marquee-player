@@ -18,7 +18,7 @@ class FilmSession {
   final int audioDelayMs;
   final List<Chapter> chapters;
   final String? title;
-  final String? error; // "This print can't be projected.", never a code
+  final String? error; // "Marquee can't play this file.", never a code
 
   /// The folder's neighbours, for N / P and "Up next": files beside this one on desktop, the
   /// device library's order for a phone's content:// film.
@@ -38,6 +38,11 @@ class FilmSession {
 
   /// The film has been told to play (threading finished or was skipped).
   final bool started;
+
+  /// The film has ended and the next one starts by itself at this moment (the "Up next"
+  /// countdown). Null when nothing is counting: not at the end, cancelled, or the end of this
+  /// film starts nothing. SessionNotifier owns the timer; the card only shows it.
+  final DateTime? upNextAt;
 
   const FilmSession({
     required this.file,
@@ -59,6 +64,7 @@ class FilmSession {
     this.fit = PictureFit.fit,
     this.picture = PictureAdjust.neutral,
     this.started = false,
+    this.upNextAt,
   });
 
   /// The leader covers the picture: only BEFORE the film starts. A search or a pick made
@@ -114,6 +120,8 @@ class FilmSession {
     PictureFit? fit,
     PictureAdjust? picture,
     bool? started,
+    DateTime? upNextAt,
+    bool clearUpNext = false,
   }) => FilmSession(
     file: file,
     engine: engine,
@@ -134,5 +142,6 @@ class FilmSession {
     fit: fit ?? this.fit,
     picture: picture ?? this.picture,
     started: started ?? this.started,
+    upNextAt: clearUpNext ? null : (upNextAt ?? this.upNextAt),
   );
 }

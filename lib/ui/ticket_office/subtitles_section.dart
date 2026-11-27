@@ -1,5 +1,5 @@
-// Settings · Subtitles: the OpenSubtitles account and key, languages, where subtitles come from
-// and how they are drawn (with a live preview).
+// Settings · Subtitles, in the order people come for it: languages, how subtitles are drawn
+// (with a live preview), where they come from, then the OpenSubtitles account and the keys.
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -34,7 +34,6 @@ class _SubtitlesState extends ConsumerState<SubtitlesSection> {
   bool _osKeyJustSaved = false;
   bool _subdlSaved = false;
   bool _subdlJustSaved = false;
-  double? _scaleDraft;
 
   @override
   void initState() {
@@ -99,11 +98,56 @@ class _SubtitlesState extends ConsumerState<SubtitlesSection> {
     final hasKey = ref.watch(osKeyProvider);
     final signedIn = account.status == AccountStatus.signedIn;
     final signingIn = account.status == AccountStatus.signingIn;
-    final scale = _scaleDraft ?? settings.subtitleScale;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        // What people come here for first: their language, then how the words look. The
+        // account and the keys, needed once if ever, come last.
+        SettingsGroup(
+          title: 'Languages',
+          helper:
+              'Pick up to ${Settings.maxLanguages}, in the order you prefer. '
+              'Tap a language again to remove it.',
+          children: [
+            LanguagePicker(
+              selected: settings.languages,
+              allowEmpty: false,
+              semanticPrefix: 'Subtitle language',
+              onChanged: (l) => editSettings(ref, (s) => s.copyWith(languages: l)),
+            ),
+          ],
+        ),
+        const SettingsGroup(
+          title: 'How subtitles look',
+          helper: 'Changes show here, and on a video that is playing, right away.',
+          children: [SubtitleLookControls(preview: true)],
+        ),
+        SettingsGroup(
+          title: 'Finding subtitles',
+          children: [
+            ToggleBulb(
+              label: 'Use subtitles inside the video first',
+              hint:
+                  'If the file already has subtitles in your language, use them instead of '
+                  'searching online.',
+              value: settings.preferEmbeddedSubtitles,
+              onChanged: (v) => editSettings(ref, (s) => s.copyWith(preferEmbeddedSubtitles: v)),
+            ),
+            ToggleBulb(
+              label: 'Prefer subtitles for the hard of hearing',
+              hint: 'These also describe sounds, like [door slams].',
+              value: settings.preferHearingImpaired,
+              onChanged: (v) => editSettings(ref, (s) => s.copyWith(preferHearingImpaired: v)),
+            ),
+            ToggleBulb(
+              label: 'Save subtitles next to the video',
+              hint: 'Other players will find them too. Off: Marquee keeps them to itself.',
+              value: settings.saveBesideFile,
+              onChanged: (v) => editSettings(ref, (s) => s.copyWith(saveBesideFile: v)),
+            ),
+          ],
+        ),
         SettingsGroup(
           title: 'OpenSubtitles account',
           helper:
@@ -194,7 +238,7 @@ class _SubtitlesState extends ConsumerState<SubtitlesSection> {
                       : 'A key is saved. Subtitle search is on.',
                 )
               else
-                const StatusLine('No key yet, so subtitles cannot be searched.', ok: false),
+                const StatusLine("No key yet, so Marquee can't look for subtitles.", ok: false),
               const SizedBox(height: Tokens.space3),
               HouseField(
                 controller: _osKey,
@@ -231,115 +275,7 @@ class _SubtitlesState extends ConsumerState<SubtitlesSection> {
             ],
           ),
         SettingsGroup(
-          title: 'Languages',
-          helper:
-              'Pick up to ${Settings.maxLanguages}, in the order you prefer. '
-              'Tap a language again to remove it.',
-          children: [
-            LanguagePicker(
-              selected: settings.languages,
-              allowEmpty: false,
-              semanticPrefix: 'Subtitle language',
-              onChanged: (l) => editSettings(ref, (s) => s.copyWith(languages: l)),
-            ),
-          ],
-        ),
-        SettingsGroup(
-          title: 'Finding subtitles',
-          children: [
-            ToggleBulb(
-              label: 'Use subtitles inside the video first',
-              hint:
-                  'If the file already has subtitles in your language, use them instead of '
-                  'searching online.',
-              value: settings.preferEmbeddedSubtitles,
-              onChanged: (v) => editSettings(ref, (s) => s.copyWith(preferEmbeddedSubtitles: v)),
-            ),
-            ToggleBulb(
-              label: 'Prefer subtitles for the hard of hearing',
-              hint: 'These also describe sounds, like [door slams].',
-              value: settings.preferHearingImpaired,
-              onChanged: (v) => editSettings(ref, (s) => s.copyWith(preferHearingImpaired: v)),
-            ),
-            ToggleBulb(
-              label: 'Save subtitles next to the video',
-              hint: 'Other players will find them too. Off: Marquee keeps them to itself.',
-              value: settings.saveBesideFile,
-              onChanged: (v) => editSettings(ref, (s) => s.copyWith(saveBesideFile: v)),
-            ),
-          ],
-        ),
-        SettingsGroup(
-          title: 'How subtitles look',
-          helper: 'Changes show here, and on a film that is open, right away.',
-          children: [
-            _SubtitlePreview(
-              scale: scale,
-              look: settings.subtitleLook,
-              placement: settings.subtitlePlacement,
-              tint: settings.subtitleTint,
-            ),
-            const SizedBox(height: Tokens.space3),
-            ControlBlock(
-              label: 'Style',
-              child: SegmentedChoice<SubtitleLook>(
-                key: const ValueKey('subtitle-look'),
-                groupLabel: 'Subtitle style',
-                value: settings.subtitleLook,
-                expand: true,
-                // Short enough for two halves of a 360 px phone; the preview shows the rest.
-                segments: const [
-                  Segment(SubtitleLook.outline, 'Outlined'),
-                  Segment(SubtitleLook.box, 'Dark box'),
-                ],
-                onChanged: (v) => editSettings(ref, (s) => s.copyWith(subtitleLook: v)),
-              ),
-            ),
-            ControlBlock(
-              label: 'Colour',
-              help: 'Subtitles that bring their own styling keep their own colours.',
-              child: SegmentedChoice<SubtitleTint>(
-                key: const ValueKey('subtitle-tint'),
-                groupLabel: 'Subtitle colour',
-                value: settings.subtitleTint,
-                expand: true,
-                segments: [for (final t in SubtitleTint.values) Segment(t, t.label)],
-                onChanged: (v) => editSettings(ref, (s) => s.copyWith(subtitleTint: v)),
-              ),
-            ),
-            const SizedBox(height: Tokens.space2),
-            HouseSlider(
-              label: 'Size',
-              value: scale,
-              min: Settings.minSubtitleScale,
-              max: Settings.maxSubtitleScale,
-              divisions: 14,
-              valueText: '${(scale * 100).round()}%',
-              onChanged: (v) => setState(() => _scaleDraft = v),
-              onChangeEnd: (v) {
-                setState(() => _scaleDraft = null);
-                editSettings(ref, (s) => s.copyWith(subtitleScale: v));
-              },
-            ),
-            ControlBlock(
-              label: 'Position',
-              child: SegmentedChoice<SubtitlePlacement>(
-                key: const ValueKey('subtitle-placement'),
-                groupLabel: 'Subtitle position',
-                value: settings.subtitlePlacement,
-                expand: true,
-                segments: const [
-                  Segment(SubtitlePlacement.bottom, 'Bottom'),
-                  Segment(SubtitlePlacement.lowerThird, 'Higher'),
-                  Segment(SubtitlePlacement.top, 'Top'),
-                ],
-                onChanged: (v) => editSettings(ref, (s) => s.copyWith(subtitlePlacement: v)),
-              ),
-            ),
-          ],
-        ),
-        SettingsGroup(
-          title: 'Backup source: Subdl',
+          title: 'Backup site: Subdl',
           helper:
               'A second free subtitle site, searched when OpenSubtitles has nothing. '
               'It needs your own free key from subdl.com.',
@@ -388,6 +324,105 @@ class _SubtitlesState extends ConsumerState<SubtitlesSection> {
               ),
             ],
           ],
+        ),
+      ],
+    );
+  }
+}
+
+/// Style, colour, size and position: the four things that decide how subtitles are drawn.
+/// Settings shows them with a [preview]; the subtitle options sheet over a playing video shows
+/// the same controls without one, because the video itself is the preview. One widget, so the
+/// two places can never offer different choices or call them different names.
+class SubtitleLookControls extends ConsumerStatefulWidget {
+  /// Draw the still frame with a sample line above the controls.
+  final bool preview;
+  const SubtitleLookControls({super.key, this.preview = false});
+
+  @override
+  ConsumerState<SubtitleLookControls> createState() => _SubtitleLookControlsState();
+}
+
+class _SubtitleLookControlsState extends ConsumerState<SubtitleLookControls> {
+  double? _scaleDraft;
+
+  @override
+  Widget build(BuildContext context) {
+    final settings = ref.watch(settingsValueProvider);
+    final scale = _scaleDraft ?? settings.subtitleScale;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (widget.preview) ...[
+          _SubtitlePreview(
+            scale: scale,
+            look: settings.subtitleLook,
+            placement: settings.subtitlePlacement,
+            tint: settings.subtitleTint,
+          ),
+          const SizedBox(height: Tokens.space3),
+        ],
+        ControlBlock(
+          label: 'Style',
+          child: SegmentedChoice<SubtitleLook>(
+            key: const ValueKey('subtitle-look'),
+            groupLabel: 'Subtitle style',
+            value: settings.subtitleLook,
+            expand: true,
+            // Short enough for two halves of a 360 px phone; the preview shows the rest.
+            segments: const [
+              Segment(SubtitleLook.outline, 'Outlined'),
+              Segment(SubtitleLook.box, 'Dark box'),
+            ],
+            onChanged: (v) => editSettings(ref, (s) => s.copyWith(subtitleLook: v)),
+          ),
+        ),
+        ControlBlock(
+          label: 'Colour',
+          help: 'Subtitles that bring their own styling keep their own colours.',
+          child: SegmentedChoice<SubtitleTint>(
+            key: const ValueKey('subtitle-tint'),
+            groupLabel: 'Subtitle colour',
+            value: settings.subtitleTint,
+            expand: true,
+            segments: [for (final t in SubtitleTint.values) Segment(t, t.label)],
+            onChanged: (v) => editSettings(ref, (s) => s.copyWith(subtitleTint: v)),
+          ),
+        ),
+        const SizedBox(height: Tokens.space2),
+        HouseSlider(
+          label: 'Size',
+          value: scale,
+          min: Settings.minSubtitleScale,
+          max: Settings.maxSubtitleScale,
+          divisions: 14,
+          valueText: '${(scale * 100).round()}%',
+          // With no preview the playing video IS the preview: it follows the thumb instead of
+          // waiting for the finger to lift (fourteen steps, so at most fourteen saves).
+          onChanged: (v) {
+            setState(() => _scaleDraft = v);
+            if (!widget.preview) editSettings(ref, (s) => s.copyWith(subtitleScale: v));
+          },
+          onChangeEnd: (v) {
+            setState(() => _scaleDraft = null);
+            editSettings(ref, (s) => s.copyWith(subtitleScale: v));
+          },
+        ),
+        ControlBlock(
+          label: 'Position',
+          child: SegmentedChoice<SubtitlePlacement>(
+            key: const ValueKey('subtitle-placement'),
+            groupLabel: 'Subtitle position',
+            value: settings.subtitlePlacement,
+            expand: true,
+            segments: const [
+              Segment(SubtitlePlacement.bottom, 'Bottom'),
+              Segment(SubtitlePlacement.lowerThird, 'Higher'),
+              Segment(SubtitlePlacement.top, 'Top'),
+            ],
+            onChanged: (v) => editSettings(ref, (s) => s.copyWith(subtitlePlacement: v)),
+          ),
         ),
       ],
     );

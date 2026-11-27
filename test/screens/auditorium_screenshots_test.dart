@@ -9,12 +9,20 @@ import 'dart:math' as math;
 import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:marquee/app.dart' show NoticePill;
+import 'package:marquee/engine/models/leader.dart' show ThreadingFailure;
 import 'package:marquee/engine/playback.dart';
+import 'package:marquee/engine/sentences.dart' show sentenceFor;
+import 'package:marquee/state/notice.dart';
 import 'package:marquee/theme/tokens.dart';
 import 'package:marquee/ui/auditorium/controls/controls_bar.dart';
 import 'package:marquee/ui/auditorium/controls/widgets.dart';
+import 'package:marquee/ui/auditorium/layers.dart' show Undecodable;
+import 'package:marquee/ui/auditorium/menu_panel.dart'
+    show attachedSubtitleLabel, delayLabel, kSubtitleOptions, kSubtitleTiming, trackName;
 import 'package:marquee/ui/components/film_gate.dart';
 import 'package:marquee/ui/components/kit.dart';
+import 'package:marquee/ui/components/sync_rule.dart';
 
 import 'harness.dart';
 
@@ -70,24 +78,102 @@ const _phoneFilm = ControlsData(
   showRemaining: true,
 );
 
-/// A menu where the Auditorium puts it: bottom right on desktop, across the phone.
-Widget _menuAt({required bool desktop, required Widget menu}) => Positioned(
-  right: Tokens.space4,
-  left: desktop ? null : Tokens.space4,
-  bottom: desktop ? 104 : 132,
-  child: Align(alignment: Alignment.bottomRight, child: menu),
+/// A menu where the Auditorium puts it (the screen uses the same [MenuSlot]): bottom right on
+/// desktop, across an upright phone, a sheet down the right edge of a phone held sideways.
+Widget _menuAt({required bool desktop, required Widget Function(double, bool) menu}) =>
+    MenuSlot(desktop: desktop, builder: menu);
+
+/// A row of choices as menu_panel.dart builds one (tappable, so the chosen row is lit).
+MenuRow _row(
+  String label, {
+  String? detail,
+  String? icon,
+  bool selected = false,
+  bool opens = false,
+}) => MenuRow(
+  entry: MenuEntry(
+    label,
+    detail: detail,
+    icon: icon,
+    selected: selected,
+    opens: opens,
+    onTap: () {},
+  ),
+);
+
+/// The Subtitles menu as menu_panel.dart builds it, with its own words for the tracks.
+Widget _subtitlesMenu(double maxHeight, {bool fill = false, int delayMs = 350}) => ControlMenu(
+  title: 'Subtitles',
+  onClose: () {},
+  maxHeight: maxHeight,
+  fill: fill,
+  rows: [
+    _row('Off'),
+    _row(attachedSubtitleLabel('en', sidecar: false), selected: true),
+    _row(trackName('fr', 'Forced', fallback: 'Track 2')),
+    _row(trackName('ja', null, fallback: 'Track 3')),
+    _row('Second subtitle', icon: 'captions', detail: 'Japanese', opens: true),
+    _row(kSubtitleTiming, icon: 'timer', detail: delayLabel(delayMs)),
+    _row('Load subtitle file…', icon: 'file-plus'),
+    _row(kSubtitleOptions, icon: 'sliders-horizontal'),
+  ],
+);
+
+/// The More menu as a phone gets it: no key hints, "Turn the screen" and "Touch gestures".
+Widget _moreMenu(double maxHeight, {bool fill = false}) => ControlMenu(
+  title: 'More',
+  onClose: () {},
+  maxHeight: maxHeight,
+  fill: fill,
+  rows: [
+    _row('Chapters', icon: 'list', detail: '12', opens: true),
+    _row('Set loop start (A)', icon: 'repeat'),
+    _row('Repeat', icon: 'repeat-1', opens: true),
+    _row('Screenshot', icon: 'camera'),
+    _row('Sleep timer', icon: 'timer', opens: true),
+    _row('Picture', icon: 'scan', detail: PictureFit.fit.label, opens: true),
+    _row('Turn the screen', icon: 'rotate-ccw-square', detail: 'Auto'),
+    _row('Video details', icon: 'info'),
+    _row('Load subtitle file…', icon: 'file-plus'),
+    _row(kSubtitleOptions, icon: 'sliders-horizontal'),
+    _row('Touch gestures', icon: 'info'),
+  ],
+);
+
+/// The Picture menu as menu_panel.dart builds it: the fits, then what is done to the picture.
+Widget _pictureMenu(double maxHeight, {bool fill = false}) => ControlMenu(
+  title: 'Picture',
+  onClose: () {},
+  onBack: () {},
+  maxHeight: maxHeight,
+  fill: fill,
+  rows: [
+    for (final f in PictureFit.values) _row(f.label, selected: f == PictureFit.fit),
+    const MenuDivider(),
+    _row('Rotate 90°', icon: 'rotate-cw'),
+    MenuStepper(
+      label: 'Zoom',
+      icon: 'zoom-in',
+      valueText: '100 %',
+      minusLabel: 'Zoom out',
+      plusLabel: 'Zoom in',
+      onMinus: () {},
+      onPlus: () {},
+    ),
+    MenuToggle(label: 'Fix comb lines (deinterlace)', value: false, onChanged: (_) {}),
+    _row('Adjust picture', icon: 'sliders-horizontal', opens: true),
+  ],
 );
 
 /// The Audio menu as menu_panel.dart builds it: tracks, then the sound section.
-Widget _audioMenu(double maxHeight) => ControlMenu(
+Widget _audioMenu(double maxHeight, {bool fill = false}) => ControlMenu(
   title: 'Audio',
   onClose: () {},
   maxHeight: maxHeight,
+  fill: fill,
   rows: [
-    const MenuRow(entry: MenuEntry('JA  Stereo', detail: '2.0 · AAC', selected: true)),
-    MenuRow(
-      entry: MenuEntry('EN  Dub', detail: '5.1 · EAC3', onTap: () {}),
-    ),
+    _row(trackName('ja', 'Stereo', fallback: 'Track 1'), detail: '2.0 · AAC', selected: true),
+    _row(trackName('en', 'Dub', fallback: 'Track 2'), detail: '5.1 · EAC3'),
     const MenuDivider(),
     MenuRow(
       entry: MenuEntry(
@@ -113,11 +199,12 @@ Widget _audioMenu(double maxHeight) => ControlMenu(
 );
 
 /// "Adjust picture" as menu_panel.dart builds it: four sliders and Reset.
-Widget _adjustMenu(double maxHeight) => ControlMenu(
+Widget _adjustMenu(double maxHeight, {bool fill = false}) => ControlMenu(
   title: 'Adjust picture',
   onClose: () {},
   onBack: () {},
   maxHeight: maxHeight,
+  fill: fill,
   rows: [
     for (final (label, value) in const [
       ('Brightness', 12),
@@ -367,22 +454,223 @@ void main() {
               data: _film.copyWithMenu(AuditoriumMenu.adjust),
               actions: ControlsActions.none(),
             ),
-            _menuAt(desktop: true, menu: _adjustMenu(kDesktop.height * 0.6)),
+            _menuAt(desktop: true, menu: (h, fill) => _adjustMenu(h, fill: fill)),
           ],
         ),
       ),
     );
   });
 
-  testWidgets('auditorium picture adjust panel, phone landscape (scrolls)', (t) async {
+  testWidgets('auditorium picture adjust, phone landscape: a sheet down the right edge', (t) async {
     await shoot(
       t,
       'auditorium_picture_adjust_phone_landscape',
       picture(
         Stack(
           children: [
-            AuditoriumControls(data: _phoneFilm, actions: ControlsActions.none()),
-            _menuAt(desktop: false, menu: _adjustMenu(_phoneLandscape.height * 0.6)),
+            AuditoriumControls(
+              data: _phoneFilm.withState(menu: AuditoriumMenu.adjust),
+              actions: _phoneActions(),
+            ),
+            _menuAt(desktop: false, menu: (h, fill) => _adjustMenu(h, fill: fill)),
+          ],
+        ),
+      ),
+      size: _phoneLandscape,
+    );
+  });
+
+  // The three menus a phone held sideways could show three rows of: now the full height.
+  for (final (name, menu, build) in <(String, AuditoriumMenu, Widget Function(double, bool))>[
+    ('more', AuditoriumMenu.more, (h, fill) => _moreMenu(h, fill: fill)),
+    ('subtitles', AuditoriumMenu.subtitles, (h, fill) => _subtitlesMenu(h, fill: fill)),
+    ('picture', AuditoriumMenu.picture, (h, fill) => _pictureMenu(h, fill: fill)),
+  ]) {
+    testWidgets('auditorium $name menu, phone landscape: a sheet down the right edge', (t) async {
+      await shoot(
+        t,
+        'auditorium_menu_${name}_phone_landscape',
+        picture(
+          Stack(
+            children: [
+              AuditoriumControls(
+                data: _phoneFilm.withState(menu: menu, delayMs: 350),
+                actions: _phoneActions(),
+              ),
+              _menuAt(desktop: false, menu: build),
+            ],
+          ),
+        ),
+        size: _phoneLandscape,
+      );
+    });
+  }
+
+  testWidgets('auditorium more menu, narrow phone: turn the screen and touch gestures', (t) async {
+    await shoot(
+      t,
+      'auditorium_menu_more_phone',
+      picture(
+        Stack(
+          children: [
+            AuditoriumControls(
+              data: _phoneFilm.withState(menu: AuditoriumMenu.more),
+              actions: _phoneActions(),
+            ),
+            _menuAt(desktop: false, menu: (h, fill) => _moreMenu(h, fill: fill)),
+          ],
+        ),
+      ),
+      size: _phonePortrait,
+    );
+  });
+
+  testWidgets('auditorium touch gestures guide, phone landscape', (t) async {
+    await shoot(
+      t,
+      'auditorium_gestures_phone_landscape',
+      picture(
+        Stack(
+          fit: StackFit.expand,
+          children: [
+            AuditoriumControls(data: _phoneFilm, actions: _phoneActions()),
+            GestureGuide(seekStep: 15, onDone: () {}),
+          ],
+        ),
+      ),
+      size: _phoneLandscape,
+    );
+  });
+
+  testWidgets('auditorium touch gestures guide, narrow phone', (t) async {
+    await shoot(
+      t,
+      'auditorium_gestures_phone',
+      picture(
+        Stack(
+          fit: StackFit.expand,
+          children: [
+            AuditoriumControls(data: _phoneFilm, actions: _phoneActions()),
+            GestureGuide(seekStep: 15, onDone: () {}),
+          ],
+        ),
+      ),
+      size: _phonePortrait,
+    );
+  });
+
+  testWidgets('auditorium touch gestures guide without swipe to seek or brightness', (t) async {
+    await shoot(
+      t,
+      'auditorium_gestures_fewer_phone_landscape',
+      picture(GestureGuide(brightness: false, swipeToSeek: false, onDone: () {})),
+      size: _phoneLandscape,
+    );
+  });
+
+  // The timing rule open on subtitles that come 0.35 s late: the sentence, Earlier / Later,
+  // Reset, and the chip in the bar.
+  for (final (name, size, film) in [
+    ('desktop', kDesktop, _film),
+    ('phone', _phonePortrait, _phoneFilm),
+    ('phone_landscape', _phoneLandscape, _phoneFilm),
+  ]) {
+    testWidgets('auditorium subtitle timing rule open, $name', (t) async {
+      await shoot(
+        t,
+        'auditorium_sync_$name',
+        picture(
+          AuditoriumControls(
+            data: film.withState(syncOpen: true, delayMs: 350),
+            actions: film.desktop ? ControlsActions.none() : _phoneActions(),
+            syncRule: Padding(
+              padding: const EdgeInsets.only(bottom: Tokens.space2),
+              child: SyncRule(delayMs: 350, onChanged: (_) {}, onClose: () {}),
+            ),
+          ),
+        ),
+        size: size,
+      );
+    });
+  }
+
+  testWidgets('auditorium subtitle timing rule at 0: no Reset', (t) async {
+    await shoot(
+      t,
+      'auditorium_sync_zero_phone',
+      picture(
+        AuditoriumControls(
+          data: _phoneFilm.withState(syncOpen: true),
+          actions: _phoneActions(),
+          syncRule: Padding(
+            padding: const EdgeInsets.only(bottom: Tokens.space2),
+            child: SyncRule(delayMs: 0, onChanged: (_) {}, onClose: () {}),
+          ),
+        ),
+      ),
+      size: _phonePortrait,
+    );
+  });
+
+  for (final (name, size) in [('desktop', kDesktop), ('phone_landscape', _phoneLandscape)]) {
+    testWidgets("auditorium can't play this file, $name", (t) async {
+      await shoot(
+        t,
+        'auditorium_cant_play_$name',
+        Undecodable(
+          sentence: sentenceFor(ThreadingFailure.decodeFailed),
+          fileName: 'Severance.S02E04.1080p.WEB.h264-GROUP.mkv',
+          onRetry: () {},
+          onBack: () {},
+        ),
+        size: size,
+      );
+    });
+  }
+
+  // 640 x 320 is the phone the notice was seen on, drawn across the play button: it now sits
+  // under the top bar. An upright phone keeps it above the bottom bar.
+  for (final (name, size) in [
+    ('phone_landscape', const Size(640, 320)),
+    ('phone', _phonePortrait),
+  ]) {
+    testWidgets('auditorium notice clear of the play button, $name', (t) async {
+      await shoot(
+        t,
+        'auditorium_notice_$name',
+        picture(
+          Stack(
+            fit: StackFit.expand,
+            children: [
+              AuditoriumControls(data: _phoneFilm, actions: _phoneActions()),
+              const NoticePill(raised: true),
+            ],
+          ),
+        ),
+        size: size,
+        overrides: [noticeProvider.overrideWith(_ApiKeyNotice.new)],
+      );
+    });
+  }
+
+  testWidgets('auditorium up next, phone landscape', (t) async {
+    await shoot(
+      t,
+      'auditorium_up_next_phone_landscape',
+      picture(
+        Stack(
+          children: [
+            AuditoriumControls(data: _phoneFilm, actions: _phoneActions()),
+            Positioned(
+              right: Tokens.space5,
+              bottom: 108,
+              child: UpNextCard(
+                name: 'Severance S02E04',
+                at: kNight.add(const Duration(seconds: 6)),
+                onPlay: () {},
+                onCancel: () {},
+              ),
+            ),
           ],
         ),
       ),
@@ -401,7 +689,7 @@ void main() {
               data: _film.copyWithMenu(AuditoriumMenu.audio),
               actions: ControlsActions.none(),
             ),
-            _menuAt(desktop: true, menu: _audioMenu(kDesktop.height * 0.6)),
+            _menuAt(desktop: true, menu: (h, fill) => _audioMenu(h, fill: fill)),
           ],
         ),
       ),
@@ -415,8 +703,11 @@ void main() {
       picture(
         Stack(
           children: [
-            AuditoriumControls(data: _phoneFilm, actions: ControlsActions.none()),
-            _menuAt(desktop: false, menu: _audioMenu(_phonePortrait.height * 0.6)),
+            AuditoriumControls(
+              data: _phoneFilm.withState(menu: AuditoriumMenu.audio),
+              actions: ControlsActions.none(),
+            ),
+            _menuAt(desktop: false, menu: (h, fill) => _audioMenu(h, fill: fill)),
           ],
         ),
       ),
@@ -569,26 +860,15 @@ void main() {
               data: _film.copyWithMenu(AuditoriumMenu.subtitles),
               actions: ControlsActions.none(),
             ),
-            Positioned(
-              right: 16,
-              bottom: 104,
-              child: ControlMenu(
-                title: 'Subtitles',
-                onClose: () {},
-                entries: [
-                  const MenuEntry('Off'),
-                  const MenuEntry('EN  downloaded', detail: 'MATCH', selected: true),
-                  const MenuEntry('FR  Forced', detail: 'IMAGE'),
-                  MenuEntry('Load subtitle file…', icon: 'file-plus', onTap: () {}),
-                  MenuEntry('Find, sync and style…', icon: 'search', onTap: () {}),
-                ],
-              ),
-            ),
+            _menuAt(desktop: true, menu: (h, fill) => _subtitlesMenu(h, fill: fill, delayMs: 150)),
+            // The card's real corner is the menu's: it is drawn on the left here so one
+            // picture shows both. The session owns the countdown; the card shows what is left.
             Positioned(
               left: 16,
               bottom: 120,
               child: UpNextCard(
-                name: 'Severance.S02E04.1080p.WEB.h264.mkv',
+                name: 'Severance S02E04',
+                at: kNight.add(const Duration(seconds: 6)),
                 onPlay: () {},
                 onCancel: () {},
               ),
@@ -600,21 +880,52 @@ void main() {
   });
 }
 
-extension on ControlsData {
-  ControlsData copyWithMenu(AuditoriumMenu m) => ControlsData(
-    title: title,
-    position: position,
-    duration: duration,
-    buffered: buffered,
-    playing: playing,
-    volume: volume,
-    delayMs: delayMs,
-    hasSubtitle: hasSubtitle,
-    matched: matched,
-    detents: detents,
-    chapterTitles: chapterTitles,
-    hasPrevious: hasPrevious,
-    hasNext: hasNext,
-    openMenu: m,
+/// The notice a first film opens with when no API key is set: the long one.
+class _ApiKeyNotice extends NoticeNotifier {
+  @override
+  Notice? build() => Notice(
+    sentenceFor(ThreadingFailure.noApiKey),
+    actionLabel: 'Subtitles…',
+    duration: const Duration(seconds: 8),
+    serial: 1,
   );
+}
+
+extension on ControlsData {
+  ControlsData copyWithMenu(AuditoriumMenu m) => withState(menu: m);
+
+  /// The same film with a menu or the timing rule open.
+  ControlsData withState({AuditoriumMenu? menu, bool syncOpen = false, int? delayMs}) =>
+      ControlsData(
+        title: title,
+        position: position,
+        duration: duration,
+        buffered: buffered,
+        buffering: buffering,
+        playing: playing,
+        volume: volume,
+        muted: muted,
+        rate: rate,
+        delayMs: delayMs ?? this.delayMs,
+        hasSubtitle: hasSubtitle,
+        matched: matched,
+        detents: detents,
+        chapterTitles: chapterTitles,
+        loopA: loopA,
+        loopB: loopB,
+        hasPrevious: hasPrevious,
+        hasNext: hasNext,
+        fullscreen: fullscreen,
+        desktop: desktop,
+        showPip: showPip,
+        sleeping: sleeping,
+        fit: fit,
+        pictureAdjusted: pictureAdjusted,
+        pinned: pinned,
+        seekStep: seekStep,
+        showRemaining: showRemaining,
+        orientation: orientation,
+        openMenu: menu,
+        syncOpen: syncOpen,
+      );
 }

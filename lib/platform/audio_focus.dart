@@ -56,20 +56,44 @@ class AudioFocus {
 
   /// Follows the player: focus is held exactly while the film plays.
   Future<void> setPlaying(bool playing) async {
+    if (playing != _wantPlaying) _retried = false; // a new press of play or pause
+    _wantPlaying = playing;
     if (playing == _held) return;
     final s = await _ready();
     if (s == null || _disposed || playing == _held) return;
     _held = playing;
     try {
-      await s.setActive(playing);
+      final granted = await s.setActive(playing);
+      if (playing && !granted) _refused();
     } on Object {
       // Refused (a call in progress): the film still plays; the interruption stream decides.
+      if (playing) _refused();
     }
   }
+
+  Timer? _retry;
+
+  /// Android 15+ only gives focus to the app in front or to one with a foreground service, and
+  /// play from the lock screen asks a moment before the playback service has come forward.
+  /// Without focus a call would not pause the film: ask once more, shortly.
+  void _refused() {
+    _held = false;
+    // Once per press of play: a refusal that stands (a call in progress) is not argued with.
+    if (_retried || _retry != null || _disposed) return;
+    _retried = true;
+    _retry = Timer(const Duration(milliseconds: 700), () {
+      _retry = null;
+      if (_wantPlaying) unawaited(setPlaying(true));
+    });
+  }
+
+  bool _wantPlaying = false;
+  bool _retried = false;
 
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    _retry?.cancel();
     for (final s in _subs) {
       await s.cancel();
     }

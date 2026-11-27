@@ -82,7 +82,8 @@ class _LibraryState extends ConsumerState<LibrarySection> {
       SettingsGroup(
         title: 'Back up your library',
         helper:
-            'One small file with your films, resume points, subtitle sync and settings. '
+            'One small file with the videos you have played, where you stopped in each, your '
+            'subtitle timing and your settings. '
             'Use it to move to a new computer or phone; importing merges, nothing is lost.',
         children: [
           Wrap(

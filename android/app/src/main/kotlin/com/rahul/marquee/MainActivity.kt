@@ -62,6 +62,11 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        // libmpv is native: it outlives the Flutter engine that drove it. With the playback
+        // service up, Android no longer ends the process when the app is swiped out of
+        // Recents, so a film that was playing would play on with no window, no notification
+        // and nothing left to stop it.
+        val orphaned = NowPlaying.film?.playing == true && !isChangingConfigurations
         content?.dispose()
         pip?.dispose()
         // The engine dies with this activity: the lock-screen controls and the playback service
@@ -71,6 +76,7 @@ class MainActivity : FlutterActivity() {
         pip = null
         media = null
         super.onDestroy()
+        if (orphaned) android.os.Process.killProcess(android.os.Process.myPid())
     }
 
     /** The video a VIEW ("Open with") or SEND (share sheet) intent carries, if any. */

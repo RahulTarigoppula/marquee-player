@@ -1,6 +1,6 @@
 // A film in the Lobby: a 16:9 frame from the film (or a title card until one is grabbed), the
-// title, plain meta, the resume line and two small tags. Hover lifts it; right click, long
-// press or the ⋮ button opens its menu.
+// title, plain meta, the resume line and a tag or two in plain words. Hover lifts it; right
+// click, long press or the ⋮ button opens its menu.
 import 'dart:io' show File;
 
 import 'package:flutter/material.dart';
@@ -8,7 +8,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../engine/models/media.dart';
 import '../../engine/sentences.dart';
-import '../../engine/sync_rule.dart';
 import '../../state/thumbnails.dart';
 import '../../theme/house.dart';
 import '../../theme/tokens.dart';
@@ -84,7 +83,8 @@ class TitleCard extends StatelessWidget {
   }
 }
 
-/// `1949 · 1h 44m · MKV`, or `1h 02m left · MKV` for a film in progress.
+/// `1949 · 1h 44m`, or `1h 02m left` for a film in progress. The file's format is not here:
+/// nobody chooses a film by it, and it stays in Details.
 String cardMeta(LobbyCard c) {
   final left = c.durationMs == null || !isInProgress(c)
       ? null
@@ -96,7 +96,6 @@ String cardMeta(LobbyCard c) {
       if (c.year != null) '${c.year}',
       if (c.durationMs != null) runtimeText(c.durationMs!),
     ],
-    ?containerText(c),
   ].join(' · ');
 }
 
@@ -112,23 +111,16 @@ String cardSpoken(LobbyCard c) {
   return parts.join(', ');
 }
 
-/// The small tags under a card: subtitle language (with a tick) and a remembered sync offset.
+/// The small tags under a card: WATCHED, and the subtitles it has, by the language's name with
+/// a tick ("Hindi subtitles ✓": a code like HI also means "hearing impaired" elsewhere).
+/// WATCHED comes first: on a narrow card only the first tag fits, and for a film that is over
+/// that is the one worth reading.
 List<Widget> cardTags(BuildContext context, LobbyCard c) {
   final p = House.paletteOf(context);
   return [
-    if (c.subtitleLanguage != null)
-      Tag(
-        c.subtitleLanguage!.toUpperCase(),
-        icon: 'check',
-        color: p.success,
-        semanticLabel: '${languageName(c.subtitleLanguage!)} subtitles',
-      ),
-    if (c.delayMs != null && c.delayMs != 0)
-      Tag(
-        'SYNC ${formatDelay(c.delayMs!)}',
-        semanticLabel: 'Subtitle sync ${spokenDelay(c.delayMs!)}',
-      ),
     if (c.finished) Tag('WATCHED', color: p.inkMuted),
+    if (c.subtitleLanguage != null)
+      Tag('${languageName(c.subtitleLanguage!)} subtitles', icon: 'check', color: p.success),
   ];
 }
 
@@ -167,7 +159,7 @@ class FilmCard extends StatelessWidget {
         children: [
           Pressable(
             label: cardSpoken(card),
-            hint: 'Opens the film',
+            hint: 'Plays the video',
             onTap: onOpen,
             onLongPress: () => onMenu(centre()),
             onContextMenu: onMenu,

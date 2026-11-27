@@ -1,4 +1,7 @@
-// Threading: the loading indicator that never lies. Leader + hash line + candidates + strip.
+// The opening screen ("threading" in the code): the loading indicator that never lies. The
+// countdown and what it is doing, the subtitles it found, and how many downloads are left.
+// Everything on it is said in plain words: the video's own title, not a reel number; no file
+// fingerprint (Video details has it).
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -16,6 +19,7 @@ import '../../theme/tokens.dart';
 import '../components/leader.dart';
 import '../components/primitives.dart';
 import '../components/ticket_strip.dart';
+import 'subtitle_choice.dart';
 
 class ThreadingOverlay extends ConsumerStatefulWidget {
   const ThreadingOverlay({super.key});
@@ -38,7 +42,7 @@ class _ThreadingOverlayState extends ConsumerState<ThreadingOverlay> {
   void _announce(ThreadingState t, BuildContext context) {
     if (t.phase == _announced) return;
     _announced = t.phase;
-    final lang = languageName(t.picked?.candidate.language ?? 'en');
+    final lang = languageLabel(t.picked?.candidate.language ?? 'en');
     final synced = t.attached is ExternalSubtitle && (t.attached as ExternalSubtitle).syncedByHash;
     final text = announceFor(t.phase, language: lang, synced: synced);
     if (text.isNotEmpty) {
@@ -52,7 +56,11 @@ class _ThreadingOverlayState extends ConsumerState<ThreadingOverlay> {
     if (session == null) return const SizedBox.shrink();
     final t = session.threading;
     final p = House.paletteOf(context);
-    final wide = MediaQuery.sizeOf(context).width >= 900;
+    final room = MediaQuery.sizeOf(context);
+    final wide = room.width >= 900;
+    // A phone held sideways: the countdown shrinks so it, and the words under it, fit the
+    // height instead of being cut off at the bottom edge.
+    final short = room.height < 520;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _announce(t, context);
     });
@@ -67,26 +75,22 @@ class _ThreadingOverlayState extends ConsumerState<ThreadingOverlay> {
     final leaderCol = Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Leader(state: t, size: wide ? 300 : 220),
+        Leader(state: t, size: short ? 160 : (wide ? 300 : 220)),
         const SizedBox(height: Tokens.space3),
-        Text(switch (t.phase) {
-          LeaderPhase.hashing => 'READING THE FILE',
-          LeaderPhase.searching => 'LOOKING FOR SUBTITLES',
-          LeaderPhase.downloading =>
-            'DOWNLOADING ${languageName(t.picked?.candidate.language ?? 'en').toUpperCase()} SUBTITLES',
-          _ => 'THREADING',
-        }, style: Txt.label(p.accent)),
-        const SizedBox(height: Tokens.space2),
-        Text(
-          [
-            t.hash?.value ?? '················',
-            if (t.sizeBytes != null) _size(t.sizeBytes!),
-          ].join(' · '),
-          style: Txt.mono(
-            Tokens.textSm,
-            p.inkMuted,
-          ).copyWith(fontFeatures: const [FontFeature.slashedZero(), FontFeature.tabularFigures()]),
+        // What is being opened, in the words Home used for it. Here, under the countdown, it
+        // has the width for a whole title; beside the buttons above it would be cut to a stub.
+        Semantics(
+          header: true,
+          child: Text(
+            threadingFolio(session.displayTitle),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: Txt.body(Tokens.textLg, p.ink, weight: FontWeight.w600),
+          ),
         ),
+        const SizedBox(height: Tokens.space1),
+        Text(searchStatusLabel(t), style: Txt.label(p.accent)),
       ],
     );
 
@@ -103,7 +107,8 @@ class _ThreadingOverlayState extends ConsumerState<ThreadingOverlay> {
           const SizedBox(height: Tokens.space3),
         ],
         for (final c in t.candidates.take(8))
-          _CandidateRow(
+          SubtitleChoiceRow(
+            raised: true,
             scored: c,
             picked: _same(t.picked, c),
             downloading: t.phase == LeaderPhase.downloading && _same(t.picked, c),
@@ -118,7 +123,7 @@ class _ThreadingOverlayState extends ConsumerState<ThreadingOverlay> {
       ],
     );
 
-    // The film waits, paused, behind this overlay. There is ALWAYS a way to just watch it.
+    // The video waits, paused, behind this overlay. There is ALWAYS a way to just watch it.
     return ColoredBox(
       color: p.bg.withValues(alpha: 0.94),
       child: SafeArea(
@@ -136,20 +141,12 @@ class _ThreadingOverlayState extends ConsumerState<ThreadingOverlay> {
                 children: [
                   IconMark(
                     icon: 'arrow-left',
-                    label: 'Back to the lobby',
+                    label: 'Back to Home',
                     onTap: () => unawaited(ref.read(sessionProvider.notifier).close()),
-                  ),
-                  const SizedBox(width: Tokens.space2),
-                  Flexible(
-                    child: Text(
-                      kThreadingFolio,
-                      overflow: TextOverflow.ellipsis,
-                      style: Txt.mono(Tokens.textSm, p.inkMuted),
-                    ),
                   ),
                   const Spacer(),
                   TextAction(
-                    'Play without subtitles',
+                    kPlayWithoutSubtitles,
                     primary: stalled != null,
                     onTap: () => ref.read(sessionProvider.notifier).skipSubtitles(),
                   ),
@@ -158,7 +155,7 @@ class _ThreadingOverlayState extends ConsumerState<ThreadingOverlay> {
               Expanded(
                 child: SingleChildScrollView(
                   child: Padding(
-                    padding: const EdgeInsets.only(top: Tokens.space6),
+                    padding: EdgeInsets.only(top: short ? Tokens.space3 : Tokens.space6),
                     child: wide
                         ? Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -193,21 +190,17 @@ class _ThreadingOverlayState extends ConsumerState<ThreadingOverlay> {
       for (final a in s.next)
         switch (a) {
           FallbackAction.signIn => TextAction(
-            switch (s.failure) {
-              ThreadingFailure.noApiKey => 'Add your free API key…',
-              ThreadingFailure.unauthorized => 'Sign in again…',
-              _ => 'Sign in for more downloads (free)…',
-            },
+            signInActionLabel(s.failure),
             primary: true,
             onTap: () => ref.read(roomProvider.notifier).go(Room.ticketOffice),
           ),
-          FallbackAction.retry => TextAction('Try again', onTap: () => unawaited(m?.retry())),
+          FallbackAction.retry => TextAction(kTryAgain, onTap: () => unawaited(m?.retry())),
           FallbackAction.filenameSearch => TextAction(
-            'Search by filename',
+            kSearchByFileName,
             onTap: () => unawaited(m?.filenameSearch()),
           ),
           FallbackAction.subdl => TextAction(
-            'Use the Subdl slot',
+            kTryBackupSite,
             onTap: () => unawaited(m?.subdlSearch()),
           ),
           FallbackAction.manualSearch => Padding(
@@ -218,7 +211,7 @@ class _ThreadingOverlayState extends ConsumerState<ThreadingOverlay> {
               scrollPadding: const EdgeInsets.only(bottom: 120),
               textInputAction: TextInputAction.search,
               decoration: InputDecoration(
-                hintText: 'Or type the film’s title and press Enter',
+                hintText: 'Or type the title and press Enter',
                 hintStyle: Txt.body(Tokens.textBase, p.inkFaint),
                 enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: p.borderStrong)),
                 focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: p.accent)),
@@ -234,91 +227,4 @@ class _ThreadingOverlayState extends ConsumerState<ThreadingOverlay> {
 
   static bool _same(ScoredCandidate? a, ScoredCandidate b) =>
       a != null && a.candidate.provider == b.candidate.provider && a.candidate.id == b.candidate.id;
-
-  static String _size(int bytes) {
-    if (bytes >= 1 << 30) return '${(bytes / (1 << 30)).toStringAsFixed(2)} GB';
-    if (bytes >= 1 << 20) return '${(bytes / (1 << 20)).toStringAsFixed(1)} MB';
-    return '${(bytes / 1024).toStringAsFixed(0)} KB';
-  }
-}
-
-class _CandidateRow extends StatelessWidget {
-  final ScoredCandidate scored;
-  final bool picked;
-  final bool downloading;
-  final VoidCallback onTap;
-  const _CandidateRow({
-    required this.scored,
-    required this.picked,
-    required this.downloading,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final p = House.paletteOf(context);
-    final c = scored.candidate;
-    final meta = [
-      '${_thousands(c.downloadCount)} dl',
-      if (c.fps != null) '${c.fps!.toStringAsFixed(3)} fps',
-      if (c.hearingImpaired) 'HI',
-      if (c.machineTranslated || c.aiTranslated) 'MACHINE',
-      if (c.provider == SubtitleProvider.subdl) 'SUBDL',
-    ].join(' · ');
-    return FocusRing(
-      radius: Tokens.radiusMd,
-      child: Semantics(
-        inMutuallyExclusiveGroup: true,
-        checked: picked,
-        label:
-            '${c.language}, ${c.release ?? 'untitled'}, ${c.moviehashMatch ? 'exact match' : 'by name, check sync'}',
-        child: InkWell(
-          onTap: onTap,
-          child: Container(
-            margin: const EdgeInsets.only(bottom: Tokens.space2),
-            padding: const EdgeInsets.symmetric(horizontal: Tokens.space3, vertical: Tokens.space2),
-            constraints: const BoxConstraints(minHeight: Tokens.targetMin),
-            decoration: BoxDecoration(
-              color: picked ? p.surface2 : p.surface,
-              borderRadius: BorderRadius.circular(Tokens.radiusMd),
-              boxShadow: Tokens.shadow1,
-            ),
-            child: Row(
-              children: [
-                Text(c.language.toUpperCase(), style: Txt.mono(Tokens.textSm, p.ink)),
-                const SizedBox(width: Tokens.space2),
-                Bulb(lit: c.moviehashMatch, color: p.success, size: 7),
-                const SizedBox(width: Tokens.space2),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        c.moviehashMatch
-                            ? 'MATCH  ${c.release ?? ''}'
-                            : c.release ?? 'Untitled release',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Txt.body(Tokens.textSm, p.ink, weight: FontWeight.w500),
-                      ),
-                      Text(
-                        c.moviehashMatch ? meta : 'BY NAME · CHECK SYNC · $meta',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Txt.mono(Tokens.textXs, c.moviehashMatch ? p.inkMuted : p.warning),
-                      ),
-                    ],
-                  ),
-                ),
-                if (downloading) LucideIcon('download', size: 16, color: p.accent),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  static String _thousands(int n) =>
-      n.toString().replaceAllMapped(RegExp(r'(\d)(?=(\d{3})+$)'), (m) => '${m[1]} ');
 }

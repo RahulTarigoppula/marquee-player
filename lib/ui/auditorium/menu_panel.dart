@@ -15,6 +15,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../engine/models/models.dart';
 import '../../engine/picture.dart';
 import '../../engine/playback.dart';
+import '../../engine/sentences.dart' show languageName;
 import '../../platform/window.dart';
 import '../../player/engine.dart';
 import '../../state/providers.dart';
@@ -24,12 +25,29 @@ import '../components/kit.dart';
 import 'controls/controls_bar.dart';
 import 'controls/widgets.dart';
 
-/// `EN  Director's commentary`, or [fallback] for a track that says nothing about itself.
+/// `English · Director's commentary`, or [fallback] for a track that says nothing about
+/// itself. The language is said in words, never as the container's code (`eng`, `EN`); a
+/// track marked "undetermined" has none, and a title that only repeats the language is not
+/// said twice.
 String trackName(String? language, String? title, {required String fallback}) {
-  final lang = language == null || language.isEmpty ? null : language.toUpperCase();
-  final parts = [?lang, if (title != null && title.isNotEmpty) title];
-  return parts.isEmpty ? fallback : parts.join('  ');
+  final tag = language?.trim().toLowerCase() ?? '';
+  final lang = tag.isEmpty || tag == 'und' ? null : languageName(tag);
+  final name = title?.trim() ?? '';
+  final parts = [?lang, if (name.isNotEmpty && name.toLowerCase() != lang?.toLowerCase()) name];
+  return parts.isEmpty ? fallback : parts.join(' · ');
 }
+
+/// The row of the subtitles Marquee found or was handed: `English · downloaded`, or
+/// `English · next to the video` for a file that was already beside it.
+String attachedSubtitleLabel(String language, {required bool sidecar}) =>
+    '${trackName(language, null, fallback: 'Subtitles')} · '
+    '${sidecar ? 'next to the video' : 'downloaded'}';
+
+/// The one name of the subtitle sheet (find, timing, look), wherever a menu offers it.
+const String kSubtitleOptions = 'Subtitle options…';
+
+/// The Subtitles menu's own way to the timing rule, in the words of the complaint.
+const String kSubtitleTiming = 'Subtitles too early or late?';
 
 /// `+0.15 s`, `-0.05 s`, `0.00 s`.
 String delayLabel(int ms) {
@@ -56,6 +74,20 @@ class MenuPanel extends ConsumerWidget {
   final bool canGoBack, desktop;
   final double maxHeight;
   final VoidCallback onBack, onClose, onPickSubtitle, onBooth, onCueSheet, onDetails;
+
+  /// Opens the subtitle timing rule (Subtitles › "Subtitles too early or late?").
+  final VoidCallback onSync;
+
+  /// Phones: shows the picture of the touch gestures again. Null where there are none.
+  final VoidCallback? onGestures;
+
+  /// Phones: turns the screen for this film ([orientation] is how it is held now). The top
+  /// bar has the button too, but not on a phone held upright, where the title needs the room.
+  final VoidCallback? onRotate;
+  final FilmOrientation orientation;
+
+  /// The sideways phone's sheet: the panel takes all of [maxHeight] (see `MenuSlot`).
+  final bool fill;
   final ValueChanged<AuditoriumMenu> onOpen;
   const MenuPanel({
     super.key,
@@ -70,6 +102,11 @@ class MenuPanel extends ConsumerWidget {
     required this.onBooth,
     required this.onCueSheet,
     required this.onDetails,
+    required this.onSync,
+    this.onGestures,
+    this.onRotate,
+    this.orientation = FilmOrientation.auto,
+    this.fill = false,
   });
 
   @override
@@ -129,19 +166,22 @@ class MenuPanel extends ConsumerWidget {
           MenuEntry('Off', selected: !_isTrack(pb.sid), onTap: () => then(n.subtitlesOff)),
           if (attached is ExternalSubtitle)
             MenuEntry(
-              '${attached.language.toUpperCase()}  ${attached.provider == SubtitleProvider.sidecar ? 'beside the film' : 'downloaded'}',
-              detail: attached.syncedByHash ? 'MATCH' : 'BY NAME',
+              attachedSubtitleLabel(
+                attached.language,
+                sidecar: attached.provider == SubtitleProvider.sidecar,
+              ),
+              // Found by name only: its timing was never checked against this file.
+              detail: attached.syncedByHash ? null : 'check timing',
               selected: attachedId != null && pb.sid == attachedId,
               onTap: () => then(n.useAttachedSubtitle),
             ),
           for (final t in pb.subs.where((t) => t.id != attachedId))
             MenuEntry(
-              trackName(t.language, t.title, fallback: 'Track ${t.id}'),
-              detail: isBitmapSubtitle(t)
-                  ? 'IMAGE'
-                  : e.isExternal(t.id)
-                  ? 'FILE'
-                  : null,
+              trackName(
+                t.language,
+                t.title,
+                fallback: e.isExternal(t.id) ? 'Subtitle file' : 'Track ${t.id}',
+              ),
               selected: t.id == pb.sid,
               onTap: () => then(() => n.selectSubtitle(t.id)),
             ),
@@ -155,8 +195,17 @@ class MenuPanel extends ConsumerWidget {
               opens: true,
               onTap: () => onOpen(AuditoriumMenu.secondSubtitle),
             ),
+          // Only with subtitles to move (or already moved): the most common complaint about
+          // them gets a row of its own, straight to the rule.
+          if (_isTrack(pb.sid) || s.delayMs != 0)
+            MenuEntry(
+              kSubtitleTiming,
+              icon: 'timer',
+              detail: s.delayMs == 0 ? null : delayLabel(s.delayMs),
+              onTap: onSync,
+            ),
           MenuEntry('Load subtitle file…', icon: 'file-plus', onTap: onPickSubtitle),
-          MenuEntry('Find, sync and style…', icon: 'search', onTap: onBooth),
+          MenuEntry(kSubtitleOptions, icon: 'sliders-horizontal', onTap: onBooth),
         ]),
       ),
       AuditoriumMenu.secondSubtitle => (
@@ -169,8 +218,11 @@ class MenuPanel extends ConsumerWidget {
           ),
           for (final t in seconds)
             MenuEntry(
-              trackName(t.language, t.title, fallback: 'Track ${t.id}'),
-              detail: e.isExternal(t.id) ? 'FILE' : null,
+              trackName(
+                t.language,
+                t.title,
+                fallback: e.isExternal(t.id) ? 'Subtitle file' : 'Track ${t.id}',
+              ),
               selected: t.id == pb.sid2,
               onTap: () => then(() => n.setSecondSubtitle(t.id)),
             ),
@@ -427,6 +479,14 @@ class MenuPanel extends ConsumerWidget {
             opens: true,
             onTap: () => onOpen(AuditoriumMenu.picture),
           ),
+          // Stays open: each tap turns it once more (follow the video, landscape, portrait).
+          if (onRotate != null)
+            MenuEntry(
+              'Turn the screen',
+              icon: 'rotate-ccw-square',
+              detail: orientation == FilmOrientation.auto ? 'Auto' : orientation.label,
+              onTap: onRotate,
+            ),
           MenuEntry('Video details', icon: 'info', detail: desktop ? 'I' : null, onTap: onDetails),
           // Windows only: a phone has picture in picture for this.
           if (Platform.isWindows)
@@ -442,13 +502,14 @@ class MenuPanel extends ConsumerWidget {
             ),
           MenuEntry('Load subtitle file…', icon: 'file-plus', onTap: onPickSubtitle),
           MenuEntry(
-            'Subtitle booth',
-            icon: 'captions',
+            kSubtitleOptions,
+            icon: 'sliders-horizontal',
             detail: desktop ? 'S' : null,
             onTap: onBooth,
           ),
           if (desktop)
             MenuEntry('Keyboard shortcuts', icon: 'info', detail: '?', onTap: onCueSheet),
+          if (onGestures != null) MenuEntry('Touch gestures', icon: 'info', onTap: onGestures),
         ]),
       ),
     };
@@ -458,6 +519,7 @@ class MenuPanel extends ConsumerWidget {
       onBack: canGoBack ? onBack : null,
       onClose: onClose,
       maxHeight: maxHeight,
+      fill: fill,
     );
   }
 }

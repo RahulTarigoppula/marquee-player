@@ -1,18 +1,35 @@
-// Quota → ticket strip (§6.6). A pure function of the last /download or /login response.
-// The total is NEVER a constant: print whatever `allowed_downloads` came back with.
+// Quota → the download allowance line (§6.6). A pure function of the last /download or /login
+// response. The total is NEVER a constant: print whatever `allowed_downloads` came back with.
+//
+// The words are plain on purpose: "7 of 10 subtitle downloads left today". The reset time is
+// left out: the server gives it in UTC, which is tomorrow for some viewers and tonight for
+// others, and "today" is close enough to act on.
 import 'models/quota.dart';
 
+/// Under the line when the day's downloads are nearly gone or gone. Only a signed-in count
+/// gets that far (see [Quota.state]), so it never says "sign in".
 const String kLowQuotaSentence =
-    'Sign in at the ticket office (free, more tickets) or use the Subdl slot.';
-const String kNoTicketsSentence =
-    'No tickets left tonight. Sign in for more, or use the Subdl slot.';
+    'Need more? Turn on the backup site (Subdl) in Settings › Subtitles.';
 
-String _two(int n) => n.toString().padLeft(2, '0');
+/// A search or download the server refused for the day. The ways on (sign in, the backup
+/// site) are the buttons under it.
+const String kNoTicketsSentence = 'No subtitle downloads left today.';
 
-String _resets(DateTime? reset) {
-  if (reset == null) return '';
-  final u = reset.toUtc();
-  return ' · RESETS ${_two(u.hour)}:${_two(u.minute)} UTC';
+/// 12431 → `12,431`: every count a person reads (downloads left, downloads so far).
+String thousands(int n) {
+  final digits = n.abs().toString().replaceAllMapped(
+    RegExp(r'(\d)(?=(\d{3})+$)'),
+    (m) => '${m[1]},',
+  );
+  return n < 0 ? '-$digits' : digits;
+}
+
+/// `7 of 10 subtitle downloads left today`, `1 subtitle download left today`.
+String _left(int left, int? total) {
+  final noun = left == 1 && total == null ? 'subtitle download' : 'subtitle downloads';
+  return total == null
+      ? '${thousands(left)} $noun left today'
+      : '${thousands(left)} of ${thousands(total)} $noun left today';
 }
 
 /// [pendingTear] is true while the ticket-tear animation runs: the view keeps showing the
@@ -23,47 +40,44 @@ TicketStrip ticketStrip(Quota q, {bool pendingTear = false}) {
   switch (q.state) {
     case TicketState.anonymous:
       return TicketStrip(
-        text: 'ANONYMOUS · 5 PER DAY PER IP',
+        text: 'Not signed in · 5 subtitle downloads a day',
         sentence: null,
-        ariaLabel: 'Anonymous: 5 downloads per day per network',
+        ariaLabel: 'Not signed in: 5 subtitle downloads a day',
         state: TicketState.anonymous,
         pendingTear: pendingTear,
       );
     case TicketState.vip:
-      final count = r == null ? 'VIP' : (t == null ? '$r LEFT · VIP' : '$r OF $t · VIP');
+      final count = r == null ? 'VIP account' : '${_left(r, t)} · VIP';
       return TicketStrip(
         text: count,
         sentence: null,
-        ariaLabel: r == null ? 'VIP downloads' : '$r of ${t ?? r} downloads left, VIP',
+        ariaLabel: r == null ? 'VIP account' : '${_left(r, t)}, VIP account',
         state: TicketState.vip,
         pendingTear: pendingTear,
       );
     case TicketState.unknown:
       return TicketStrip(
-        text: 'SIGNED IN · TICKETS UNKNOWN',
+        text: 'Signed in · downloads left today not known yet',
         sentence: null,
-        ariaLabel: 'Signed in; downloads left unknown',
+        ariaLabel: 'Signed in. Subtitle downloads left today: not known yet',
         state: TicketState.unknown,
         pendingTear: pendingTear,
       );
     case TicketState.exhausted:
       return TicketStrip(
-        text: 'NO TICKETS LEFT TONIGHT${_resets(q.resetUtc)}',
-        sentence: kNoTicketsSentence,
-        ariaLabel: 'No downloads left tonight',
+        text: 'No subtitle downloads left today',
+        sentence: kLowQuotaSentence,
+        ariaLabel: 'No subtitle downloads left today',
         state: TicketState.exhausted,
         pendingTear: pendingTear,
       );
     case TicketState.twoLeft:
     case TicketState.nLeft:
-      final left = r ?? 0;
-      final of = t == null ? '$left LEFT TONIGHT' : '$left OF $t TONIGHT';
+      final left = _left(r ?? 0, t);
       return TicketStrip(
-        text: '$of${_resets(q.resetUtc)}',
+        text: left,
         sentence: q.state == TicketState.twoLeft ? kLowQuotaSentence : null,
-        ariaLabel: t == null
-            ? '$left downloads left tonight'
-            : '$left of $t downloads left tonight',
+        ariaLabel: left,
         state: q.state,
         pendingTear: pendingTear,
       );

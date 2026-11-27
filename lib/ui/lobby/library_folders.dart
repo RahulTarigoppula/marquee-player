@@ -11,7 +11,7 @@ import '../../theme/house.dart';
 import '../../theme/tokens.dart';
 import '../components/kit.dart';
 import '../components/primitives.dart';
-import 'library_view.dart' show addFolderFromPicker;
+import 'library_view.dart' show addFolderFromPicker, openAppSettingsFor;
 
 class LibraryFoldersCard extends ConsumerWidget {
   const LibraryFoldersCard({super.key});
@@ -92,6 +92,9 @@ class _DeviceAccess extends ConsumerWidget {
     final library = ref.watch(deviceLibraryProvider).value;
     if (library == null) return const SizedBox.shrink();
     void ask() => unawaited(ref.read(deviceLibraryProvider.notifier).requestAccess());
+    // Refused once, Android stops showing its dialog: the way back is the app's own page in
+    // the phone's settings.
+    final refused = library.access == VideoAccess.denied && library.asked;
     final count = library.items.length;
     final (String text, bool ok, String? action) = switch (library.access) {
       VideoAccess.granted => (
@@ -105,12 +108,12 @@ class _DeviceAccess extends ConsumerWidget {
         'Pick more videos',
       ),
       VideoAccess.denied => (
-        library.asked
-            ? "Marquee isn't allowed to list your videos. You can allow videos for Marquee in "
-                  'your phone’s app settings; the file picker works either way.'
+        refused
+            ? "Marquee isn't allowed to list your videos. Open app settings, tap Permissions "
+                  'and allow videos; Open file works either way.'
             : "Marquee hasn't been allowed to list your videos yet.",
         false,
-        library.asked ? 'Ask again' : 'Show my videos',
+        refused ? 'Open app settings' : 'Show my videos',
       ),
     };
     return Column(
@@ -127,8 +130,8 @@ class _DeviceAccess extends ConsumerWidget {
               HouseButton(
                 key: const ValueKey('folders-allow'),
                 label: action,
-                icon: 'film',
-                onPressed: ask,
+                icon: refused ? 'settings-2' : 'film',
+                onPressed: refused ? () => unawaited(openAppSettingsFor(ref)) : ask,
               ),
             if (library.access != VideoAccess.denied)
               HouseButton(

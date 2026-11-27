@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 
 import '../../engine/models/media.dart';
 import '../../engine/sentences.dart';
-import '../../engine/sync_rule.dart';
 import '../../theme/house.dart';
 import '../../theme/tokens.dart';
 import '../components/kit.dart';
@@ -16,6 +15,10 @@ import 'lobby_actions.dart';
 class LobbyHero extends StatelessWidget {
   final LobbyCard card;
   final bool wide;
+
+  /// A phone held sideways: the sign is small, the gaps close up and the resume line shares a
+  /// row with the details, so Resume is on screen without scrolling.
+  final bool short;
   final bool night;
   final double minHeight;
 
@@ -27,6 +30,7 @@ class LobbyHero extends StatelessWidget {
     super.key,
     required this.card,
     required this.wide,
+    this.short = false,
     required this.night,
     required this.minHeight,
     required this.top,
@@ -39,12 +43,37 @@ class LobbyHero extends StatelessWidget {
     final h = House.of(context);
     final p = h.palette;
     final resume = resumeMs(card);
+    // What helps choose tonight's film, in words. The file's format and a remembered subtitle
+    // offset are in Details.
     final details = [
       if (card.durationMs != null) runtimeText(card.durationMs!),
-      ?containerText(card),
       if (card.subtitleLanguage != null) '${languageName(card.subtitleLanguage!)} subtitles',
     ].join('  ·  ');
     final left = card.durationMs == null || resume == null ? null : card.durationMs! - resume;
+    final gap = short ? Tokens.space3 : Tokens.space4;
+    final side = wide ? Tokens.space8 : Tokens.marginPhone;
+
+    final detailsLine = details.isEmpty
+        ? null
+        : Text(
+            details,
+            textAlign: TextAlign.center,
+            style: Txt.body(Tokens.textSm, p.inkMuted, weight: FontWeight.w500),
+          );
+    final resumeLine = resume == null
+        ? null
+        : ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: short ? 260 : 360),
+            child: Row(
+              children: [
+                Expanded(child: ProgressLine(fraction: card.resumeFraction)),
+                if (left != null) ...[
+                  const SizedBox(width: Tokens.space3),
+                  Text('${runtimeText(left)} left', style: Txt.mono(Tokens.textXs, p.inkMuted)),
+                ],
+              ],
+            ),
+          );
 
     return Stack(
       children: [
@@ -58,10 +87,10 @@ class LobbyHero extends StatelessWidget {
               top,
               Padding(
                 padding: EdgeInsets.fromLTRB(
-                  wide ? Tokens.space8 : Tokens.marginPhone,
-                  Tokens.space6,
-                  wide ? Tokens.space8 : Tokens.marginPhone,
-                  Tokens.space6,
+                  side,
+                  short ? Tokens.space2 : Tokens.space6,
+                  side,
+                  short ? Tokens.space3 : Tokens.space6,
                 ),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -71,47 +100,24 @@ class LobbyHero extends StatelessWidget {
                       meta: [if (card.year != null) '${card.year}', 'NOW SHOWING'].join(' · '),
                       identified: card.title != null,
                       night: night,
-                      fontSize: wide ? Tokens.text4Xl : Tokens.text3Xl,
+                      fontSize: wide && !short ? Tokens.text4Xl : Tokens.text3Xl,
                     ),
-                    const SizedBox(height: Tokens.space4),
-                    Wrap(
-                      alignment: WrapAlignment.center,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      spacing: Tokens.space3,
-                      runSpacing: Tokens.space2,
-                      children: [
-                        if (details.isNotEmpty)
-                          Text(
-                            details,
-                            textAlign: TextAlign.center,
-                            style: Txt.body(Tokens.textSm, p.inkMuted, weight: FontWeight.w500),
-                          ),
-                        if (card.delayMs != null && card.delayMs != 0)
-                          Tag(
-                            'SYNC ${formatDelay(card.delayMs!)}',
-                            semanticLabel: 'Subtitle sync ${spokenDelay(card.delayMs!)}',
-                          ),
-                      ],
-                    ),
-                    if (resume != null) ...[
-                      const SizedBox(height: Tokens.space4),
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 360),
-                        child: Row(
-                          children: [
-                            Expanded(child: ProgressLine(fraction: card.resumeFraction)),
-                            if (left != null) ...[
-                              const SizedBox(width: Tokens.space3),
-                              Text(
-                                '${runtimeText(left)} left',
-                                style: Txt.mono(Tokens.textXs, p.inkMuted),
-                              ),
-                            ],
-                          ],
+                    if (short) ...[
+                      if (detailsLine != null || resumeLine != null) ...[
+                        SizedBox(height: gap),
+                        Wrap(
+                          alignment: WrapAlignment.center,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          spacing: Tokens.space4,
+                          runSpacing: Tokens.space2,
+                          children: [?detailsLine, ?resumeLine],
                         ),
-                      ),
+                      ],
+                    ] else ...[
+                      if (detailsLine != null) ...[SizedBox(height: gap), detailsLine],
+                      if (resumeLine != null) ...[SizedBox(height: gap), resumeLine],
                     ],
-                    const SizedBox(height: Tokens.space5),
+                    SizedBox(height: short ? gap : Tokens.space5),
                     Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -196,9 +202,17 @@ class _Backdrop extends StatelessWidget {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            Opacity(
-              opacity: h.matinee ? 0.7 : 0.5,
-              child: FilmFrame(card: card, fallback: const SizedBox.shrink()),
+            // The frame stops short of the hero's bottom edge, under the part of the fade that
+            // is already the room's own colour: a hero whose height is not a whole number of
+            // pixels would otherwise leave the frame's last row showing as a hairline.
+            Padding(
+              padding: const EdgeInsets.only(bottom: 2),
+              // A dark frame at this strength is atmosphere in the dark room and a grey cloud
+              // on cream paper: by day it is only a tint.
+              child: Opacity(
+                opacity: h.matinee ? 0.3 : 0.5,
+                child: FilmFrame(card: card, fallback: const SizedBox.shrink()),
+              ),
             ),
             // Fade into the room at the top (the bar) and the bottom (the rows).
             DecoratedBox(
@@ -207,12 +221,12 @@ class _Backdrop extends StatelessWidget {
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
                   colors: [
-                    p.bg.withValues(alpha: 0.7),
+                    p.bg.withValues(alpha: h.matinee ? 0.9 : 0.7),
                     p.bg.withValues(alpha: 0.05),
                     p.bg.withValues(alpha: 0.35),
                     p.bg,
                   ],
-                  stops: const [0, 0.28, 0.62, 1],
+                  stops: const [0, 0.28, 0.62, 0.98],
                 ),
               ),
             ),

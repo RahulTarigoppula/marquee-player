@@ -55,6 +55,10 @@ class PlaybackService : Service() {
 
     /** Matches the service to the film: foreground while it plays, gone when it closes. */
     fun sync() {
+        // Created, but onStartCommand has not answered startForegroundService yet: stopping
+        // now would be a crash ("did not then call startForeground"). The pending start reads
+        // the film as it is when it arrives.
+        if (starting) return
         val film = NowPlaying.film
         val n = NowPlaying.notification(this)
         if (film == null || n == null) {

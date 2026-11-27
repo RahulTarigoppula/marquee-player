@@ -515,9 +515,35 @@ Widget roomFor(Widget child, {bool matinee = false}) {
   );
 }
 
+/// How long a room is given to finish arriving before [shoot]'s `act` runs. The longest
+/// one-shot animation is the marquee title's warm-up: 60 ms a letter (capped at 24 letters)
+/// plus 320 ms, so 1.76 s. Caught earlier, the title is photographed half lit and reads as
+/// dim grey, which is not what anyone ever sees.
+const Duration kShotEntrance = Duration(milliseconds: 2000);
+
+/// How long the picture waits after the last change (the room's last frame, or `act`): past
+/// every implicit animation in the kit (120 to 480 ms), so a button is never caught on the
+/// first frame of a colour tween.
+const Duration kShotSettle = Duration(milliseconds: 600);
+
+/// Advances the room by [total] in 100 ms frames. In steps, not one jump: a value that
+/// arrives on one frame can start an animation on the next. Never `pumpAndSettle`: some
+/// rooms never come to rest (the opening countdown's sweep, an "Up next" count) and it would
+/// time out.
+Future<void> settleShot(WidgetTester tester, [Duration total = kShotSettle]) async {
+  const step = Duration(milliseconds: 100);
+  for (var t = Duration.zero; t < total; t += step) {
+    await tester.pump(step);
+  }
+}
+
 /// Renders [child] at [size] and compares it with (or, with --update-goldens, writes)
 /// `goldens/<name>.png`. [platform] makes the room believe it runs there (desktop-only hints
 /// such as "drag a file here"); [thumbnails] is decoded up front so frames show.
+///
+/// The picture is taken with real shadows and with every animation at rest (see
+/// [kShotEntrance] and [kShotSettle]), so it can be trusted for contrast and elevation. An
+/// `act` needs no pump of its own after its last step: [shoot] settles the room after it.
 Future<void> shoot(
   WidgetTester tester,
   String name,
@@ -536,6 +562,11 @@ Future<void> shoot(
   addTearDown(tester.view.reset);
   if (thumbnails != null) await _precacheFrames(tester, thumbnails);
   debugDefaultTargetPlatformOverride = platform;
+  // flutter_test paints every BoxShadow as a hard-edged solid shape, so each floating panel
+  // (a menu, a pill, a sheet) grew a dark "ghost" a few pixels below it. Real shadows for the
+  // picture; the flag goes back before the test ends, because the binding checks that it did.
+  final shadowsWereDisabled = debugDisableShadows;
+  debugDisableShadows = false;
   try {
     await withClock(Clock.fixed(at ?? kNight), () async {
       await tester.pumpWidget(
@@ -548,14 +579,16 @@ Future<void> shoot(
         ),
       );
       await tester.pump(const Duration(milliseconds: 50));
-      await tester.pump(const Duration(milliseconds: 500));
+      await settleShot(tester, kShotEntrance);
       if (act != null) await act(tester);
+      await settleShot(tester);
       await expectLater(find.byKey(const ValueKey('shot')), matchesGoldenFile('goldens/$name.png'));
     });
     // Drop the tree (and any repeating animation timers) before the test ends.
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump(const Duration(seconds: 3));
   } finally {
+    debugDisableShadows = shadowsWereDisabled;
     debugDefaultTargetPlatformOverride = null;
   }
 }

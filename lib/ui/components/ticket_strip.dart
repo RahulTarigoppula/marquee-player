@@ -1,5 +1,6 @@
-// The perforated ticket strip. Its text is the server's truth; the count decrements only
-// AFTER the tear animation completes.
+// The download allowance: a row of perforated stubs and one plain line ("7 of 10 subtitle
+// downloads left today"). Its text is the server's truth; the count decrements only AFTER the
+// tear animation completes. The stubs are the charm; the words are set as a sentence, not a code.
 import 'package:flutter/material.dart';
 
 import '../../engine/models/quota.dart';
@@ -62,41 +63,53 @@ class _TicketStripViewState extends State<TicketStripView> with SingleTickerProv
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Row(
-            mainAxisSize: MainAxisSize.min,
+          // The line drops under the stubs where the two do not fit side by side (a phone).
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: Tokens.space2,
+            runSpacing: Tokens.space1,
             children: [
-              for (var i = 0; i < stubs; i++)
-                AnimatedBuilder(
-                  animation: _tear,
-                  builder: (context, child) {
-                    final last = i == stubs - 1 && _tear.isAnimating;
-                    return Opacity(
-                      opacity: last ? 1 - _tear.value : 1,
-                      child: Transform.translate(
-                        offset: Offset(0, last ? -12 * _tear.value : 0),
-                        child: Transform.rotate(angle: last ? -0.1 * _tear.value : 0, child: child),
+              if (stubs > 0)
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (var i = 0; i < stubs; i++)
+                      AnimatedBuilder(
+                        animation: _tear,
+                        builder: (context, child) {
+                          final last = i == stubs - 1 && _tear.isAnimating;
+                          return Opacity(
+                            opacity: last ? 1 - _tear.value : 1,
+                            child: Transform.translate(
+                              offset: Offset(0, last ? -12 * _tear.value : 0),
+                              child: Transform.rotate(
+                                angle: last ? -0.1 * _tear.value : 0,
+                                child: child,
+                              ),
+                            ),
+                          );
+                        },
+                        child: Container(
+                          width: 8,
+                          height: 18,
+                          margin: const EdgeInsets.only(right: 3),
+                          decoration: BoxDecoration(
+                            color: low ? p.accent2 : p.surface2,
+                            borderRadius: BorderRadius.circular(1),
+                            border: Border.all(color: low ? p.accent2 : p.borderStrong),
+                          ),
+                        ),
                       ),
-                    );
-                  },
-                  child: Container(
-                    width: 8,
-                    height: 18,
-                    margin: const EdgeInsets.only(right: 3),
-                    decoration: BoxDecoration(
-                      color: low ? p.accent2 : p.surface2,
-                      borderRadius: BorderRadius.circular(1),
-                      border: Border.all(color: low ? p.accent2 : p.borderStrong),
-                    ),
-                  ),
+                  ],
                 ),
-              if (stubs > 0) const SizedBox(width: Tokens.space2),
-              Flexible(child: Text(_shown.text, style: Txt.mono(Tokens.textXs, textColor))),
+              Text(_shown.text, style: Txt.body(Tokens.textSm, textColor)),
             ],
           ),
+          // Advice, not an alarm: the count above carries the colour.
           if (_shown.sentence != null)
             Padding(
               padding: const EdgeInsets.only(top: Tokens.space1),
-              child: Text(_shown.sentence!, style: Txt.body(Tokens.textSm, textColor)),
+              child: Text(_shown.sentence!, style: Txt.body(Tokens.textSm, p.inkMuted)),
             ),
         ],
       ),

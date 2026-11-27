@@ -45,27 +45,87 @@ Duration clockTick(Duration position, Duration duration) {
 
 // ───────────────────────────── the folder's order ─────────────────────────────
 
-final _chunk = RegExp(r'\d+|\D+');
+/// A name cut up ONCE for the natural order: its lower-cased runs of digits and of everything
+/// else, with the digit runs already read as numbers. Cutting a name up costs far more than
+/// comparing two that are cut, and a sort compares each name a dozen times: a list of
+/// thousands is sorted by its keys, never by [naturalCompare] on the bare names.
+class NaturalKey implements Comparable<NaturalKey> {
+  /// The name as it was given (the last tie-break, and what a sorted list hands back).
+  final String name;
+  final List<String> _chunks;
+
+  /// The value of each chunk that is a number; null for text, and for a digit run too long
+  /// to be one (it then compares as text, as it always has).
+  final List<int?> _numbers;
+  const NaturalKey._(this.name, this._chunks, this._numbers);
+
+  @override
+  int compareTo(NaturalKey other) {
+    if (identical(this, other)) return 0;
+    final xs = _chunks, ys = other._chunks;
+    final shared = xs.length < ys.length ? xs.length : ys.length;
+    for (var i = 0; i < shared; i++) {
+      final x = xs[i], y = ys[i];
+      final nx = _numbers[i], ny = other._numbers[i];
+      final c = nx != null && ny != null
+          ? (nx != ny ? nx.compareTo(ny) : x.length.compareTo(y.length))
+          : x.compareTo(y);
+      if (c != 0) return c;
+    }
+    final c = xs.length.compareTo(ys.length);
+    return c != 0 ? c : name.compareTo(other.name);
+  }
+}
+
+/// [name] ready to be compared many times (see [NaturalKey]). The chunks are the matches of
+/// `\d+|\D+` on the lower-cased name, found by hand: this runs once for every video of a
+/// library, and a regular expression is several times slower at it.
+NaturalKey naturalKey(String name) {
+  final lower = name.toLowerCase();
+  final chunks = <String>[];
+  final numbers = <int?>[];
+  final end = lower.length;
+  var at = 0;
+  while (at < end) {
+    final digits = _isDigit(lower.codeUnitAt(at));
+    var to = at + 1;
+    while (to < end && _isDigit(lower.codeUnitAt(to)) == digits) {
+      to++;
+    }
+    final chunk = lower.substring(at, to);
+    chunks.add(chunk);
+    numbers.add(digits ? _number(chunk) : null);
+    at = to;
+  }
+  return NaturalKey._(name, chunks, numbers);
+}
+
+bool _isDigit(int unit) => unit >= 0x30 && unit <= 0x39;
+
+/// The value of a run of digits; null when it is too long to be a number.
+int? _number(String digits) {
+  // Nineteen digits can overflow: those (rare) runs are left to the platform's own reading.
+  if (digits.length > 18) return int.tryParse(digits);
+  var n = 0;
+  for (var i = 0; i < digits.length; i++) {
+    n = n * 10 + (digits.codeUnitAt(i) - 0x30);
+  }
+  return n;
+}
 
 /// "Episode 2" before "Episode 10": digit runs compare as numbers, the rest case-insensitively.
-int naturalCompare(String a, String b) {
-  final xs = _chunk.allMatches(a.toLowerCase()).map((m) => m[0]!).toList();
-  final ys = _chunk.allMatches(b.toLowerCase()).map((m) => m[0]!).toList();
-  for (var i = 0; i < xs.length && i < ys.length; i++) {
-    final x = xs[i], y = ys[i];
-    final nx = int.tryParse(x), ny = int.tryParse(y);
-    final c = nx != null && ny != null
-        ? (nx != ny ? nx.compareTo(ny) : x.length.compareTo(y.length))
-        : x.compareTo(y);
-    if (c != 0) return c;
-  }
-  final c = xs.length.compareTo(ys.length);
-  return c != 0 ? c : a.compareTo(b);
+/// For two names; anything that sorts a list makes each name's [naturalKey] once instead.
+int naturalCompare(String a, String b) => naturalKey(a).compareTo(naturalKey(b));
+
+/// [names] in natural order (a new list), each name cut up once.
+List<String> _naturalOrder(List<String> names) {
+  final keys = [for (final n in names) naturalKey(n)]..sort();
+  return [for (final k in keys) k.name];
 }
 
 /// The files either side of [current] in [names] (basenames), in natural order.
 ({String? previous, String? next}) neighboursOf(List<String> names, String current) {
-  final sorted = [...names]..sort(naturalCompare);
+  final sorted = _naturalOrder(names);
   final i = sorted.indexOf(current);
   if (i < 0) return (previous: null, next: null);
   return (
@@ -77,7 +137,7 @@ int naturalCompare(String a, String b) {
 /// [neighboursOf], plus the folder's first file for "Repeat the folder" (null when [current]
 /// is that file, or the only one: there is nothing to wrap to).
 ({String? previous, String? next, String? first}) folderOrder(List<String> names, String current) {
-  final sorted = [...names]..sort(naturalCompare);
+  final sorted = _naturalOrder(names);
   final i = sorted.indexOf(current);
   if (i < 0) return (previous: null, next: null, first: null);
   return (
@@ -172,7 +232,7 @@ const int kSubMarginY = 22;
 
 enum SleepTimer {
   off('Off'),
-  endOfFilm('End of this film'),
+  endOfFilm('End of this video'),
   min30('30 minutes'),
   min60('60 minutes');
 

@@ -45,10 +45,12 @@
             android:screenOrientation="fullUser"
             android:theme="@style/LaunchTheme"
             android:windowSoftInputMode="adjustResize"
-            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|density|uiMode|locale|layoutDirection|fontScale|navigation|keyboard">
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|density|uiMode|locale|layoutDirection|fontScale|navigation|keyboard|mcc|mnc|touchscreen|colorMode|fontWeightAdjustment|grammaticalGender">
             <!-- configChanges is load-bearing: without orientation|screenSize|smallestScreenSize|
                  screenLayout Android recreates the Activity on rotation (and on entering PiP),
-                 which restarts libmpv and loses the frame mid-film. -->
+                 which restarts libmpv and loses the frame mid-film. The tail of the list is the
+                 rare ones that would do the same: a SIM registering after flight mode (mcc|mnc),
+                 the "bold text" switch (fontWeightAdjustment), a display colour-mode change. -->
 
             <meta-data android:name="io.flutter.embedding.android.NormalTheme"
                        android:resource="@style/NormalTheme" />

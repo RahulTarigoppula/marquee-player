@@ -57,6 +57,14 @@ function Start-Marquee {
   return [pscustomobject]@{ Process = $p; Shown = $shown; Alive = (-not $p.HasExited) }
 }
 
+# Where the running app keeps its database: %APPDATA%\<company>\<product>\marquee.sqlite.
+function Find-Database {
+  $hit = Get-ChildItem -LiteralPath $env:APPDATA -Recurse -Depth 3 -Filter 'marquee.sqlite' -File -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+  if ($null -eq $hit) { return $null }
+  return $hit.FullName
+}
+
 function Wait-Gone([string]$Path, [int]$Seconds = 30) {
   for ($i = 0; $i -lt ($Seconds * 2) -and (Test-Path $Path); $i++) { Start-Sleep -Milliseconds 500 }
   return -not (Test-Path $Path)
@@ -93,6 +101,11 @@ try {
     $first = Start-Marquee
     Test-Step 'the installed app opened a window' $first.Shown
     Test-Step 'the installed app is still running after 10 s' $first.Alive
+    # The database belongs in the app's own data folder, never in Documents (often OneDrive).
+    $docDb = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'marquee.sqlite'
+    $db = Find-Database
+    Test-Step "the database was created under %APPDATA% ($db)" ($null -ne $db)
+    Test-Step 'no database in Documents' (-not (Test-Path -LiteralPath $docDb))
 
     # ── 3. upgrade in place, over the running app ──
     $code = Invoke-Setup 'upgrade'
@@ -104,9 +117,30 @@ try {
         Where-Object { $_.GetValue('DisplayName') -eq 'Marquee' })
     Test-Step "one Apps list entry after the upgrade (found $($entries.Count))" ($entries.Count -eq 1)
 
+    # ── 3b. a database left in Documents by an older version is moved, not lost ──
+    # Put the one just created back where 2.1 kept it: the next start has to carry it over.
+    $moved = $false
+    if ($null -ne $db -and (Test-Path -LiteralPath $db)) {
+      $size = (Get-Item -LiteralPath $db).Length
+      Move-Item -LiteralPath $db -Destination $docDb -Force
+      foreach ($side in '-wal', '-shm', '-journal') {
+        Remove-Item -LiteralPath "$db$side" -Force -ErrorAction SilentlyContinue
+      }
+      $moved = $true
+    }
+
     # ── 4. uninstall, again with the app running ──
     $second = Start-Marquee
     Test-Step 'the upgraded app is running' $second.Alive
+    if ($moved) {
+      $after = Find-Database
+      Test-Step "the old database was carried over to %APPDATA% ($after)" ($null -ne $after)
+      Test-Step 'and it is no longer in Documents' (-not (Test-Path -LiteralPath $docDb))
+      if ($null -ne $after) {
+        $now = (Get-Item -LiteralPath $after).Length
+        Test-Step "nothing was cut off on the way ($size bytes before, $now after)" ($now -ge $size)
+      }
+    }
     $unins = Get-ChildItem $app -Filter 'unins*.exe' | Select-Object -First 1
     $ulog = Join-Path $LogDir 'uninstall.log'
     Start-Process -FilePath $unins.FullName -Wait -ArgumentList @(

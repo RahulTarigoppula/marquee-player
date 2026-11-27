@@ -20,6 +20,7 @@ import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
 import android.provider.OpenableColumns
+import android.provider.Settings
 import android.util.Size
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
@@ -51,6 +52,8 @@ import java.util.concurrent.Executors
  *
  *   videoPermission                     -> "granted" | "partial" | "denied"  (never asks)
  *   requestVideoPermission              -> the same, after the system dialog (one at a time)
+ *   openAppSettings                     -> opens Marquee's page in the system settings, where a
+ *                                          refused permission is turned back on
  *   scanVideos                          -> List of {uri, name, size, durationMs, width, height,
  *                                          modified (epoch ms), folder, folderPath}
  *   videoThumbnail {uri, width: Int}    -> JPEG ByteArray, or null when there is none
@@ -200,6 +203,7 @@ class ContentChannel(
             "pickVideo" -> pickVideo(result)
             "videoPermission" -> result.success(videoPermissionState())
             "requestVideoPermission" -> requestVideoPermission(result)
+            "openAppSettings" -> openAppSettings(result)
             "scanVideos" -> background(result) { scanVideos() }
             "videoThumbnail" -> {
                 val uri = call.argument<String>("uri")
@@ -386,6 +390,28 @@ class ContentChannel(
         return true
     }
 
+    /**
+     * Marquee's own page in the system settings. Once the permission dialog has been refused
+     * Android stops showing it, and this page is the only place left to say yes.
+     */
+    private fun openAppSettings(result: MethodChannel.Result) {
+        val intent = Intent(
+            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            Uri.fromParts("package", context.packageName, null),
+        ).apply {
+            // Started from the application context, which has no task of its own to open in.
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        try {
+            context.startActivity(intent)
+            result.success(null)
+        } catch (e: ActivityNotFoundException) {
+            result.error("no-settings", "this device has no app settings page", null)
+        } catch (e: RuntimeException) {
+            result.error("io", e.message, null)
+        }
+    }
+
     private fun text(c: Cursor, column: Int): String? =
         if (column >= 0 && !c.isNull(column)) c.getString(column) else null
 
@@ -459,7 +485,17 @@ class ContentChannel(
         return out
     }
 
-    /** The system's own thumbnail as JPEG bytes; null when it has none for this video. */
+    /**
+     * The system's own thumbnail as JPEG bytes; null when it has none for this video.
+     *
+     * Null is a verdict about the FILE, and Dart remembers it (the video is not asked about
+     * again for two weeks), so it is given only when the system says there is nothing to load:
+     * FileNotFoundException. Everything else is the moment's trouble, not the file's: any
+     * other IOException ("failed to create thumbnail" when memory is short), a
+     * SecurityException while access is being re-selected, any other RuntimeException. Those
+     * are thrown on to [background], which reports them as errors; Dart reads an error as
+     * "not now" and asks again the next time the card is on screen.
+     */
     private fun videoThumbnail(uri: Uri, width: Int): ByteArray? {
         val bitmap: Bitmap? = try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -467,10 +503,8 @@ class ContentChannel(
             } else {
                 legacyThumbnail(uri)
             }
-        } catch (e: IOException) {
-            null // no thumbnail for this file
-        } catch (e: RuntimeException) {
-            null // access revoked, or not a MediaStore id: the card keeps its title card
+        } catch (e: FileNotFoundException) {
+            null // no such video any more, or no thumbnail for it
         }
         if (bitmap == null) return null
         val out = ByteArrayOutputStream()

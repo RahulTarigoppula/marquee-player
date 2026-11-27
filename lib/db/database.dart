@@ -8,6 +8,10 @@ import 'tables.dart';
 
 part 'database.g.dart';
 
+/// How many films the Home rail asks for, newest first. The Library does not stop there: see
+/// [MarqueeDatabase.playedMarks].
+const int kLobbyRailLimit = 200;
+
 const Duration kSearchCacheTtl = Duration(hours: 24);
 const Duration kArtworkTtl = Duration(days: 180); // TMDB terms: never cache longer than 6 months
 
@@ -120,7 +124,7 @@ class MarqueeDatabase extends _$MarqueeDatabase {
   /// Reactive Lobby rail: media ⋈ resume ⋈ offsets, with the cached subtitle language as a
   /// correlated subquery (the hash_cache primary key answers it). ONE query per change, and a
   /// subtitle download refreshes the card too: hash_cache is one of the watched tables.
-  Stream<List<LobbyCard>> watchLobby({int limit = 200}) {
+  Stream<List<LobbyCard>> watchLobby({int limit = kLobbyRailLimit}) {
     final language = subqueryExpression<String>(
       selectOnly(hashCache)
         ..addColumns([hashCache.language])
@@ -144,7 +148,6 @@ class MarqueeDatabase extends _$MarqueeDatabase {
     final m = row.readTable(mediaFiles);
     final rp = row.readTableOrNull(resumePoints);
     final so = row.readTableOrNull(syncOffsets);
-    final dur = rp?.durationMs ?? m.durationMs ?? 0;
     return LobbyCard(
       id: m.id,
       locator: m.locator,
@@ -154,13 +157,68 @@ class MarqueeDatabase extends _$MarqueeDatabase {
       container: m.container,
       durationMs: m.durationMs,
       hash: m.moviehash == null ? null : MovieHash(m.moviehash!),
-      resumeFraction: rp == null || dur == 0 ? 0 : (rp.positionMs / dur).clamp(0.0, 1.0),
+      resumeFraction: _resumeFraction(rp?.positionMs, rp?.durationMs, m.durationMs),
       resumePositionMs: rp?.positionMs,
       finished: rp != null && isFinished(rp.positionMs, rp.durationMs),
       delayMs: so?.delayMs,
       subtitleLanguage: language,
       lastPlayedAt: m.lastPlayedAt,
     );
+  }
+
+  /// How far in a film is, 0 to 1, from its resume row ([positionMs] is null without one). The
+  /// length saved with the position counts before the one the file was probed with.
+  static double _resumeFraction(int? positionMs, int? resumeDurationMs, int? mediaDurationMs) {
+    final dur = resumeDurationMs ?? mediaDurationMs ?? 0;
+    return positionMs == null || dur == 0 ? 0 : (positionMs / dur).clamp(0.0, 1.0);
+  }
+
+  /// What the Library needs to mark a video as part-watched or watched, for EVERY file ever
+  /// played: the Home rail stops at [kLobbyRailLimit], and a library video played longer ago
+  /// than that used to lose its progress line and its tick. Narrow on purpose (seven columns,
+  /// one join, no subtitle look-up, no order): this can be thousands of rows. The cards carry
+  /// no title, sync offset, subtitle language or play date.
+  Future<List<LobbyCard>> playedMarks() async {
+    final q =
+        selectOnly(mediaFiles).join([
+          leftOuterJoin(
+            resumePoints,
+            resumePoints.moviehash.equalsExp(mediaFiles.moviehash),
+            useColumns: false,
+          ),
+        ])..addColumns([
+          mediaFiles.id,
+          mediaFiles.locator,
+          mediaFiles.displayName,
+          mediaFiles.moviehash,
+          mediaFiles.durationMs,
+          resumePoints.positionMs,
+          resumePoints.durationMs,
+        ]);
+    final marks = <LobbyCard>[];
+    for (final row in await q.get()) {
+      final hash = row.read(mediaFiles.moviehash);
+      final durationMs = row.read(mediaFiles.durationMs);
+      // Both null when the film has no resume row (the join found nothing).
+      final positionMs = row.read(resumePoints.positionMs);
+      final resumeDurationMs = row.read(resumePoints.durationMs);
+      marks.add(
+        LobbyCard(
+          id: row.read(mediaFiles.id)!,
+          locator: row.read(mediaFiles.locator)!,
+          displayName: row.read(mediaFiles.displayName)!,
+          durationMs: durationMs,
+          hash: hash == null ? null : MovieHash(hash),
+          resumeFraction: _resumeFraction(positionMs, resumeDurationMs, durationMs),
+          resumePositionMs: positionMs,
+          finished:
+              positionMs != null &&
+              resumeDurationMs != null &&
+              isFinished(positionMs, resumeDurationMs),
+        ),
+      );
+    }
+    return marks;
   }
 
   Future<MediaRow?> latestPlayed() =>
@@ -337,13 +395,20 @@ class MarqueeDatabase extends _$MarqueeDatabase {
   // ───────────────────────────── app state ─────────────────────────────
 
   Future<Object?> readState(String key) async {
-    final r = await (select(appState)..where((t) => t.key.equals(key))).getSingleOrNull();
-    return r == null ? null : jsonDecode(r.valueJson);
+    final text = await readStateText(key);
+    return text == null ? null : jsonDecode(text);
   }
 
-  Future<void> writeState(String key, Object? value) => into(
-    appState,
-  ).insertOnConflictUpdate(AppStateCompanion.insert(key: key, valueJson: jsonEncode(value)));
+  Future<void> writeState(String key, Object? value) => writeStateText(key, jsonEncode(value));
+
+  /// A value as its stored JSON text, undecoded: for the one value large enough (the library
+  /// cache, thousands of rows) that the caller decodes it off the UI isolate.
+  Future<String?> readStateText(String key) async =>
+      (await (select(appState)..where((t) => t.key.equals(key))).getSingleOrNull())?.valueJson;
+
+  /// Stores [json], which must already be JSON text (see [readStateText]).
+  Future<void> writeStateText(String key, String json) =>
+      into(appState).insertOnConflictUpdate(AppStateCompanion.insert(key: key, valueJson: json));
 
   Future<Settings> readSettings() async {
     final v = await readState('settings');
@@ -406,14 +471,37 @@ class MarqueeDatabase extends _$MarqueeDatabase {
             'syncedByHash': h.syncedByHash,
           },
       ],
+      // What the viewer chose per film (audio track, second subtitle, picture), and the
+      // folders the library scans. Added without a new format id: a reader only looks up the
+      // keys it knows, so an older build skips these two.
+      'filePrefs': [
+        for (final f in await select(filePrefs).get())
+          if (_prefsOf(f.prefsJson) case final prefs?)
+            {'hash': f.moviehash, 'prefs': prefs, 'at': iso(f.at)},
+      ],
+      'folders': await libraryFolders(),
       'settings': (await readSettings()).toJson(),
       'windowBounds': await readState('window_bounds'),
       'seenGateNudge': await readState('seen_gate_nudge'),
     };
   }
 
+  /// A film's stored preferences as a JSON object; null when the text is not one.
+  static Map<String, Object?>? _prefsOf(String json) {
+    try {
+      final v = jsonDecode(json);
+      return v is Map<String, Object?> && v.isNotEmpty ? v : null;
+    } on FormatException {
+      return null;
+    }
+  }
+
   /// Merge, never replace. A newer `at` wins; unknown fields are ignored; secrets never travel.
-  Future<void> importLibrary(Map<String, Object?> j) async {
+  ///
+  /// [importFolders] adds the export's library folders to this device's (never removes one).
+  /// They are Windows paths: the caller passes true only where folders are what the library
+  /// is made of (Windows), and an Android import leaves them out.
+  Future<void> importLibrary(Map<String, Object?> j, {bool importFolders = false}) async {
     if (j['format'] != exportFormat) {
       throw const FormatException("That file isn't a Marquee library export.");
     }
@@ -484,6 +572,30 @@ class MarqueeDatabase extends _$MarqueeDatabase {
             fetchedAt: clock.now(),
           ),
         );
+      }
+      for (final f in rows('filePrefs')) {
+        final hash = f['hash'];
+        final prefs = f['prefs'];
+        final at = dt(f['at']);
+        if (hash is! String || prefs is! Map<String, Object?> || prefs.isEmpty || at == null) {
+          continue;
+        }
+        final cur = await (select(
+          filePrefs,
+        )..where((t) => t.moviehash.equals(hash))).getSingleOrNull();
+        if (cur != null && !cur.at.isBefore(at)) continue;
+        await into(filePrefs).insertOnConflictUpdate(
+          FilePrefsCompanion.insert(moviehash: hash, prefsJson: jsonEncode(prefs), at: at),
+        );
+      }
+      final exported = j['folders'];
+      if (importFolders && exported is List) {
+        // The same folder in another letter case is the same folder on Windows.
+        final have = {for (final f in await libraryFolders()) f.toLowerCase()};
+        for (final folder in exported.whereType<String>()) {
+          if (folder.trim().isEmpty || !have.add(folder.toLowerCase())) continue;
+          await addFolder(folder);
+        }
       }
       final settings = j['settings'];
       if (settings is Map<String, Object?>) {

@@ -1,12 +1,15 @@
-// What a video in the device library can do: play, play from the start, show its details, show
-// in its folder (Windows), share (Android), leave the play history. Kept apart from the layout,
-// like lobby_actions.dart.
+// What a video can do from its menu. In the Library: play, play from the start, show its
+// details, show in its folder (Windows), share (Android), forget where it stopped. On a Home
+// card: the same play, start over and details, and remove the card. Both menus are drawn by
+// [showHouseMenu], so they look and read alike. Kept apart from the layout, like
+// lobby_actions.dart.
 import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../engine/models/media.dart';
+import '../../engine/sentences.dart';
 import '../../platform/files.dart';
 import '../../platform/library_scan.dart';
 import '../../state/library.dart';
@@ -24,7 +27,8 @@ class MenuChoice<T> {
   final String icon;
   final String text;
 
-  /// Drawn in the danger ink (Remove).
+  /// Drawn in the danger ink: only for taking a card off Home. Nothing in the Library is red,
+  /// where red would read as "delete the video".
   final bool danger;
 
   /// The current choice of a pick-one menu: its icon becomes a tick.
@@ -120,6 +124,13 @@ Future<void> openLibraryItem(WidgetRef ref, LibraryItem item, {bool fromStart = 
   await session.open(file);
 }
 
+/// The first line of either menu: what a tap on the card itself would do.
+String _playLine(LobbyCard? card) {
+  final resume = card == null ? null : resumeMs(card);
+  if (resume != null) return 'Resume from ${clockText(resume)}';
+  return card?.finished ?? false ? 'Play again' : 'Play';
+}
+
 enum ItemAction { play, restart, details, reveal, share, forget }
 
 /// The video menu (right click, long press, or the more button).
@@ -134,22 +145,23 @@ Future<void> showItemMenu(
   final notice = ref.read(noticeProvider.notifier);
   final pending = ref.read(pendingRemovalsProvider.notifier);
   final resume = card == null ? null : resumeMs(card);
+  // The last line takes the video out of the play history: it stays in the Library, so the
+  // line says what the viewer loses (their place, or the watched tick), in ordinary ink.
+  final watched = card != null && card.finished;
   final choice = await showHouseMenu<ItemAction>(context, globalPosition, [
-    MenuChoice(
-      ItemAction.play,
-      'play',
-      resume != null
-          ? 'Resume from ${clockText(resume)}'
-          : (card?.finished ?? false ? 'Play again' : 'Play'),
-    ),
-    if (resume != null) const MenuChoice(ItemAction.restart, 'rotate-ccw', 'Play from the start'),
+    MenuChoice(ItemAction.play, 'play', _playLine(card)),
+    if (resume != null) const MenuChoice(ItemAction.restart, 'skip-back', 'Play from the start'),
     const MenuChoice(ItemAction.details, 'info', 'Details'),
     if (source == LibrarySource.folders)
       const MenuChoice(ItemAction.reveal, 'folder-open', 'Show in folder')
     else
       const MenuChoice(ItemAction.share, 'share-2', 'Share'),
     if (card != null)
-      const MenuChoice(ItemAction.forget, 'trash-2', 'Remove from history', danger: true),
+      MenuChoice(
+        ItemAction.forget,
+        'rotate-ccw',
+        watched ? 'Mark as not watched' : 'Forget where I stopped',
+      ),
   ]);
   if (choice == null || !context.mounted) return;
   switch (choice) {
@@ -169,8 +181,92 @@ Future<void> showItemMenu(
     case ItemAction.share:
       if (!await shareVideo(item.locator, item.name)) notice.show("That video couldn't be shared.");
     case ItemAction.forget:
-      if (card != null) pending.remove(card);
+      if (card != null) {
+        final title = libraryTitle(item.name);
+        pending.remove(
+          card,
+          said: watched
+              ? '$title is marked as not watched.'
+              : 'Forgot where you stopped in $title.',
+        );
+      }
   }
+}
+
+enum CardAction { play, restart, details, remove }
+
+/// The Home card menu (right click, long press, or the ⋮ button): what the Library's menu
+/// offers for the same video, then Remove — last, the only red line, and one that can be undone.
+Future<void> showCardMenu(
+  BuildContext context,
+  WidgetRef ref,
+  LobbyCard card,
+  Offset globalPosition,
+) async {
+  final pending = ref.read(pendingRemovalsProvider.notifier);
+  final item = _itemFor(ref, card);
+  final choice = await showHouseMenu<CardAction>(context, globalPosition, [
+    MenuChoice(CardAction.play, 'play', _playLine(card)),
+    if (resumeMs(card) != null)
+      const MenuChoice(CardAction.restart, 'skip-back', 'Play from the start'),
+    const MenuChoice(CardAction.details, 'info', 'Details'),
+    const MenuChoice(CardAction.remove, 'trash-2', 'Remove from history', danger: true),
+  ]);
+  if (choice == null || !context.mounted) return;
+  switch (choice) {
+    case CardAction.play:
+      await openCard(ref, card);
+    case CardAction.restart:
+      await openCard(ref, card, fromStart: true);
+    case CardAction.details:
+      final house = House.of(context);
+      await showDialog<void>(
+        context: context,
+        barrierColor: const Color(0xB3000000),
+        builder: (_) => house.carry(LibraryDetailsDialog(item: item, card: card)),
+      );
+    case CardAction.remove:
+      pending.remove(card);
+  }
+}
+
+/// A Home card as a library video, for Details: the Library's own entry when the file is in
+/// the Library, else what the play history knows (a file opened from elsewhere, or a link).
+LibraryItem _itemFor(WidgetRef ref, LobbyCard card) {
+  final key = historyKey(card.locator);
+  for (final i in ref.read(deviceLibraryProvider).value?.items ?? const <LibraryItem>[]) {
+    if (historyKey(i.locator) == key) return i;
+  }
+  final unknown = DateTime.fromMillisecondsSinceEpoch(0);
+  if (card.locator.contains('://')) {
+    return LibraryItem(
+      locator: card.locator,
+      name: card.displayName,
+      folderPath: '',
+      folderName: '',
+      sizeBytes: 0,
+      durationMs: card.durationMs,
+      modifiedAt: unknown,
+    );
+  }
+  return LibraryItem.fromPath(
+    card.locator,
+    sizeBytes: 0,
+    modifiedAt: unknown,
+    durationMs: card.durationMs,
+  );
+}
+
+/// `English, shown 0.15 s later`: the subtitles a film was last watched with, and the timing
+/// fix remembered for it.
+String? _subtitlesLine(LobbyCard card) {
+  final delay = card.delayMs ?? 0;
+  final shift = delay == 0
+      ? null
+      : '${(delay.abs() / 1000).toStringAsFixed(2)} s ${delay > 0 ? 'later' : 'earlier'}';
+  final code = card.subtitleLanguage;
+  if (code == null) return shift == null ? null : 'Shown $shift';
+  return shift == null ? languageName(code) : '${languageName(code)}, shown $shift';
 }
 
 String _date(DateTime d) {
@@ -205,12 +301,18 @@ class LibraryDetailsDialog extends StatelessWidget {
     final p = House.paletteOf(context);
     final duration = item.durationMs ?? card?.durationMs;
     final onDevice = item.locator.startsWith('content://');
-    final where = onDevice
-        ? [if (item.folderPath.isNotEmpty) item.folderPath, item.name].join('/')
-        : item.locator;
+    final online = remoteSchemes.any((s) => item.locator.toLowerCase().startsWith('$s://'));
+    final format = card == null ? null : containerText(card!);
+    final subtitles = card == null ? null : _subtitlesLine(card!);
     final rows = <(String, String)>[
       ('Name', item.name),
-      (onDevice ? 'Folder' : 'Path', where),
+      if (online)
+        ('Link', item.locator)
+      else if (!onDevice)
+        ('Path', item.locator)
+      // A video opened through Android's picker has no folder to name.
+      else if (item.folderPath.isNotEmpty)
+        ('Folder', '${item.folderPath}/${item.name}'),
       if (item.sizeBytes > 0) ('Size', sizeText(item.sizeBytes)),
       if (duration != null && duration > 0) ('Length', clockText(duration)),
       if (item.width != null && item.height != null && item.width! > 0)
@@ -221,6 +323,8 @@ class LibraryDetailsDialog extends StatelessWidget {
             ?resolutionBadge(item.width, item.height),
           ].join('  ·  '),
         ),
+      if (format != null) ('Format', format),
+      if (subtitles != null) ('Subtitles', subtitles),
       if (item.modifiedAt.millisecondsSinceEpoch > 0) ('Changed', _date(item.modifiedAt)),
       if (card != null && card!.finished)
         ('Watched', 'Yes')

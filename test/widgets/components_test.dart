@@ -25,7 +25,7 @@ void main() {
     final handle = tester.ensureSemantics();
     final strip = ticketStrip(const Quota(remaining: 7, total: 10, signedIn: true));
     await tester.pumpWidget(room(TicketStripView(strip: strip, count: 7)));
-    expect(find.bySemanticsLabel('7 of 10 downloads left tonight'), findsOneWidget);
+    expect(find.bySemanticsLabel('7 of 10 subtitle downloads left today'), findsOneWidget);
     handle.dispose();
   });
 
@@ -104,7 +104,7 @@ void main() {
     var opened = 0;
     await tester.pumpWidget(room(OpenDisc(onTap: () => opened++)));
     expect(
-      tester.getSemantics(find.bySemanticsLabel('Open a film')),
+      tester.getSemantics(find.bySemanticsLabel('Open a video')),
       isSemantics(isButton: true, isFocusable: true, hasTapAction: true),
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.tab);
@@ -159,15 +159,81 @@ void main() {
     expect(find.text('Sign in'), findsOneWidget);
   });
 
-  testWidgets('a tag draws its tick as an icon, not a font glyph', (tester) async {
-    final handle = tester.ensureSemantics();
+  testWidgets('a stretched segmented choice puts each label in the middle of its share', (
+    tester,
+  ) async {
+    const key = ValueKey('choice');
     await tester.pumpWidget(
-      room(const Tag('EN', icon: 'check', semanticLabel: 'English subtitles')),
+      room(
+        SizedBox(
+          width: 400,
+          child: SegmentedChoice<String>(
+            key: key,
+            expand: true,
+            value: 'a',
+            segments: const [Segment('a', 'One'), Segment('b', 'Two')],
+            onChanged: (_) {},
+          ),
+        ),
+      ),
     );
-    expect(find.text('EN ✓'), findsNothing);
+    // 400 px less the slot's 3 px padding and 1 px border on each side: two shares of 196.
+    final left = tester.getTopLeft(find.byKey(key)).dx;
+    expect(tester.getSize(find.byKey(key)).width, 400);
+    expect(tester.getCenter(find.text('One')).dx - left, closeTo(4 + 98, 1));
+    expect(tester.getCenter(find.text('Two')).dx - left, closeTo(4 + 196 + 98, 1));
+  });
+
+  testWidgets('a tall segmented choice gives a thumb 48 px options', (tester) async {
+    const key = ValueKey('choice');
+    var value = 'home';
+    await tester.pumpWidget(
+      room(
+        SizedBox(
+          width: 360,
+          child: StatefulBuilder(
+            builder: (context, setState) => SegmentedChoice<String>(
+              key: key,
+              expand: true,
+              tall: true,
+              value: value,
+              segments: const [Segment('home', 'Home'), Segment('library', 'Library')],
+              onChanged: (v) => setState(() => value = v),
+            ),
+          ),
+        ),
+      ),
+    );
+    // 48 px options inside the slot's padding and border.
+    expect(tester.getSize(find.byKey(key)).height, 48 + 8);
+    // The whole share takes the tap, not only the word: tap near the right end of the control.
+    await tester.tapAt(tester.getTopRight(find.byKey(key)) + const Offset(-12, 28));
+    await tester.pump();
+    expect(value, 'library');
+  });
+
+  testWidgets('a tag is words with its tick as an icon, not a font glyph', (tester) async {
+    await tester.pumpWidget(room(const Tag('English subtitles', icon: 'check')));
+    expect(find.text('English subtitles'), findsOneWidget);
+    expect(find.text('English subtitles ✓'), findsNothing);
     expect(find.byType(LucideIcon), findsOneWidget);
-    expect(find.bySemanticsLabel('English subtitles'), findsOneWidget);
-    handle.dispose();
+  });
+
+  testWidgets('a tag shortens its words rather than spill out of a narrow card', (tester) async {
+    await tester.pumpWidget(
+      room(
+        const SizedBox(
+          width: 90,
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Tag('Portuguese subtitles', icon: 'check'),
+          ),
+        ),
+      ),
+    );
+    // No overflow error, and the tag is no wider than its card.
+    expect(tester.takeException(), isNull);
+    expect(tester.getSize(find.byType(Tag)).width, lessThanOrEqualTo(90));
   });
 
   testWidgets('speaks the sync rule value in words', (tester) async {

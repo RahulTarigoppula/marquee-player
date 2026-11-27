@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Marquee on a running Android: the lock-screen controls and background sound, for real.
 
-    python3 scripts/android-smoke.py <marquee.apk> <film.mp4> [evidence-dir]
+    python3 scripts/android-smoke.py <marquee.apk> <film.mp4> <short-film.mp4> [evidence-dir]
 
 Needs one device or emulator on adb (Android 13+). It installs the APK, opens the film through
 "Open with" and then only does what a person could do from outside the app: media keys, the
@@ -13,7 +13,9 @@ app's own word:
   2. pause and play from a media key
   3. the screen goes off -> the film pauses (background play is off by default)
   4. play from the dark screen -> the sound really runs: the position moves on
-  5. back in the app nothing has crashed, and closing the film removes the controls
+  5. "next" from the dark screen opens the second film, and when that short film ends the
+     third starts by itself: both films are opened while nothing is on screen
+  6. back in the app nothing has crashed, and closing the film removes the controls
 
 Exit 0 when every step held; 1 with the step that did not. Evidence (logcat, dumps, a
 screenshot) is written either way.
@@ -26,7 +28,10 @@ import time
 
 PKG = "com.rahul.marquee"
 ACTIVITY = f"{PKG}/.MainActivity"
-FILM_ON_DEVICE = "/sdcard/Movies/marquee-smoke.mp4"
+# One folder, three films in name order: long, short (it must END during the test), long.
+FOLDER_ON_DEVICE = "/sdcard/Movies"
+FILMS = ("marquee-smoke-1.mp4", "marquee-smoke-2.mp4", "marquee-smoke-3.mp4")
+ACTION_SKIP_TO_NEXT = 32
 
 PAUSED, PLAYING, BUFFERING = 2, 3, 6
 KEY_BACK, KEY_MEDIA_PLAY, KEY_MEDIA_PAUSE, KEY_SLEEP, KEY_WAKEUP = 4, 126, 127, 223, 224
@@ -65,17 +70,27 @@ def step(text):
 
 
 def session():
-    """Marquee's media session as Android reports it: (state, position ms), or None."""
+    """Marquee's media session as Android reports it: (state, position ms, title, actions),
+    or None."""
     dump = shell("dumpsys media_session", check=False)
     at = dump.find(f"package={PKG}")
     if at < 0:
         return None
+    ours = dump[at : at + 1800]
     # API 33 prints `state=3`, API 34+ `state=PLAYING(3)`.
     found = re.search(
-        r"state=PlaybackState \{state=(?:[A-Z_]+\()?(\d+)\)?, position=(-?\d+)",
-        dump[at : at + 1500],
+        r"state=PlaybackState \{state=(?:[A-Z_]+\()?(\d+)\)?, position=(-?\d+)", ours
     )
-    return (int(found.group(1)), int(found.group(2))) if found else None
+    if not found:
+        return None
+    title = re.search(r"metadata: size=\d+, description=([^,\n]*)", ours)
+    actions = re.search(r"actions=(\d+)", ours)
+    return (
+        int(found.group(1)),
+        int(found.group(2)),
+        title.group(1).strip() if title else "",
+        int(actions.group(1)) if actions else 0,
+    )
 
 
 def service_is_foreground():
@@ -105,13 +120,28 @@ def in_state(*states):
     return check
 
 
+def playing_film(number):
+    """Film [number] of the folder is the one playing."""
+
+    def check():
+        now = session()
+        if now is None or now[0] != PLAYING:
+            return None
+        return now if re.search(rf"smoke\W?{number}", now[2]) else None
+
+    return check
+
+
 def film_id():
+    """The first film's id in the video library, once all three are in it."""
     rows = shell(
         "content query --uri content://media/external/video/media "
         "--projection _id:_display_name",
         check=False,
     )
-    found = re.search(r"_id=(\d+), _display_name=marquee-smoke\.mp4", rows)
+    if not all(name in rows for name in FILMS):
+        return None
+    found = re.search(rf"_id=(\d+), _display_name={re.escape(FILMS[0])}", rows)
     return found.group(1) if found else None
 
 
@@ -141,18 +171,19 @@ def screenshot(out, name):
         print(f"   (no screenshot: {e})")
 
 
-def run(apk, film, out):
-    step("install, and put a film on the device")
+def run(apk, film, short_film, out):
+    step("install, and put three films in one folder on the device")
     adb("install", "-r", apk, timeout=300)
     shell(f"pm grant {PKG} android.permission.READ_MEDIA_VIDEO", check=False)
-    shell("mkdir -p /sdcard/Movies", check=False)
-    adb("push", film, FILM_ON_DEVICE, timeout=300)
-    shell(
-        "am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE "
-        f"-d file://{FILM_ON_DEVICE}",
-        check=False,
-    )
-    media = wait_for("the film is in the device's video library", film_id, 60)
+    shell(f"mkdir -p {FOLDER_ON_DEVICE}", check=False)
+    for name, source in zip(FILMS, (film, short_film, film)):
+        adb("push", source, f"{FOLDER_ON_DEVICE}/{name}", timeout=300)
+        shell(
+            "am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE "
+            f"-d file://{FOLDER_ON_DEVICE}/{name}",
+            check=False,
+        )
+    media = wait_for("the films are in the device's video library", film_id, 60)
 
     step("a cold start to the Lobby")
     key(KEY_WAKEUP)
@@ -160,7 +191,7 @@ def run(apk, film, out):
     adb("logcat", "-c", check=False)
     launch = shell(f"am start -W -n {ACTIVITY}")
     total = re.search(r"TotalTime: (\d+)", launch)
-    time.sleep(5)
+    time.sleep(8)  # the first scan of the device's videos runs now: the films become a folder
     if not shell(f"pidof {PKG}", check=False).strip():
         raise Failed("the app did not stay up after a plain launch")
     screenshot(out, "lobby.png")
@@ -224,6 +255,28 @@ def run(apk, film, out):
         )
     print(f"   ok: it played unseen from {dark[1]} ms to {after[1]} ms")
 
+    step("next from the dark screen, then the film after it by itself")
+    media_button("play")
+    wait_for("playing the first film again", playing_film(1), 30)
+    wait_for(
+        "the first film knows the folder's next film",
+        lambda: (session() or (0, 0, "", 0))[3] & ACTION_SKIP_TO_NEXT,
+        30,
+    )
+    media_button("next")
+    wait_for("the second film plays: opened with nothing on screen", playing_film(2), 60)
+    wait_for(
+        "the third film started by itself when the second ended, still unseen",
+        playing_film(3),
+        120,
+    )
+    time.sleep(5)
+    media_button("pause")
+    third = wait_for("paused the third film", in_state(PAUSED), 20)
+    if third[1] < 3000:
+        raise Failed(f"the third film did not move: {third[1]} ms")
+    print(f"   ok: the third film had played {third[1]} ms")
+
     step("back in the app: nothing crashed, and closing the film removes the controls")
     key(KEY_WAKEUP)
     shell("wm dismiss-keyguard", check=False)
@@ -249,14 +302,14 @@ def run(apk, film, out):
 
 
 def main():
-    if len(sys.argv) < 3:
+    if len(sys.argv) < 4:
         print(__doc__)
         return 2
-    apk, film = sys.argv[1], sys.argv[2]
-    out = sys.argv[3] if len(sys.argv) > 3 else "build/android-smoke"
+    apk, film, short_film = sys.argv[1], sys.argv[2], sys.argv[3]
+    out = sys.argv[4] if len(sys.argv) > 4 else "build/android-smoke"
     os.makedirs(out, exist_ok=True)
     try:
-        run(apk, film, out)
+        run(apk, film, short_film, out)
     except (Failed, RuntimeError, subprocess.TimeoutExpired) as e:
         screenshot(out, "failed.png")
         collect(out)

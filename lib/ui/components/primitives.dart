@@ -531,7 +531,7 @@ class OpenDisc extends StatelessWidget {
     final h = House.of(context);
     final p = h.palette;
     return Pressable(
-      label: 'Open a film',
+      label: 'Open a video',
       onTap: onTap,
       radius: size / 2,
       builder: (context, s) => AnimatedScale(

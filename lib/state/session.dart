@@ -6,6 +6,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Directory, File, Platform;
 
+import 'package:clock/clock.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 
@@ -14,6 +15,7 @@ import '../engine/hash.dart';
 import '../engine/models/models.dart';
 import '../engine/picture.dart';
 import '../engine/playback.dart';
+import '../engine/sentences.dart';
 import '../engine/threading.dart';
 import '../platform/audio_focus.dart';
 import '../platform/files.dart';
@@ -42,6 +44,9 @@ const Duration kVolumeSaveAfter = Duration(milliseconds: 800);
 /// change: dragging a picture slider is one write.
 const Duration kPrefsSaveAfter = Duration(milliseconds: 600);
 
+/// A film that ends with another to follow waits this long, so the viewer can say no.
+const Duration kUpNextCountdown = Duration(seconds: 6);
+
 /// The Lobby frame is grabbed this far in (or at 10 % of a shorter film), and again on close.
 const Duration kThumbnailAt = Duration(minutes: 2, seconds: 30);
 
@@ -54,6 +59,11 @@ class SessionNotifier extends Notifier<FilmSession?> {
   Timer? _volumeSave;
   Timer? _prefsSave;
   Timer? _stuckCheck;
+
+  /// The "Up next" countdown. It lives here, not in the card that shows it: the card does not
+  /// exist in a PiP window, with the screen off or with the window minimised, and the next
+  /// episode has to start there too.
+  Timer? _upNext;
   StreamSubscription<bool>? _completedSub;
   StreamSubscription<String>? _errorSub;
   StreamSubscription<bool>? _playingSub;
@@ -132,6 +142,10 @@ class SessionNotifier extends Notifier<FilmSession?> {
     ref.listen(settingsValueProvider.select((s) => (s.repeat, s.autoplayNext)), (_, _) {
       final engine = state?.engine;
       if (engine != null) unawaited(_applyLoop(engine));
+      // "Stop" chosen while the card counts: nothing follows this film any more.
+      if (state?.upNextAt != null && state?.upNextFor(ref.read(settingsValueProvider)) == null) {
+        cancelUpNext();
+      }
     });
     // The Ticket Office is a room of its own: the film waits for you there.
     ref.listen(roomProvider, (prev, room) {
@@ -185,6 +199,8 @@ class SessionNotifier extends Notifier<FilmSession?> {
     _thumbTimer?.cancel();
     _sleepTimer?.cancel();
     _stuckCheck?.cancel();
+    _upNext?.cancel();
+    _upNext = null;
     unawaited(_completedSub?.cancel());
     _completedSub = null;
     unawaited(_errorSub?.cancel());
@@ -681,20 +697,47 @@ class SessionNotifier extends Notifier<FilmSession?> {
     });
     unawaited(_completedSub?.cancel());
     _completedSub = engine.player.stream.completed.listen((done) {
-      if (!done || !_isCurrent(engine)) return;
-      unawaited(_saveResume());
-      // "End of this film" stays set: it is what holds back "Up next" (the Auditorium reads it).
-      if (state?.sleep == SleepTimer.endOfFilm) {
-        ref.read(noticeProvider.notifier).show('Sleep timer: the film has ended. Good night.');
+      if (!_isCurrent(engine)) return;
+      if (!done) {
+        cancelUpNext(); // sought back from the end, or played again
+        return;
       }
+      unawaited(_saveResume());
+      // "End of this film" stays set: it is what holds back "Up next" ([FilmSession.upNextFor]).
+      if (state?.sleep == SleepTimer.endOfFilm) {
+        ref.read(noticeProvider.notifier).show('Sleep timer: the video has ended. Good night.');
+      }
+      _startUpNext(engine);
     });
+  }
+
+  /// The film has ended: if its end starts another ([FilmSession.upNextFor]), that one plays
+  /// after [kUpNextCountdown] unless the viewer cancels. Seen or unseen, the same timer.
+  void _startUpNext(PlayerEngine engine) {
+    final cur = state;
+    if (cur == null || cur.error != null) return;
+    if (cur.upNextFor(ref.read(settingsValueProvider)) == null) return;
+    _upNext?.cancel();
+    _upNext = Timer(kUpNextCountdown, () {
+      _upNext = null;
+      if (_isCurrent(engine)) unawaited(playUpNext());
+    });
+    state = cur.copyWith(upNextAt: clock.now().add(kUpNextCountdown));
+  }
+
+  /// "Cancel" on the card (or the film moved away from its end): this film stays.
+  void cancelUpNext() {
+    _upNext?.cancel();
+    _upNext = null;
+    final cur = state;
+    if (cur != null && cur.upNextAt != null) state = cur.copyWith(clearUpNext: true);
   }
 
   void _fail(PlayerEngine engine) {
     final cur = state;
     if (cur == null || cur.engine != engine || cur.error != null) return;
     // The sentence first: ending the leader below must not "start" a film that cannot play.
-    state = cur.copyWith(error: "This print can't be projected.");
+    state = cur.copyWith(error: kCannotPlay);
     _machine?.skip();
     unawaited(engine.pause()); // never a black screen that claims to be playing
   }
@@ -782,7 +825,7 @@ class SessionNotifier extends Notifier<FilmSession?> {
     final cur = state;
     if (cur == null || cur.engine != engine || cur.started) return;
     state = cur.copyWith(started: true);
-    if (cur.error != null) return; // nothing to play: the "can't be projected" card is up
+    if (cur.error != null) return; // nothing to play: the "can't play this file" card is up
     await engine.play();
     if (!_isCurrent(engine)) return;
     final at = _resumeAt;
@@ -1110,7 +1153,9 @@ class SessionNotifier extends Notifier<FilmSession?> {
       ref
           .read(noticeProvider.notifier)
           .show(
-            next ? 'This is the last film in the folder.' : 'This is the first film in the folder.',
+            next
+                ? 'This is the last video in the folder.'
+                : 'This is the first video in the folder.',
           );
       return;
     }

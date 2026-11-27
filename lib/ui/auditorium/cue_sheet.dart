@@ -1,4 +1,5 @@
-// The `?` cue sheet — generated from design/cue-sheet.json, the single source of truth.
+// The `?` sheet of keyboard shortcuts (the "cue sheet" in code) — generated from
+// design/cue-sheet.json, the single source of truth.
 import 'dart:convert';
 
 import 'package:flutter/services.dart';
@@ -67,9 +68,13 @@ class CueSheet extends ConsumerWidget {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    'CUE SHEET',
-                    style: Txt.display(Tokens.text2Xl, p.ink, weight: FontWeight.w700),
+                  // The words the menu row and the `?` button use for it.
+                  Semantics(
+                    header: true,
+                    child: Text(
+                      'Keyboard shortcuts',
+                      style: Txt.body(Tokens.textXl, p.ink, weight: FontWeight.w600),
+                    ),
                   ),
                   const SizedBox(height: Tokens.space4),
                   Wrap(

@@ -182,7 +182,7 @@ void main() {
         final ev = stalledOf(h);
         expect(s.phase, LeaderPhase.searching);
         expect(ev.failure, ThreadingFailure.offline);
-        expect(ev.sentence, "You're offline, so the film plays without new subtitles.");
+        expect(ev.sentence, "You're offline, so the video plays without new subtitles.");
         final frozen = leaderSweep(s.phaseStartedAt!, clock.now(), frozenAt: ev.stalledAt);
         a.elapse(const Duration(milliseconds: 400));
         expect(leaderSweep(s.phaseStartedAt!, clock.now(), frozenAt: ev.stalledAt), frozen);

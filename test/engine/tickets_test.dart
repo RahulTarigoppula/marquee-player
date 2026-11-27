@@ -13,9 +13,9 @@ void main() {
         resetUtc: reset,
       );
       final s = ticketStrip(q);
-      expect(s.text, '7 OF 10 TONIGHT · RESETS 00:00 UTC');
+      expect(s.text, '7 of 10 subtitle downloads left today');
       expect(s.state, TicketState.nLeft);
-      expect(s.ariaLabel, '7 of 10 downloads left tonight');
+      expect(s.ariaLabel, '7 of 10 subtitle downloads left today');
       expect(s.sentence, isNull);
       expect(s.pendingTear, isFalse);
     });
@@ -23,42 +23,45 @@ void main() {
     test('turns crimson with a sign-in or Subdl offer at two left', () {
       final s = ticketStrip(Quota(remaining: 2, total: 10, resetUtc: reset, signedIn: true));
       expect(s.state, TicketState.twoLeft);
-      expect(s.text, '2 OF 10 TONIGHT · RESETS 00:00 UTC');
+      expect(s.text, '2 of 10 subtitle downloads left today');
       expect(s.sentence, kLowQuotaSentence);
-      expect(s.ariaLabel, '2 of 10 downloads left tonight');
+      expect(s.ariaLabel, '2 of 10 subtitle downloads left today');
     });
 
     test('reads no tickets left at zero remaining', () {
       final s = ticketStrip(Quota(remaining: 0, total: 10, resetUtc: reset, signedIn: true));
       expect(s.state, TicketState.exhausted);
-      expect(s.text, 'NO TICKETS LEFT TONIGHT · RESETS 00:00 UTC');
-      expect(s.sentence, kNoTicketsSentence);
-      expect(s.ariaLabel, 'No downloads left tonight');
+      expect(s.text, 'No subtitle downloads left today');
+      expect(s.sentence, kLowQuotaSentence);
+      expect(s.ariaLabel, 'No subtitle downloads left today');
     });
 
     test('reads anonymous when signed out', () {
       final s = ticketStrip(Quota.anonymous);
-      expect(s.text, 'ANONYMOUS · 5 PER DAY PER IP');
+      expect(s.text, 'Not signed in · 5 subtitle downloads a day');
       expect(s.state, TicketState.anonymous);
-      expect(s.ariaLabel, 'Anonymous: 5 downloads per day per network');
+      expect(s.ariaLabel, 'Not signed in: 5 subtitle downloads a day');
     });
 
     test('trusts allowed_downloads from the login response, never a constant', () {
       final q = quotaAfterLogin(allowedDownloads: 20, vip: false).copyWith(remaining: 7);
-      expect(ticketStrip(q).text, '7 OF 20 TONIGHT');
+      expect(ticketStrip(q).text, '7 of 20 subtitle downloads left today');
       expect(ticketStrip(q).state, TicketState.nLeft);
     });
 
     test('marks a VIP account with its own total', () {
       final q = quotaAfterLogin(allowedDownloads: 1000, vip: true).copyWith(remaining: 7);
-      expect(ticketStrip(q).text, '7 OF 1000 · VIP');
+      expect(ticketStrip(q).text, '7 of 1,000 subtitle downloads left today · VIP');
       expect(ticketStrip(q).state, TicketState.vip);
     });
 
     test('says so when the count is unknown', () {
       final s = ticketStrip(const Quota(signedIn: true));
       expect(s.state, TicketState.unknown);
-      expect(ticketStrip(const Quota(signedIn: true, remaining: 4)).text, '4 LEFT TONIGHT');
+      expect(
+        ticketStrip(const Quota(signedIn: true, remaining: 4)).text,
+        '4 subtitle downloads left today',
+      );
     });
 
     test('carries the pending tear flag for the decrement-after-tear order', () {

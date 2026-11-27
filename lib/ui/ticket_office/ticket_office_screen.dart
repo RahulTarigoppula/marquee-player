@@ -1,4 +1,4 @@
-// The Ticket Office · Settings. Five plain sections — Subtitles, Playback, Appearance, Library,
+// Settings (the "ticket office" in the code). Five plain sections — Subtitles, Playback, Appearance, Library,
 // About — each a few cards with a heading and one line of explanation. Desktop: the sections
 // down the left, one open on the right. Phone: a list of sections, each opening on its own.
 //
@@ -29,7 +29,7 @@ export 'parts.dart' show kOfferedLanguages;
 const double kSettingsWide = 840;
 
 enum SettingsSection {
-  subtitles('Subtitles', 'captions', 'Account, languages, size and colour'),
+  subtitles('Subtitles', 'captions', 'Languages, size and colour, account'),
   playback('Playback', 'circle-play', 'Skipping, what plays next, sound'),
   appearance('Appearance', 'sun-moon', 'Theme, projector beam, sounds'),
   library('Library', 'library', 'Your video folders, backing up'),
@@ -122,7 +122,7 @@ class _TicketOfficeScreenState extends ConsumerState<TicketOfficeScreen> {
             icon: 'arrow-left',
             label: inSection
                 ? 'Back to all settings'
-                : (filmOpen ? 'Back to the film' : 'Back to the lobby'),
+                : (filmOpen ? 'Back to the video' : 'Back to Home'),
             onTap: _back,
           ),
           const SizedBox(width: Tokens.space2),
@@ -131,7 +131,7 @@ class _TicketOfficeScreenState extends ConsumerState<TicketOfficeScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(inSection ? 'SETTINGS' : 'TICKET OFFICE', style: Txt.label(p.inkFaint)),
+                Text(inSection ? 'SETTINGS' : 'MARQUEE', style: Txt.label(p.inkFaint)),
                 Semantics(
                   header: true,
                   child: Text(
@@ -144,7 +144,7 @@ class _TicketOfficeScreenState extends ConsumerState<TicketOfficeScreen> {
           ),
           if (wide)
             HouseButton(
-              label: filmOpen ? 'Back to the film' : 'Done',
+              label: filmOpen ? 'Back to the video' : 'Done',
               kind: ButtonKind.ghost,
               icon: 'x',
               onPressed: _leave,

@@ -72,7 +72,8 @@ class AboutSection extends ConsumerWidget {
         ),
         SettingsGroup(
           title: 'Updates',
-          helper: 'Marquee never looks for updates unless you ask it to.',
+          // Only true while the switch below is off: beside a lit switch it would be a lie.
+          helper: auto ? null : 'Marquee never looks for updates unless you ask it to.',
           children: [
             // Inset like the switch under it, so the card keeps one left edge.
             const Padding(

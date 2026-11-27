@@ -130,7 +130,7 @@ class _FilmGateState extends State<FilmGate> with SingleTickerProviderStateMixin
     final shown = _dragSeconds ?? widget.position;
     return Semantics(
       slider: true,
-      label: 'Film gate',
+      label: 'Position in the video',
       value: fmtTimecode(shown.floor()),
       increasedValue: fmtTimecode((shown + 5).floor()),
       decreasedValue: fmtTimecode((shown - 5).floor()),

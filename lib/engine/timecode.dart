@@ -48,4 +48,12 @@ String auditoriumFolio({
   return parts.join(' · ');
 }
 
-const String kThreadingFolio = 'REEL 01 · THREADING';
+/// What heads the opening screen for a video with no name to show.
+const String kThreadingFolio = 'Opening your video';
+
+/// The opening screen's heading: the video's own title, the same words Home and the player
+/// use for it. Never a reel number.
+String threadingFolio(String? title) {
+  final t = title?.trim() ?? '';
+  return t.isEmpty ? kThreadingFolio : t;
+}

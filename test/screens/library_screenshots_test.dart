@@ -295,6 +295,34 @@ void main() {
     );
   });
 
+  testWidgets("library, the phone bar's Open menu, 360 px phone", (t) async {
+    await _library(
+      t,
+      'library_open_menu_small_phone',
+      android: true,
+      size: kSmallPhone,
+      allVideos: true,
+      act: (t) async {
+        await t.tap(find.byKey(const ValueKey('open-menu')));
+        await _settle(t);
+      },
+    );
+  });
+
+  testWidgets('library, menu of a watched video, phone', (t) async {
+    await _library(
+      t,
+      'library_item_menu_watched_phone',
+      android: true,
+      size: kPhone,
+      act: (t) async {
+        await _openFolder(t, 'Movies');
+        await t.longPress(find.byKey(ValueKey('lib-${_locator('Spirited.Away', android: true)}')));
+        await _settle(t);
+      },
+    );
+  });
+
   testWidgets('library, sort menu, desktop', (t) async {
     await _library(
       t,
@@ -366,6 +394,34 @@ void main() {
       t,
       'library_permission_refused_phone',
       size: kSmallPhone,
+      library: const DeviceLibrary(
+        source: LibrarySource.mediaStore,
+        access: VideoAccess.denied,
+        asked: true,
+        scanned: true,
+      ),
+    );
+  });
+
+  testWidgets('library, permission refused, phone', (t) async {
+    await _empty(
+      t,
+      'library_permission_refused_large_phone',
+      size: kPhone,
+      library: const DeviceLibrary(
+        source: LibrarySource.mediaStore,
+        access: VideoAccess.denied,
+        asked: true,
+        scanned: true,
+      ),
+    );
+  });
+
+  testWidgets('library, permission refused, phone landscape', (t) async {
+    await _empty(
+      t,
+      'library_permission_refused_phone_landscape',
+      size: kPhoneLandscape,
       library: const DeviceLibrary(
         source: LibrarySource.mediaStore,
         access: VideoAccess.denied,

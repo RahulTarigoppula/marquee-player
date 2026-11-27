@@ -1,16 +1,23 @@
 // The Auditorium's own small controls, drawn ON the picture: glyph buttons with a soft wash,
-// the volume slider, the menu panel and its rows, the swipe readouts, the "Skip intro" pill,
-// the "Unlock" pill, the video details panel and the "Up next" card. They read the Auditorium
-// palette only (playback is always the Auditorium). Pure presentation: the screenshot tests
-// draw them.
+// the volume slider, the menu panel, its rows and where it sits, the swipe readouts, the
+// "Skip intro" pill, the "Unlock" pill, the video details panel, the "Up next" card and the
+// picture of the touch gestures. They read the Auditorium palette only (playback is always
+// the Auditorium). Pure presentation: the screenshot tests draw them.
 import 'dart:async';
+import 'dart:math' as math;
 
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 
 import '../../../engine/models/settings.dart';
 import '../../../theme/house.dart';
 import '../../../theme/tokens.dart';
+import '../../components/kit.dart';
 import '../../components/primitives.dart';
+
+/// A room this short (a phone held sideways) has no height to spare: menus become a sheet
+/// down the right edge, and whatever would land on the play button in the middle moves away.
+const double kShortRoom = 480;
 
 /// A glyph button over the picture: ink at rest (not muted — it sits on moving images),
 /// tungsten when [active], a round wash on hover / press / focus.
@@ -61,7 +68,7 @@ class CtlButton extends StatelessWidget {
   }
 }
 
-/// A short text control over the picture (`1.25×`, `SYNC +0.35`, `A-B`).
+/// A short text control over the picture (`1.25×`, `Subs +0.35 s`, `A-B`).
 class CtlText extends StatelessWidget {
   final String text;
   final String label;
@@ -215,9 +222,40 @@ class MenuEntry {
   });
 }
 
-/// The panel the subtitle / audio / speed / picture / more buttons open, above the bar.
-/// It scrolls: a landscape phone shows three rows of it.
-class ControlMenu extends StatelessWidget {
+/// Where the open menu sits. Above the bar, bottom right, wherever there is height for it. On
+/// a phone held sideways that left room for three rows of a ten-row list, so there the menu
+/// is a sheet the full height of the right edge, over the bar. [builder] is told how tall
+/// the menu may be and whether it is that sheet.
+class MenuSlot extends StatelessWidget {
+  final bool desktop;
+  final Widget Function(double maxHeight, bool sheet) builder;
+  const MenuSlot({super.key, required this.desktop, required this.builder});
+
+  @override
+  Widget build(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    final pad = MediaQuery.paddingOf(context);
+    if (!desktop && size.height < kShortRoom) {
+      return Positioned(
+        top: pad.top + Tokens.space2,
+        bottom: pad.bottom + Tokens.space2,
+        right: pad.right + Tokens.space2,
+        width: math.min(340.0, size.width - pad.horizontal - Tokens.space4),
+        child: builder(size.height - pad.vertical - Tokens.space4, true),
+      );
+    }
+    return Positioned(
+      right: Tokens.space4,
+      bottom: pad.bottom + (desktop ? 104 : 132),
+      left: desktop ? null : Tokens.space4,
+      child: Align(alignment: Alignment.bottomRight, child: builder(size.height * 0.6, false)),
+    );
+  }
+}
+
+/// The panel the subtitle / audio / speed / picture / more buttons open (see [MenuSlot] for
+/// where). It scrolls, and says so: while there are rows below, its bottom edge fades out.
+class ControlMenu extends StatefulWidget {
   final String title;
   final List<MenuEntry> entries;
 
@@ -227,6 +265,10 @@ class ControlMenu extends StatelessWidget {
   final VoidCallback? onBack;
   final VoidCallback onClose;
   final double maxHeight;
+
+  /// Take all of [maxHeight] however few rows there are (the sideways phone's sheet): Back
+  /// and Close then stay where they were from one list to the next.
+  final bool fill;
   const ControlMenu({
     super.key,
     required this.title,
@@ -235,44 +277,96 @@ class ControlMenu extends StatelessWidget {
     this.rows,
     this.onBack,
     this.maxHeight = 420,
+    this.fill = false,
   });
+
+  @override
+  State<ControlMenu> createState() => _ControlMenuState();
+}
+
+class _ControlMenuState extends State<ControlMenu> {
+  /// Rows are hidden below the bottom edge.
+  bool _more = false;
+
+  bool _measure(ScrollMetrics m) {
+    final more = m.extentAfter > 1;
+    if (more != _more && mounted) setState(() => _more = more);
+    return false;
+  }
 
   @override
   Widget build(BuildContext context) {
     final p = House.paletteOf(context);
+    final panel = p.bgElevated.withValues(alpha: 0.97);
+    // Keyed by its title: a list opened from another starts at its own top.
+    final list = ListView(
+      key: ValueKey(widget.title),
+      shrinkWrap: !widget.fill,
+      padding: const EdgeInsets.fromLTRB(0, 0, 0, Tokens.space2),
+      children: widget.rows ?? [for (final e in widget.entries) MenuRow(entry: e)],
+    );
+    // The list tells how much of it is out of sight: when it is first laid out or its rows
+    // change (metrics), and as it is scrolled (update).
+    final body = NotificationListener<ScrollMetricsNotification>(
+      onNotification: (n) => _measure(n.metrics),
+      child: NotificationListener<ScrollUpdateNotification>(
+        onNotification: (n) => _measure(n.metrics),
+        child: Stack(
+          fit: StackFit.passthrough,
+          children: [
+            list,
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              height: Tokens.space6,
+              child: IgnorePointer(
+                child: AnimatedOpacity(
+                  opacity: _more ? 1 : 0,
+                  duration: Tokens.durFast,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [panel.withValues(alpha: 0), panel],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
     return Container(
-      constraints: BoxConstraints(maxWidth: 340, maxHeight: maxHeight),
+      constraints: BoxConstraints(maxWidth: 340, maxHeight: widget.maxHeight),
       decoration: BoxDecoration(
-        color: p.bgElevated.withValues(alpha: 0.97),
+        color: panel,
         borderRadius: BorderRadius.circular(Tokens.radiusLg),
         border: Border.all(color: p.border),
         boxShadow: Tokens.shadow3,
       ),
       clipBehavior: Clip.antiAlias,
       child: Column(
-        mainAxisSize: MainAxisSize.min,
+        mainAxisSize: widget.fill ? MainAxisSize.max : MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(Tokens.space2, Tokens.space1, Tokens.space1, 0),
             child: Row(
               children: [
-                if (onBack != null)
-                  CtlButton(icon: 'arrow-left', label: 'Back', onTap: onBack, iconSize: 18)
+                if (widget.onBack != null)
+                  CtlButton(icon: 'arrow-left', label: 'Back', onTap: widget.onBack, iconSize: 18)
                 else
                   const SizedBox(width: Tokens.space3),
-                Expanded(child: Text(title.toUpperCase(), style: Txt.label(p.inkFaint))),
-                CtlButton(icon: 'x', label: 'Close', onTap: onClose, iconSize: 18),
+                Expanded(child: Text(widget.title.toUpperCase(), style: Txt.label(p.inkFaint))),
+                CtlButton(icon: 'x', label: 'Close', onTap: widget.onClose, iconSize: 18),
               ],
             ),
           ),
-          Flexible(
-            child: ListView(
-              shrinkWrap: true,
-              padding: const EdgeInsets.fromLTRB(0, 0, 0, Tokens.space2),
-              children: rows ?? [for (final e in entries) MenuRow(entry: e)],
-            ),
-          ),
+          Flexible(fit: widget.fill ? FlexFit.tight : FlexFit.loose, child: body),
         ],
       ),
     );
@@ -727,18 +821,21 @@ class UnlockPill extends StatelessWidget {
   }
 }
 
-/// "Up next" at the end of a film: counts down, then plays the folder's next file.
+/// "Up next" at the end of a film. The card only SHOWS the countdown: the session owns it
+/// (the next film must start in picture in picture and with the screen off too, where no
+/// card is ever built), so this never starts a film by itself. [at] is when the session will;
+/// [name] is the title as the library shows it ("Severance S02E04"), never the raw file name.
 class UpNextCard extends StatefulWidget {
   final String name;
+  final DateTime at;
   final VoidCallback onPlay;
   final VoidCallback onCancel;
-  final Duration countdown;
   const UpNextCard({
     super.key,
     required this.name,
+    required this.at,
     required this.onPlay,
     required this.onCancel,
-    this.countdown = const Duration(seconds: 6),
   });
 
   @override
@@ -746,20 +843,21 @@ class UpNextCard extends StatefulWidget {
 }
 
 class _UpNextCardState extends State<UpNextCard> {
-  late int _left = widget.countdown.inSeconds;
   Timer? _tick;
+
+  /// Whole seconds until [UpNextCard.at], rounded up ("in 1 s" until the moment itself),
+  /// never below 0.
+  int get _left {
+    final ms = widget.at.difference(clock.now()).inMilliseconds;
+    return ms <= 0 ? 0 : (ms / 1000).ceil();
+  }
 
   @override
   void initState() {
     super.initState();
-    _tick = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted) return;
-      if (_left <= 1) {
-        _tick?.cancel();
-        widget.onPlay();
-        return;
-      }
-      setState(() => _left--);
+    // Four looks a second, so the number never lags the session's own clock by a whole one.
+    _tick = Timer.periodic(const Duration(milliseconds: 250), (_) {
+      if (mounted) setState(() {});
     });
   }
 
@@ -773,7 +871,9 @@ class _UpNextCardState extends State<UpNextCard> {
   Widget build(BuildContext context) {
     final p = House.paletteOf(context);
     return Container(
-      width: 340,
+      // The Auditorium sets it 20 px from the right edge: a narrow phone keeps as much on
+      // the left.
+      width: math.min(340.0, MediaQuery.sizeOf(context).width - Tokens.space5 * 2),
       padding: const EdgeInsets.all(Tokens.space4),
       decoration: BoxDecoration(
         color: p.bgElevated.withValues(alpha: 0.96),
@@ -785,23 +885,210 @@ class _UpNextCardState extends State<UpNextCard> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('UP NEXT · IN $_left S', style: Txt.label(p.accent)),
-          const SizedBox(height: Tokens.space2),
+          Text(
+            _left > 0 ? 'Up next in $_left s' : 'Up next',
+            style: Txt.body(Tokens.textSm, p.accent, weight: FontWeight.w600),
+          ),
+          const SizedBox(height: Tokens.space1),
           Text(
             widget.name,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            style: Txt.body(Tokens.textBase, p.ink, weight: FontWeight.w500),
+            style: Txt.body(Tokens.textLg, p.ink, weight: FontWeight.w500),
           ),
           const SizedBox(height: Tokens.space3),
-          Row(
+          // A Wrap, not a Row: with the phone's text set large the two still fit, one under
+          // the other.
+          Wrap(
+            spacing: Tokens.space2,
+            runSpacing: Tokens.space2,
             children: [
-              TextAction('Play now', primary: true, onTap: widget.onPlay),
-              const SizedBox(width: Tokens.space2),
-              TextAction('Cancel', onTap: widget.onCancel),
+              HouseButton(
+                label: 'Play now',
+                icon: 'play',
+                kind: ButtonKind.primary,
+                onPressed: widget.onPlay,
+              ),
+              HouseButton(label: 'Cancel', kind: ButtonKind.ghost, onPressed: widget.onCancel),
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// The touch gestures, drawn where they work: the left side, anywhere, the right side. Shown
+/// once over the first film on a phone, and again from More › Touch gestures. It lists only
+/// what this phone and these settings really do: [brightness] is the left-side slide (Android),
+/// [swipeToSeek] the sideways one (Settings), [seekStep] the seconds a double-tap jumps.
+/// A tap anywhere sends it away, as "Got it" does.
+class GestureGuide extends StatelessWidget {
+  final int seekStep;
+  final bool brightness, swipeToSeek;
+  final VoidCallback onDone;
+  const GestureGuide({
+    super.key,
+    required this.onDone,
+    this.seekStep = 10,
+    this.brightness = true,
+    this.swipeToSeek = true,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = House.paletteOf(context);
+    final size = MediaQuery.sizeOf(context);
+    // Wide zones set a gesture on one line (the glyph, then the words); narrow ones stack it.
+    final roomy = size.width >= 560;
+    final short = size.height < kShortRoom;
+    final divider = BorderSide(color: p.borderStrong);
+
+    Widget zone(String heading, List<_Gesture> gestures, {bool middle = false}) => Expanded(
+      child: Container(
+        decoration: middle
+            ? BoxDecoration(
+                border: Border(left: divider, right: divider),
+              )
+            : null,
+        padding: EdgeInsets.symmetric(horizontal: roomy ? Tokens.space4 : Tokens.space2),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: roomy ? CrossAxisAlignment.start : CrossAxisAlignment.center,
+          children: [
+            Text(heading, style: Txt.label(p.inkFaint)),
+            for (final g in gestures) _GestureLine(gesture: g, roomy: roomy),
+          ],
+        ),
+      ),
+    );
+
+    final title = Semantics(
+      header: true,
+      child: Text('Touch gestures', style: Txt.body(Tokens.textLg, p.ink, weight: FontWeight.w600)),
+    );
+    final done = HouseButton(label: 'Got it', kind: ButtonKind.primary, onPressed: onDone);
+    final zones = Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        zone('LEFT SIDE', [
+          _Gesture('rotate-ccw', 'Back $seekStep s', 'Double-tap'),
+          if (brightness) const _Gesture('sun', 'Brightness', 'Slide up or down'),
+        ]),
+        zone('ANYWHERE', [
+          const _Gesture('play', 'Play or pause', 'Double-tap the middle'),
+          const _Gesture('gauge', '2× speed', 'Press and hold'),
+          if (swipeToSeek)
+            const _Gesture(
+              'arrow-up-down',
+              'Go back or forward',
+              'Slide left or right',
+              sideways: true,
+            ),
+          const _Gesture('scan', 'Fill the screen', 'Spread two fingers'),
+        ], middle: true),
+        zone('RIGHT SIDE', [
+          _Gesture('rotate-cw', 'Forward $seekStep s', 'Double-tap'),
+          const _Gesture('volume-2', 'Volume', 'Slide up or down'),
+        ]),
+      ],
+    );
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      excludeFromSemantics: true,
+      onTap: onDone,
+      child: ColoredBox(
+        color: p.bg.withValues(alpha: 0.84),
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(Tokens.space3),
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 760),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // A phone held sideways has no height for a button of its own row.
+                    if (short)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: Tokens.space4),
+                        child: Row(
+                          children: [
+                            Expanded(child: title),
+                            done,
+                          ],
+                        ),
+                      )
+                    else
+                      title,
+                    SizedBox(height: short ? Tokens.space2 : Tokens.space5),
+                    Flexible(child: SingleChildScrollView(child: zones)),
+                    if (!short) ...[const SizedBox(height: Tokens.space5), done],
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// One gesture of the [GestureGuide]: what it does, then how it is made.
+class _Gesture {
+  final String icon, what, how;
+
+  /// The up-and-down arrows, laid on their side (the icon set has no left-and-right pair).
+  final bool sideways;
+  const _Gesture(this.icon, this.what, this.how, {this.sideways = false});
+}
+
+class _GestureLine extends StatelessWidget {
+  final _Gesture gesture;
+  final bool roomy;
+  const _GestureLine({required this.gesture, required this.roomy});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = House.paletteOf(context);
+    final g = gesture;
+    final align = roomy ? TextAlign.start : TextAlign.center;
+    final glyph = RotatedBox(
+      quarterTurns: g.sideways ? 1 : 0,
+      child: LucideIcon(g.icon, size: 22, color: p.accent),
+    );
+    final words = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: roomy ? CrossAxisAlignment.start : CrossAxisAlignment.center,
+      children: [
+        Text(
+          g.what,
+          textAlign: align,
+          style: Txt.body(Tokens.textSm, p.ink, weight: FontWeight.w600),
+        ),
+        Text(g.how, textAlign: align, style: Txt.body(Tokens.textXs, p.inkMuted)),
+      ],
+    );
+    return MergeSemantics(
+      child: Padding(
+        padding: EdgeInsets.only(top: roomy ? Tokens.space2 : Tokens.space4),
+        child: roomy
+            ? Row(
+                children: [
+                  glyph,
+                  const SizedBox(width: Tokens.space3),
+                  Expanded(child: words),
+                ],
+              )
+            : Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  glyph,
+                  const SizedBox(height: Tokens.space1),
+                  words,
+                ],
+              ),
       ),
     );
   }

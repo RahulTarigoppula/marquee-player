@@ -31,7 +31,7 @@ Settings _withAtEnd(Settings s, _AtEnd v) => switch (v) {
 };
 
 String _profileHelp(EqPreset preset) => switch (preset) {
-  EqPreset.flat => 'The sound plays as the film made it.',
+  EqPreset.flat => 'The sound plays as it was recorded.',
   EqPreset.voiceBoost => 'Lifts speech so dialogue is easier to follow.',
   EqPreset.bassBoost => 'A fuller low end, good for small speakers.',
   EqPreset.trebleBoost => 'Brighter detail, for muffled or old recordings.',
@@ -179,7 +179,7 @@ class PlaybackSection extends ConsumerWidget {
             ToggleBulb(
               label: 'Bias light',
               hint:
-                  'Tints the walls around the picture with the film\'s colours. '
+                  'Tints the walls around the picture with the video\'s colours. '
                   'Uses extra CPU and battery.',
               value: settings.biasLight,
               onChanged: (v) => editSettings(ref, (s) => s.copyWith(biasLight: v)),

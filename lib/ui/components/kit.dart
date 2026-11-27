@@ -146,8 +146,9 @@ class HouseButton extends StatelessWidget {
   }
 }
 
-/// A small status tag: `EN ✓` (the tick is a Lucide glyph — the bundled fonts have none),
-/// `SYNC +0.15`, `WATCHED`.
+/// A small status tag: `English subtitles ✓` (the tick is a Lucide glyph — the bundled fonts
+/// have none), `WATCHED`. Words, not codes, so it is set in the body face; in a tight spot the
+/// words shorten with an ellipsis instead of spilling out of the card.
 class Tag extends StatelessWidget {
   final String text;
   final String? icon;
@@ -174,7 +175,15 @@ class Tag extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(text, style: Txt.mono(Tokens.textXs, c, weight: FontWeight.w500)),
+            Flexible(
+              child: Text(
+                text,
+                maxLines: 1,
+                softWrap: false,
+                overflow: TextOverflow.ellipsis,
+                style: Txt.body(Tokens.textXs, c, weight: FontWeight.w500),
+              ),
+            ),
             if (icon != null) ...[const SizedBox(width: 3), LucideIcon(icon!, color: c, size: 12)],
           ],
         ),
@@ -192,7 +201,8 @@ class Segment<T> {
 }
 
 /// A row of mutually exclusive options in one slot (Auto · Night · Day). [compact] shows icons
-/// only (the label stays in the tooltip and for screen readers).
+/// only (the label stays in the tooltip and for screen readers). [expand] shares the whole
+/// width between the options, each label in the middle of its share.
 class SegmentedChoice<T> extends StatelessWidget {
   final List<Segment<T>> segments;
   final T value;
@@ -203,6 +213,9 @@ class SegmentedChoice<T> extends StatelessWidget {
   final String? groupLabel;
   final bool expand;
 
+  /// 48 px options with body-size labels, for a thumb: the Lobby's Home | Library on a phone.
+  final bool tall;
+
   const SegmentedChoice({
     super.key,
     required this.segments,
@@ -211,6 +224,7 @@ class SegmentedChoice<T> extends StatelessWidget {
     this.compact = false,
     this.groupLabel,
     this.expand = false,
+    this.tall = false,
   });
 
   @override
@@ -232,44 +246,54 @@ class SegmentedChoice<T> extends StatelessWidget {
             onChanged(s.value);
           }
         },
-        builder: (context, st) => AnimatedContainer(
-          duration: h.reducedMotion ? Duration.zero : Tokens.durFast,
-          curve: Tokens.easeOut,
-          constraints: BoxConstraints(minWidth: compact ? 40 : 64),
-          height: 36,
-          padding: EdgeInsets.symmetric(horizontal: compact ? Tokens.space2 : Tokens.space3),
-          decoration: BoxDecoration(
-            color: on ? p.bgElevated : (st.hovered ? p.ink.withValues(alpha: 0.06) : null),
-            borderRadius: BorderRadius.circular(Tokens.radiusSm + 2),
-            border: on ? Border.all(color: p.borderStrong) : null,
-            boxShadow: on && !h.matinee ? Tokens.shadow1 : null,
-          ),
-          child: ExcludeSemantics(
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                if (s.icon != null) LucideIcon(s.icon!, color: on ? p.accent : fg, size: 16),
-                if (s.icon != null && !compact) const SizedBox(width: 6),
-                if (!compact)
-                  _flexIf(
-                    expand,
-                    Text(
-                      s.label,
-                      maxLines: 1,
-                      softWrap: false,
-                      overflow: TextOverflow.ellipsis,
-                      style: Txt.body(
-                        Tokens.textSm,
-                        fg,
-                        weight: on ? FontWeight.w600 : FontWeight.w500,
+        builder: (context, st) {
+          final pill = AnimatedContainer(
+            duration: h.reducedMotion ? Duration.zero : Tokens.durFast,
+            curve: Tokens.easeOut,
+            constraints: BoxConstraints(minWidth: compact ? 40 : 64),
+            height: tall ? 48 : 36,
+            alignment: expand ? Alignment.center : null,
+            padding: EdgeInsets.symmetric(
+              horizontal: compact ? Tokens.space2 : (tall ? Tokens.space4 : Tokens.space3),
+            ),
+            decoration: BoxDecoration(
+              color: on ? p.bgElevated : (st.hovered ? p.ink.withValues(alpha: 0.06) : null),
+              borderRadius: BorderRadius.circular(Tokens.radiusSm + 2),
+              border: on ? Border.all(color: p.borderStrong) : null,
+              boxShadow: on && !h.matinee ? Tokens.shadow1 : null,
+            ),
+            child: ExcludeSemantics(
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  if (s.icon != null)
+                    LucideIcon(s.icon!, color: on ? p.accent : fg, size: tall ? 18 : 16),
+                  if (s.icon != null && !compact) SizedBox(width: tall ? Tokens.space2 : 6),
+                  if (!compact)
+                    _flexIf(
+                      expand,
+                      Text(
+                        s.label,
+                        maxLines: 1,
+                        softWrap: false,
+                        overflow: TextOverflow.ellipsis,
+                        style: Txt.body(
+                          tall ? Tokens.textBase : Tokens.textSm,
+                          fg,
+                          weight: on ? FontWeight.w600 : FontWeight.w500,
+                        ),
                       ),
                     ),
-                  ),
-              ],
+                ],
+              ),
             ),
-          ),
-        ),
+          );
+          // Pressable lays its surface out as small as it will go, so a stretched option has
+          // to ask for its whole share itself: otherwise the pill hugs its label and every
+          // option sits left of centre, with a blank stretch at the right end of the control.
+          return expand ? SizedBox(width: double.infinity, child: pill) : pill;
+        },
       );
     }
 

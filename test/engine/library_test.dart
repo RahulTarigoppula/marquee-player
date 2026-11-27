@@ -1,8 +1,11 @@
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:marquee/engine/library.dart';
 import 'package:marquee/engine/models/settings.dart';
 import 'package:test/test.dart';
+
+import 'natural_names.dart';
 
 final _t0 = DateTime(2026, 10, 17, 21);
 
@@ -76,6 +79,15 @@ void main() {
       expect(decoded, [items.first]);
     });
 
+    test('round-trips as stored text, and reads broken text as no cache', () {
+      expect(decodeLibraryCacheText(encodeLibraryCacheText(items)), items);
+      expect(decodeLibraryCacheText(encodeLibraryCacheText(items, limit: 1)), [items.first]);
+      expect(encodeLibraryCacheText(items), jsonEncode(encodeLibraryCache(items)));
+      expect(decodeLibraryCacheText('{"v":1,"items":['), isNull);
+      expect(decodeLibraryCacheText('null'), isNull);
+      expect(decodeLibraryCacheText(''), isNull);
+    });
+
     test('ignores a missing cache, another version and broken rows', () {
       expect(decodeLibraryCache(null), isNull);
       expect(decodeLibraryCache('nope'), isNull);
@@ -138,6 +150,62 @@ void main() {
       expect(sortLibrary([a, b, c], LibrarySort.largest), [a, c, b]);
       // An unknown length sorts last.
       expect(sortLibrary([c, a, b], LibrarySort.longest), [b, a, c]);
+    });
+
+    test('every order is exactly the order the bare-name comparison gave', () {
+      // The yardstick: the comparator as it stood before each item's name was cut up once.
+      int byName(LibraryItem a, LibraryItem b) {
+        final c = legacyNaturalCompare(a.name, b.name);
+        return c != 0 ? c : a.locator.compareTo(b.locator);
+      }
+
+      int then(int c, LibraryItem a, LibraryItem b) => c != 0 ? c : byName(a, b);
+      final r = Random(3);
+      // Each name once: a library never lists one file twice, and two rows with the same
+      // place would have no order of their own to compare.
+      final names = generatedNames(300).toSet().toList();
+      final items = [
+        for (var i = 0; i < names.length; i++)
+          item(
+            'D:\\${['Films', 'films', 'Shows 2', 'Shows 10'][i % 4]}\\${names[i]}',
+            size: 1 + r.nextInt(5),
+            durationMs: r.nextInt(4) == 0 ? null : r.nextInt(5) * 1000,
+            modified: _t0.add(Duration(days: r.nextInt(5))),
+          ),
+      ];
+      final legacy = <LibrarySort, int Function(LibraryItem, LibraryItem)>{
+        LibrarySort.name: byName,
+        LibrarySort.newest: (a, b) => then(b.modifiedAt.compareTo(a.modifiedAt), a, b),
+        LibrarySort.largest: (a, b) => then(b.sizeBytes.compareTo(a.sizeBytes), a, b),
+        LibrarySort.longest: (a, b) =>
+            then((b.durationMs ?? -1).compareTo(a.durationMs ?? -1), a, b),
+      };
+      for (final sort in LibrarySort.values) {
+        expect(sortLibrary(items, sort), [...items]..sort(legacy[sort]), reason: sort.name);
+        // Again, now that every item has its key: the same answer.
+        expect(
+          sortLibrary(items.reversed, sort),
+          [...items]..sort(legacy[sort]),
+          reason: sort.name,
+        );
+      }
+      final folders = groupFolders(items);
+      expect(
+        [for (final f in folders) f.path],
+        [r'D:\Films', r'D:\films', r'D:\Shows 2', r'D:\Shows 10'],
+      );
+      for (final probe in [items.first, items[137], items.last]) {
+        final folder = [
+          for (final i in items)
+            if (i.folderPath == probe.folderPath) i,
+        ]..sort(byName);
+        final at = folder.indexOf(probe);
+        expect(libraryNeighbours(items, probe.locator), (
+          previous: at > 0 ? folder[at - 1].locator : null,
+          next: at < folder.length - 1 ? folder[at + 1].locator : null,
+          first: folder.first.locator,
+        ));
+      }
     });
 
     test('ties fall back to the name, then the path, and the input is left alone', () {
@@ -254,6 +322,68 @@ void main() {
       expect(searchLibrary([third, clip], 'vid'), [clip]);
       expect(searchLibrary([third, clip], ''), [third, clip]);
     });
+
+    test('folding by hand gives what the regular expression gave, character for character', () {
+      // The yardstick: searchFold as it was first written.
+      final separators = RegExp(r'[\s._\-\[\](){}+,]+');
+      String legacy(String text) => text.toLowerCase().replaceAll(separators, ' ').trim();
+      // Every separator, every kind of white space (U+0085 is trimmed but is not a separator;
+      // U+200B is neither), and letters that change length or stay put in lower case.
+      const pieces = [
+        'The', 'THIRD', 'man', '1949', 'İstanbul', 'ΣΑΣ', 'Шоу', '映画', 'x264', '🎬', //
+        ' ', '  ', '.', '_', '-', '[', ']', '(', ')', '{', '}', '+', ',', '\t', '\n', '\r',
+        '\v', '\f', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+        ' ', ' ', '　', '﻿', '\u0085', '​', '᠎', '!', '&', "'",
+      ];
+      final r = Random(5);
+      final texts = <String>['', ' ', '...', 'plain', 'a b', ' a  b ', '.a.', 'a\u0085', ...pieces];
+      for (var i = 0; i < 2000; i++) {
+        texts.add([for (var n = r.nextInt(9); n > 0; n--) pieces[r.nextInt(pieces.length)]].join());
+      }
+      texts.addAll(generatedNames(300));
+      for (final t in texts) {
+        expect(searchFold(t), legacy(t), reason: 'folding ${t.runes.toList()}');
+      }
+    });
+
+    test('a search folded once finds exactly what folding it per video found', () {
+      // The yardstick: the match as it stood before the query and the names were folded once.
+      bool legacy(LibraryItem item, String query) {
+        final q = searchFold(query);
+        if (q.isEmpty) return true;
+        final hay = searchFold('${item.name} ${item.folderName}');
+        if (q.split(' ').every(hay.contains)) return true;
+        return hay.replaceAll(' ', '').contains(q.replaceAll(' ', ''));
+      }
+
+      final names = generatedNames(300);
+      final items = [
+        for (var i = 0; i < names.length; i++)
+          item('D:\\${['Noir', 'Camera Roll', 'Shows.2024'][i % 3]}\\${names[i]}'),
+      ];
+      const queries = [
+        '', ' . ', 'sev', 'SEVERANCE s01', 's01e0', 'thirdman', 'third man', 'man third', //
+        'camera', 'cameraroll', 'roll vid', '1080p blu', 'x264', '2024', 'shows 2024', 'e 1',
+        'episode 12', 'zzz', 'Борис', '映画', 'shōgun', '[0', '-', 'a1',
+      ];
+      for (final q in queries) {
+        final want = [
+          for (final i in items)
+            if (legacy(i, q)) i,
+        ];
+        expect(searchLibrary(items, q), want, reason: 'query "$q"');
+        // A second search of the same list reads each video's folded name from its key.
+        expect(searchLibrary(items, q), want, reason: 'query "$q", again');
+        expect(
+          [
+            for (final i in items)
+              if (matchesSearch(i, q)) i,
+          ],
+          want,
+          reason: 'query "$q", one by one',
+        );
+      }
+    });
   });
 
   group('what a card says', () {
@@ -310,6 +440,18 @@ void main() {
       expect(libraryTitle('...'), '...');
     });
 
+    test('a title is worked out once and stays right when the memo starts over', () {
+      const name = 'The.Third.Man.1949.1080p.BluRay.x264.mkv';
+      expect(libraryTitle(name), 'The Third Man (1949)');
+      // More names than the memo holds: it empties itself and carries on.
+      final first = [for (var i = 0; i < 9000; i++) libraryTitle('my wedding, tape $i.mov')];
+      expect(first[3], 'my wedding, tape 3');
+      expect(first.toSet().length, 9000);
+      expect(libraryTitle(name), 'The Third Man (1949)');
+      expect(libraryTitle('my wedding, tape 8999.mov'), first.last);
+      expect(libraryTitle('my wedding, tape 0.mov'), first.first);
+    });
+
     test('pathLeaf names a folder by its last segment', () {
       expect(pathLeaf(r'C:\Users\me\Videos'), 'Videos');
       expect(pathLeaf('C:\\Users\\me\\Videos\\'), 'Videos');
@@ -328,6 +470,56 @@ void main() {
         isFalse,
       );
       expect(thumbKey(a) == thumbKey(item(r'D:\b.mkv')), isFalse);
+    });
+  });
+
+  group('videos that gave no frame', () {
+    test('a mark is believed for two weeks, then the video is tried again', () {
+      expect(thumbFailExpired(_t0, now: _t0), isFalse);
+      expect(thumbFailExpired(_t0, now: _t0.add(kThumbFailFor)), isFalse);
+      expect(
+        thumbFailExpired(_t0, now: _t0.add(kThumbFailFor + const Duration(seconds: 1))),
+        isTrue,
+      );
+      // A clock set back since: not expired, and not a crash.
+      expect(thumbFailExpired(_t0, now: _t0.subtract(const Duration(days: 400))), isFalse);
+      expect(kThumbFailFor, const Duration(days: 14));
+    });
+
+    test('failures are held until one frame proves the grabber, then written', () {
+      final b = ThumbBreaker();
+      expect(b.failed('a'), isFalse);
+      expect(b.failed('b'), isFalse);
+      expect(b.holds('a'), isTrue);
+      expect(b.holds('z'), isFalse);
+      expect(b.tripped, isFalse);
+      expect(b.succeeded(), ['a', 'b']);
+      expect(b.holds('a'), isFalse);
+      // Proven: a failure is the file's own from here on, however many follow.
+      for (var i = 0; i < kThumbBreakAfter * 3; i++) {
+        expect(b.failed('later $i'), isTrue);
+      }
+      expect(b.tripped, isFalse);
+      expect(b.succeeded(), isEmpty);
+    });
+
+    test('eight failures and no success stop the run and write nothing', () {
+      final b = ThumbBreaker();
+      for (var i = 0; i < kThumbBreakAfter - 1; i++) {
+        expect(b.failed('k$i'), isFalse);
+        expect(b.tripped, isFalse);
+      }
+      // The same video failing twice is one failure, not two.
+      expect(b.failed('k0'), isFalse);
+      expect(b.tripped, isFalse);
+      expect(b.failed('the eighth'), isFalse);
+      expect(b.tripped, isTrue);
+      expect(b.holds('k0'), isFalse);
+      // Nothing is held and nothing more is written, whatever arrives afterwards.
+      expect(b.failed('after'), isFalse);
+      expect(b.holds('after'), isFalse);
+      expect(b.succeeded(), isEmpty);
+      expect(b.tripped, isTrue);
     });
   });
 

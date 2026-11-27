@@ -115,7 +115,8 @@ class ControlsActions {
   final VoidCallback? onToggleClock;
 
   /// Phones: lock the screen against touches, and turn it (auto, landscape, portrait). The
-  /// buttons only draw where these are set.
+  /// buttons only draw where these are set (and "turn" only where the bar is wide enough: a
+  /// phone held upright finds it in the More menu).
   final VoidCallback? onLock, onRotate;
 
   /// The second under the pointer on the seek bar, while it hovers or drags there.
@@ -185,8 +186,13 @@ class AuditoriumControls extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final d = data;
-    final width = MediaQuery.sizeOf(context).width;
-    final compact = width < 720;
+    final size = MediaQuery.sizeOf(context);
+    final compact = size.width < 720;
+    // The play button in the middle steps aside for whatever would be drawn over it: an open
+    // menu (a tap outside the menu only closes it, so the button could not be pressed
+    // anyway) and, in a short room, the subtitle timing panel, which reaches that high.
+    final centre =
+        (!d.desktop || compact) && d.openMenu == null && !(d.syncOpen && size.height < kShortRoom);
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -194,7 +200,7 @@ class AuditoriumControls extends StatelessWidget {
           alignment: Alignment.topCenter,
           child: _TopBar(data: d, actions: actions),
         ),
-        if (!d.desktop || compact)
+        if (centre)
           Center(
             child: _CentreTransport(data: d, actions: actions),
           ),
@@ -241,6 +247,9 @@ class _TopBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = House.paletteOf(context);
     final d = data;
+    // A narrow phone (held upright) gives the title two lines and the words "Subtitles
+    // matched" their room; "Turn the screen" is in the More menu there.
+    final narrow = MediaQuery.sizeOf(context).width < 480;
     return _Scrim(
       top: true,
       child: SafeArea(
@@ -256,16 +265,20 @@ class _TopBar extends StatelessWidget {
             children: [
               CtlButton(
                 icon: 'arrow-left',
-                label: 'Back to the lobby (Esc)',
+                label: d.desktop ? 'Back to Home (Esc)' : 'Back to Home',
                 onTap: actions.onBack,
               ),
               const SizedBox(width: Tokens.space2),
               Expanded(
                 child: Text(
                   d.title,
-                  maxLines: 1,
+                  maxLines: narrow ? 2 : 1,
                   overflow: TextOverflow.ellipsis,
-                  style: Txt.body(Tokens.textLg, p.ink, weight: FontWeight.w500),
+                  style: Txt.body(
+                    narrow ? Tokens.textBase : Tokens.textLg,
+                    p.ink,
+                    weight: FontWeight.w500,
+                  ),
                 ),
               ),
               if (d.matched) ...[
@@ -274,9 +287,13 @@ class _TopBar extends StatelessWidget {
                   child: Bulb(color: p.success, size: 7),
                 ),
                 const SizedBox(width: Tokens.space2),
-                // A narrow phone keeps the bulb and gives the word's room to the title.
-                if (MediaQuery.sizeOf(context).width >= 480) ...[
-                  Text('MATCH', style: Txt.mono(Tokens.textXs, p.success)),
+                // A narrow phone keeps the bulb and gives the words' room to the title.
+                if (!narrow) ...[
+                  Text(
+                    'Subtitles matched',
+                    softWrap: false,
+                    style: Txt.body(Tokens.textSm, p.success, weight: FontWeight.w500),
+                  ),
                   const SizedBox(width: Tokens.space3),
                 ],
               ],
@@ -288,7 +305,7 @@ class _TopBar extends StatelessWidget {
                 LucideIcon('pin', size: 18, color: p.accent),
                 const SizedBox(width: Tokens.space3),
               ],
-              if (actions.onRotate != null)
+              if (actions.onRotate != null && !narrow)
                 CtlButton(
                   icon: 'rotate-ccw-square',
                   label: 'Turn the screen (now: ${d.orientation.label.toLowerCase()})',
@@ -476,10 +493,14 @@ class _BottomBar extends StatelessWidget {
       time,
     ];
     final tools = <Widget>[
-      if (d.hasSubtitle || d.delayMs != 0)
+      // Only when there is something to say: subtitles in time need no chip (Subtitles ›
+      // "Subtitles too early or late?" opens the rule), moved ones show by how much.
+      if (d.delayMs != 0 || d.syncOpen)
         CtlText(
-          text: 'SYNC ${formatDelay(d.delayMs)}',
-          label: 'Subtitle sync ${spokenDelay(d.delayMs)} (J / K)',
+          // Without the unit where the row is a phone's width: with a loop chip beside it,
+          // the tools must still fit one line.
+          text: 'Subs ${formatDelay(d.delayMs)}${compact ? '' : ' s'}',
+          label: 'Subtitle timing: ${spokenDelay(d.delayMs)}${d.desktop ? ' (J / K)' : ''}',
           active: d.syncOpen,
           onTap: a.onToggleSync,
         ),

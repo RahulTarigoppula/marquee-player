@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:io' show Directory, File, FileSystemEntityType, Platform;
 import 'dart:typed_data';
 
+import 'package:flutter/scheduler.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:path/path.dart' as p;
@@ -137,6 +138,12 @@ class PlayerEngine {
         enableHardwareAcceleration: hwdec != 'no',
       ),
     );
+    // media_kit creates the video output in a post-frame callback, and every player call
+    // (open, play, even dispose) waits for it. Unseen (the screen off, the window minimised)
+    // Flutter draws no frames, so a film opened from the lock screen or by "Up next" would
+    // wait for ever. A warm-up frame runs whatever the lifecycle says.
+    final scheduler = SchedulerBinding.instance;
+    if (!scheduler.framesEnabled) scheduler.scheduleWarmUpFrame();
     final s = player.stream;
     for (final stream in <Stream<Object?>>[
       s.position,
@@ -297,6 +304,17 @@ class PlayerEngine {
 
   Future<void> open(String locator, {Duration? start, bool play = false}) async {
     _lastError = null;
+    // media_kit switches mpv's stream cache on for everything, 64 MiB ahead and 64 MiB behind,
+    // and asks for it on disk. That is right for a link and wasteful for a file: up to 128 MiB
+    // of a phone's memory, and a long read after every seek on an SD card or a network share.
+    // A file on the device gets mpv's own rule back (cache network streams only).
+    final lower = locator.toLowerCase();
+    final local =
+        !lower.contains('://') || lower.startsWith('content://') || lower.startsWith('file://');
+    if (local) {
+      await _set('cache', 'auto');
+      await _set('cache-on-disk', 'no');
+    }
     await player.open(Media(locator, start: start), play: play);
   }
 
